@@ -27,13 +27,13 @@ export const bridgeCommandAllowlist = [
   "account.unlink",
 
   // Gate G2 — Prompts
-  "prompt.list",
-  "prompt.get",
-  "prompt.create",
-  "prompt.update",
-  "prompt.rollback",
+  "prompt.list_templates",
+  "prompt.get_template",
+  "prompt.list_versions",
+  "prompt.create_version",
   "prompt.preview",
-  "prompt.render",
+  "prompt.rollback_version",
+  "prompt.delete_override",
 
   // Gate G2 — Projects & Scenes
   "project.list_by_workspace",

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useRef, useEffect, useState } from "react";
 import type { WorkspaceSummaryDto } from "../../contracts/dtos";
 import type { BrowserProfileDto } from "./browserManagerApi";
 import { browserManagerApi } from "./browserManagerApi";
@@ -6,45 +6,43 @@ import { LoginStatusBanner } from "./LoginStatusBanner";
 import { ProfileCard } from "./ProfileCard";
 
 interface BrowserManagerPageProps {
-  currentWorkspaceId?: string | null;
   workspaces?: WorkspaceSummaryDto[];
+  currentWorkspaceId?: string | null;
 }
 
 export const BrowserManagerPage: React.FC<BrowserManagerPageProps> = ({
-  currentWorkspaceId = null,
   workspaces = [],
 }) => {
   const [profiles, setProfiles] = useState<BrowserProfileDto[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [filterScope, setFilterScope] = useState<"all" | "workspace">("all");
-
-  const currentWorkspace = workspaces.find(
-    (w) => w.workspaceId === currentWorkspaceId,
-  );
+  const requestId = useRef(0);
 
   const fetchProfiles = useCallback(async () => {
+    const generation = ++requestId.current;
     setIsLoading(true);
     setErrorMessage(null);
     try {
-      const scopeId = filterScope === "workspace" ? currentWorkspaceId : null;
-      const data = await browserManagerApi.listProfiles(scopeId);
-      setProfiles(data);
+      const data = await browserManagerApi.listProfiles();
+      if (generation !== requestId.current) return;
+      setProfiles(data.filter((profile) => !profile.lifecycle || profile.lifecycle === "Active"));
     } catch (err) {
+      if (generation !== requestId.current) return;
       console.error("[BrowserManagerPage] Lỗi tải profiles:", err);
       setErrorMessage(
-        err instanceof Error
-          ? err.message
+        err && typeof err === "object" && "message" in err
+          ? String(err.message)
           : "Không thể kết nối đến dịch vụ quản lý trình duyệt của Host.",
       );
     } finally {
-      setIsLoading(false);
+      if (generation === requestId.current) setIsLoading(false);
     }
-  }, [filterScope, currentWorkspaceId]);
+  }, []);
 
   // Tải danh sách khi mount hoặc khi scope / currentWorkspaceId thay đổi
   useEffect(() => {
-    fetchProfiles();
+    void fetchProfiles();
+    return () => { requestId.current += 1; };
   }, [fetchProfiles]);
 
   // Lắng nghe sự kiện browser.profile_state_changed từ WebView2 Host / Mock
@@ -85,7 +83,7 @@ export const BrowserManagerPage: React.FC<BrowserManagerPageProps> = ({
   };
 
   return (
-    <div className="browser-manager-view" role="main" aria-label="Màn hình Quản lý Trình duyệt AI">
+    <div className="browser-manager-view" aria-label="Tài khoản và phiên đăng nhập">
       {/* SCOPED CSS STYLES TUÂN THỦ UI_THEME_PLAN & UI_BROWSER_PLAN */}
       <style>{`
         .browser-manager-view {
@@ -149,7 +147,7 @@ export const BrowserManagerPage: React.FC<BrowserManagerPageProps> = ({
 
         .profile-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+          grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
           gap: 1.15rem;
         }
 
@@ -625,7 +623,7 @@ export const BrowserManagerPage: React.FC<BrowserManagerPageProps> = ({
       {/* 1. HEADER TRANG */}
       <div className="page-header">
         <div>
-          <h2 className="page-title">Quản lý Trình duyệt AI &amp; Phiên làm việc</h2>
+          <h2 className="page-title">Tài khoản &amp; phiên đăng nhập</h2>
           <p className="page-desc">
             TiToAI tự động hóa các tác vụ tạo kịch bản, ảnh và video ở chế độ <strong>chạy ẩn</strong> trên máy tính. Cửa sổ trình duyệt chỉ hiển thị khi cần bạn <strong>đăng nhập thủ công</strong> hoặc xác thực tài khoản.
           </p>
@@ -645,40 +643,6 @@ export const BrowserManagerPage: React.FC<BrowserManagerPageProps> = ({
               <path d="M3 21v-5h5" />
             </svg>
             {isLoading ? "Đang tải…" : "Làm mới"}
-          </button>
-        </div>
-      </div>
-
-      {/* 2. BỘ LỌC PHẠM VI (TẤT CẢ vs WORKSPACE HIỆN TẠI) */}
-      <div className="filter-bar">
-        <div
-          className="tab-group"
-          role="tablist"
-          aria-label="Bộ lọc phạm vi trình duyệt"
-        >
-          <button
-            type="button"
-            role="tab"
-            aria-selected={filterScope === "all"}
-            className={`filter-tab ${filterScope === "all" ? "active" : ""}`}
-            onClick={() => setFilterScope("all")}
-          >
-            Tất cả trình duyệt {!isLoading && `(${profiles.length})`}
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={filterScope === "workspace"}
-            className={`filter-tab ${filterScope === "workspace" ? "active" : ""}`}
-            onClick={() => setFilterScope("workspace")}
-            disabled={!currentWorkspaceId}
-            title={
-              currentWorkspaceId
-                ? `Chỉ hiển thị cho kênh: ${currentWorkspace?.name ?? currentWorkspaceId}`
-                : "Chưa chọn Workspace"
-            }
-          >
-            Kênh hiện tại {currentWorkspace ? `(${currentWorkspace.name})` : ""}
           </button>
         </div>
       </div>
@@ -720,7 +684,7 @@ export const BrowserManagerPage: React.FC<BrowserManagerPageProps> = ({
           </div>
           <h3>Chưa có hồ sơ trình duyệt nào</h3>
           <p>
-            Hệ thống chưa ghi nhận cấu hình trình duyệt nào. Các hồ sơ Shared AI và tài khoản kênh sẽ tự động được khởi tạo khi liên kết tài khoản.
+            Hệ thống chưa ghi nhận cấu hình trình duyệt nào. Chức năng thêm tài khoản AI và tạo hồ sơ mới chưa khả dụng trong phiên bản này.
           </p>
         </div>
       ) : (
@@ -730,7 +694,7 @@ export const BrowserManagerPage: React.FC<BrowserManagerPageProps> = ({
             <div className="group-header">
               <div className="group-title-col">
                 <h3 id="group-shared-ai" className="group-title">
-                  1. AI dùng chung (Shared AI Profiles)
+                  ChatGPT / Gemini · Dùng chung toàn ứng dụng
                 </h3>
                 <p className="group-desc">
                   Mô hình ngôn ngữ và sinh ảnh dùng chung cho toàn bộ dự án (ChatGPT Web, Gemini Web). Nhiều tác vụ kịch bản, ảnh và prompt video chạy theo các tab độc lập trong cùng một phiên.
@@ -755,17 +719,17 @@ export const BrowserManagerPage: React.FC<BrowserManagerPageProps> = ({
             <div className="group-header">
               <div className="group-title-col">
                 <h3 id="group-museai" className="group-title">
-                  2. Trình duyệt MuseAI (Theo từng kênh)
+                  MuseAI · Dùng chung toàn ứng dụng
                 </h3>
                 <p className="group-desc">
-                  Trình duyệt tự động hóa dịch vụ dựng kịch bản video và tạo chuyển động hình ảnh của từng kênh TikTok riêng biệt.
+                  Tài khoản tạo video dùng chung cho mọi Workspace. Mỗi tài khoản giữ hồ sơ và phiên đăng nhập riêng.
                 </p>
               </div>
               <span className="group-count">{museAiProfiles.length} hồ sơ</span>
             </div>
             {museAiProfiles.length === 0 ? (
               <div className="empty-subgroup">
-                <p>Chưa có tài khoản MuseAI nào được liên kết cho phạm vi này.</p>
+                <p>Chưa có tài khoản MuseAI trong pool toàn ứng dụng.</p>
               </div>
             ) : (
               <div className="profile-grid">
@@ -786,10 +750,10 @@ export const BrowserManagerPage: React.FC<BrowserManagerPageProps> = ({
             <div className="group-header">
               <div className="group-title-col">
                 <h3 id="group-tiktok" className="group-title">
-                  3. Trình duyệt TikTok (Theo từng kênh)
+                  TikTok · Theo Workspace
                 </h3>
                 <p className="group-desc">
-                  Trình duyệt quản lý phiên đăng nhập kênh TikTok để theo dõi trạng thái, đồng bộ dữ liệu và chuẩn bị video đăng tải.
+                  Quản lý phiên đăng nhập TikTok. Chọn Workspace và liên kết kênh trong phần bên dưới.
                 </p>
               </div>
               <span className="group-count">{tikTokProfiles.length} hồ sơ</span>

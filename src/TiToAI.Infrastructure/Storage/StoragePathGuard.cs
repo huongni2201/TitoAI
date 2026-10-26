@@ -116,9 +116,9 @@ public static class StoragePathGuard
             return false;
         }
 
-        // Resolve link targets (Junction / Symlink) để phát hiện trỏ ra ngoài root
-        var realBase = ResolveRealDirectoryPath(normalizedBase);
-        var realCandidate = ResolveRealCandidatePath(normalizedCandidate);
+        // Resolve link targets (Junction / Symlink) qua từng cấp thư mục cha
+        var realBase = ResolveRealPath(normalizedBase);
+        var realCandidate = ResolveRealPath(normalizedCandidate);
 
         return IsDirectPrefixOf(realBase, realCandidate);
     }
@@ -238,58 +238,63 @@ public static class StoragePathGuard
                              StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string ResolveRealDirectoryPath(string path)
+    public static string ResolveRealPath(string path)
     {
-        if (!Directory.Exists(path))
+        if (string.IsNullOrWhiteSpace(path))
         {
             return path;
         }
 
+        string normalized;
         try
         {
-            var dirInfo = new DirectoryInfo(path);
-            var target = dirInfo.ResolveLinkTarget(returnFinalTarget: true);
-            return target is not null ? NormalizePath(target.FullName) : path;
+            normalized = NormalizePath(path);
         }
         catch
         {
             return path;
         }
+
+        var root = Path.GetPathRoot(normalized);
+        if (string.IsNullOrEmpty(root))
+        {
+            return normalized;
+        }
+
+        var relative = Path.GetRelativePath(root, normalized);
+        if (relative == "." || string.IsNullOrWhiteSpace(relative))
+        {
+            return ResolveLinkOrCurrent(root);
+        }
+
+        string current = ResolveLinkOrCurrent(root);
+        var segments = relative.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
+
+        foreach (var segment in segments)
+        {
+            var next = Path.Combine(current, segment);
+            current = ResolveLinkOrCurrent(next);
+        }
+
+        return NormalizePath(current);
     }
 
-    private static string ResolveRealCandidatePath(string path)
+    private static string ResolveLinkOrCurrent(string path)
     {
         try
         {
             if (File.Exists(path))
             {
-                var fileInfo = new FileInfo(path);
-                var target = fileInfo.ResolveLinkTarget(returnFinalTarget: true);
-                return target is not null ? NormalizePath(target.FullName) : path;
+                var fi = new FileInfo(path);
+                var target = fi.ResolveLinkTarget(returnFinalTarget: true);
+                return target != null ? NormalizePath(target.FullName) : path;
             }
 
             if (Directory.Exists(path))
             {
-                return ResolveRealDirectoryPath(path);
-            }
-
-            // Nếu candidate chưa được tạo, resolve thư mục cha gần nhất hiện có
-            var current = Path.GetDirectoryName(path);
-            while (!string.IsNullOrEmpty(current) && !Directory.Exists(current))
-            {
-                current = Path.GetDirectoryName(current);
-            }
-
-            if (!string.IsNullOrEmpty(current) && Directory.Exists(current))
-            {
-                var dirInfo = new DirectoryInfo(current);
-                var target = dirInfo.ResolveLinkTarget(returnFinalTarget: true);
-                if (target is not null)
-                {
-                    var relativePart = Path.GetRelativePath(current, path);
-                    var rebased = Path.GetFullPath(Path.Combine(target.FullName, relativePart));
-                    return NormalizePath(rebased);
-                }
+                var di = new DirectoryInfo(path);
+                var target = di.ResolveLinkTarget(returnFinalTarget: true);
+                return target != null ? NormalizePath(target.FullName) : path;
             }
 
             return path;

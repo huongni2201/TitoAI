@@ -6,7 +6,9 @@ using Microsoft.EntityFrameworkCore;
 using TiToAI.Application.Accounts;
 using TiToAI.Application.Assets;
 using TiToAI.Application.Documents;
+using TiToAI.Application.Jobs;
 using TiToAI.Application.Projects;
+using TiToAI.Application.Prompts;
 using TiToAI.Application.Scenes;
 using TiToAI.Application.Settings;
 using TiToAI.Application.Workspaces;
@@ -14,10 +16,12 @@ using TiToAI.Browser;
 using TiToAI.Browser.Abstractions;
 using TiToAI.Browser.Models;
 using TiToAI.Contracts.Browser;
+using TiToAI.Contracts.Jobs;
 using TiToAI.Desktop.Bridge;
 using TiToAI.Desktop.Bridge.Handlers;
 using TiToAI.Desktop.Hosting;
 using TiToAI.Infrastructure.Persistence;
+using TiToAI.Infrastructure.Persistence.Interceptors;
 using TiToAI.Infrastructure.Settings;
 using TiToAI.Infrastructure.Storage;
 
@@ -36,8 +40,14 @@ public partial class MainWindow : Window
     private SettingsHandlers? _settingsHandlers;
     private AssetHandlers? _assetHandlers;
     private DocumentHandlers? _documentHandlers;
+    private JobHandlers? _jobHandlers;
+    private JobScheduler? _jobScheduler;
+    private Action<JobStateChangedPayload>? _jobStateChangedHandler;
+    private Action<JobProgressUpdatedPayload>? _jobProgressUpdatedHandler;
     private LoginCoordinator? _loginCoordinator;
     private ProfileRegistry? _profileRegistry;
+    private TabPool? _tabPool;
+    private HostBrowserGatekeeper? _browserGatekeeper;
     private Func<BrowserProfileStateChangedPayload, Task>? _profileStateChangedHandler;
     private bool _isClosed;
 
@@ -156,25 +166,40 @@ public partial class MainWindow : Window
             var connectionString = DatabasePathHelper.BuildConnectionString(bootstrapResult.DatabasePath);
             var dbOptions = new DbContextOptionsBuilder<TiToAIDbContext>()
                 .UseSqlite(connectionString)
+                .AddInterceptors(new SqlitePragmaInterceptor())
                 .Options;
 
-            var profileRegistry = new ProfileRegistry(() => new TiToAIDbContext(dbOptions));
+            var tabPool = new TabPool();
+            _tabPool = tabPool;
+            var profileRegistry = new ProfileRegistry(() => new TiToAIDbContext(dbOptions), null, tabPool);
             await profileRegistry.ReconcileCheckpointsAtStartupAsync(ct);
-            await profileRegistry.EnsureProfileAsync("shared_ai", BrowserProfileKind.SharedAI, cancellationToken: ct);
 
+            var profileOwner = new ProfileOwner(pid => profileRegistry.GetUserDataDir(pid, "AI"));
+            var processController = new PlaywrightBrowserController(profileRegistry, profileOwner);
             var sessionProbe = new SessionProbe(profileRegistry);
-            var loginCoordinator = new LoginCoordinator(profileRegistry);
+            var loginCoordinator = new LoginCoordinator(profileRegistry, processController, sessionProbe);
             var workspaceService = new WorkspaceService(dbOptions);
             var accountLinkService = new AccountLinkService(dbOptions, sessionProbe);
 
             _profileRegistry = profileRegistry;
             _loginCoordinator = loginCoordinator;
 
+            var browserGatekeeper = new HostBrowserGatekeeper(profileRegistry, loginCoordinator, tabPool);
+            _browserGatekeeper = browserGatekeeper;
+
             _profileStateChangedHandler = async payload =>
             {
                 if (BridgeRouter != null)
                 {
                     await BridgeRouter.PostEventAsync("browser.profile_state_changed", null, payload).ConfigureAwait(false);
+                }
+
+                // Khi profile hoàn tất login hoặc unpause về Hidden/Stopped/Idle: đánh thức scheduler tiếp tục dispatch
+                if (_jobScheduler != null &&
+                    (string.Equals(payload.VisibilityState, BrowserVisibilityState.Hidden, StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(payload.OperationalState, BrowserOperationalState.Stopped, StringComparison.OrdinalIgnoreCase)))
+                {
+                    _jobScheduler.NotifyWakeup(new JobWakeupSignal("browser.profile_state_changed", ProfileId: payload.ProfileId));
                 }
             };
             profileRegistry.ProfileStateChanged += _profileStateChangedHandler;
@@ -221,6 +246,44 @@ public partial class MainWindow : Window
 
             _documentHandlers = new DocumentHandlers(documentExportService);
             _documentHandlers.Register(DispatcherInstance);
+
+            var snapshotFactory = new JobSnapshotFactory(settingsService, dbOptions: dbOptions);
+            var reservation = new JobReservation(dbOptions);
+            var executor = new UnavailableAdapterJobExecutor();
+            var scheduler = new JobScheduler(dbOptions, reservation, executor, browserGatekeeper);
+            var jobService = new JobService(dbOptions, snapshotFactory, scheduler);
+
+            await jobService.RunCrashRecoverySweepAsync(ct).ConfigureAwait(false);
+
+            _jobScheduler = scheduler;
+            _jobStateChangedHandler = payload =>
+            {
+                if (BridgeRouter != null)
+                {
+                    _ = BridgeRouter.PostEventAsync("job.state_changed", payload.WorkspaceId, payload);
+                }
+            };
+            scheduler.OnJobStateChanged += _jobStateChangedHandler;
+
+            _jobProgressUpdatedHandler = payload =>
+            {
+                if (BridgeRouter != null)
+                {
+                    _ = BridgeRouter.PostEventAsync("job.progress_updated", payload.WorkspaceId, payload);
+                }
+            };
+            scheduler.OnJobProgressUpdated += _jobProgressUpdatedHandler;
+
+            scheduler.Start();
+
+            _jobHandlers = new JobHandlers(jobService, async envelope =>
+            {
+                if (BridgeRouter != null)
+                {
+                    await BridgeRouter.PostEventAsync(envelope.EventName, envelope.WorkspaceId, envelope.Payload).ConfigureAwait(false);
+                }
+            });
+            _jobHandlers.Register(DispatcherInstance);
 
             // 4. Khởi tạo WebView2 Host Manager và điều hướng UI
             await HostManager.InitializeAsync(WebViewControl, this);
@@ -345,10 +408,127 @@ public partial class MainWindow : Window
             _documentHandlers.Unregister(DispatcherInstance);
             _documentHandlers = null;
         }
+
+        if (_browserGatekeeper != null)
+        {
+            _browserGatekeeper.Dispose();
+            _browserGatekeeper = null;
+        }
+
+        var schedulerToDispose = _jobScheduler;
+        _jobScheduler = null;
+        if (schedulerToDispose != null)
+        {
+            if (_jobStateChangedHandler != null)
+            {
+                schedulerToDispose.OnJobStateChanged -= _jobStateChangedHandler;
+                _jobStateChangedHandler = null;
+            }
+            if (_jobProgressUpdatedHandler != null)
+            {
+                schedulerToDispose.OnJobProgressUpdated -= _jobProgressUpdatedHandler;
+                _jobProgressUpdatedHandler = null;
+            }
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await schedulerToDispose.DisposeAsync().ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Bỏ qua lỗi dispose khi shutdown nền
+                }
+            });
+        }
+
+        if (_jobHandlers != null)
+        {
+            _jobHandlers.Unregister(DispatcherInstance);
+            _jobHandlers = null;
+        }
+    }
+
+    private async Task CleanupG2HandlersAsync()
+    {
+        if (_workspaceHandlers != null)
+        {
+            _workspaceHandlers.Unregister(DispatcherInstance);
+            _workspaceHandlers = null;
+        }
+        if (_accountHandlers != null)
+        {
+            _accountHandlers.Unregister(DispatcherInstance);
+            _accountHandlers = null;
+        }
+        if (_promptHandlers != null)
+        {
+            _promptHandlers.Unregister(DispatcherInstance);
+            _promptHandlers = null;
+        }
+        if (_projectHandlers != null)
+        {
+            _projectHandlers.Unregister(DispatcherInstance);
+            _projectHandlers = null;
+        }
+        if (_browserHandlers != null)
+        {
+            _browserHandlers.Unregister(DispatcherInstance);
+            _browserHandlers = null;
+        }
+        if (_sceneHandlers != null)
+        {
+            _sceneHandlers.Unregister(DispatcherInstance);
+            _sceneHandlers = null;
+        }
+        if (_settingsHandlers != null)
+        {
+            _settingsHandlers.Unregister(DispatcherInstance);
+            _settingsHandlers = null;
+        }
+        if (_assetHandlers != null)
+        {
+            _assetHandlers.Unregister(DispatcherInstance);
+            _assetHandlers = null;
+        }
+        if (_documentHandlers != null)
+        {
+            _documentHandlers.Unregister(DispatcherInstance);
+            _documentHandlers = null;
+        }
+
+        if (_browserGatekeeper != null)
+        {
+            _browserGatekeeper.Dispose();
+            _browserGatekeeper = null;
+        }
+
+        if (_jobScheduler != null)
+        {
+            if (_jobStateChangedHandler != null)
+            {
+                _jobScheduler.OnJobStateChanged -= _jobStateChangedHandler;
+                _jobStateChangedHandler = null;
+            }
+            if (_jobProgressUpdatedHandler != null)
+            {
+                _jobScheduler.OnJobProgressUpdated -= _jobProgressUpdatedHandler;
+                _jobProgressUpdatedHandler = null;
+            }
+            await _jobScheduler.DisposeAsync().ConfigureAwait(false);
+            _jobScheduler = null;
+        }
+
+        if (_jobHandlers != null)
+        {
+            _jobHandlers.Unregister(DispatcherInstance);
+            _jobHandlers = null;
+        }
     }
 
     private async void RetryButton_Click(object sender, RoutedEventArgs e)
     {
+        await CleanupG2HandlersAsync().ConfigureAwait(true);
         await InitializeStartupAsync();
     }
 

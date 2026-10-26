@@ -33,20 +33,21 @@ public sealed class StorageRootRegistry
     public const string KeyRootsPrefix = "storage.roots.";
 
     private readonly DbContextOptions<TiToAIDbContext> _dbOptions;
+    private readonly string? _customBaseDir;
     private readonly SemaphoreSlim _lock = new(1, 1);
 
-    public StorageRootRegistry(DbContextOptions<TiToAIDbContext> dbOptions)
+    public StorageRootRegistry(DbContextOptions<TiToAIDbContext> dbOptions, string? customBaseDir = null)
     {
         _dbOptions = dbOptions ?? throw new ArgumentNullException(nameof(dbOptions));
+        _customBaseDir = customBaseDir;
     }
 
     /// <summary>
-    /// Lấy đường dẫn gốc mặc định theo chuẩn TiToAI trong %LOCALAPPDATA%/TiToAI.
+    /// Lấy đường dẫn gốc mặc định theo chuẩn TiToAI trong %LOCALAPPDATA%/TiToAI hoặc customBaseDir.
     /// </summary>
-    public static string GetDefaultRootPath(string rootId)
+    public static string GetDefaultRootPath(string rootId, string? customBaseDir = null)
     {
-        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var baseDir = Path.Combine(localAppData, "TiToAI");
+        var baseDir = customBaseDir ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TiToAI");
 
         return rootId switch
         {
@@ -90,10 +91,10 @@ public sealed class StorageRootRegistry
         var now = DateTimeOffset.UtcNow.ToString("O");
         var defaultRoots = new[]
         {
-            (RootDefaultDocsId, GetDefaultRootPath(RootDefaultDocsId)),
-            (RootDefaultImagesId, GetDefaultRootPath(RootDefaultImagesId)),
-            (RootDefaultVideosId, GetDefaultRootPath(RootDefaultVideosId)),
-            (RootInternalAudioId, GetDefaultRootPath(RootInternalAudioId))
+            (RootDefaultDocsId, GetDefaultRootPath(RootDefaultDocsId, _customBaseDir)),
+            (RootDefaultImagesId, GetDefaultRootPath(RootDefaultImagesId, _customBaseDir)),
+            (RootDefaultVideosId, GetDefaultRootPath(RootDefaultVideosId, _customBaseDir)),
+            (RootInternalAudioId, GetDefaultRootPath(RootInternalAudioId, _customBaseDir))
         };
 
         foreach (var (id, path) in defaultRoots)
@@ -164,7 +165,7 @@ public sealed class StorageRootRegistry
         // Fallback cho default roots nếu chưa có record
         if (storageRootId is RootDefaultDocsId or RootDefaultImagesId or RootDefaultVideosId or RootInternalAudioId)
         {
-            return StoragePathGuard.NormalizePath(GetDefaultRootPath(storageRootId));
+            return StoragePathGuard.NormalizePath(GetDefaultRootPath(storageRootId, _customBaseDir));
         }
 
         throw new KeyNotFoundException($"Không tìm thấy ánh xạ đường dẫn lưu trữ cho Storage Root ID: '{storageRootId}'.");
@@ -190,10 +191,10 @@ public sealed class StorageRootRegistry
         string vidRootId = allSettings.GetValueOrDefault(KeyVideosRootId, RootDefaultVideosId);
         string audioRootId = RootInternalAudioId;
 
-        string docPath = allSettings.GetValueOrDefault(KeyRootsPrefix + docRootId) ?? GetDefaultRootPath(RootDefaultDocsId);
-        string imgPath = allSettings.GetValueOrDefault(KeyRootsPrefix + imgRootId) ?? GetDefaultRootPath(RootDefaultImagesId);
-        string vidPath = allSettings.GetValueOrDefault(KeyRootsPrefix + vidRootId) ?? GetDefaultRootPath(RootDefaultVideosId);
-        string audioPath = allSettings.GetValueOrDefault(KeyRootsPrefix + audioRootId) ?? GetDefaultRootPath(RootInternalAudioId);
+        string docPath = allSettings.GetValueOrDefault(KeyRootsPrefix + docRootId) ?? GetDefaultRootPath(RootDefaultDocsId, _customBaseDir);
+        string imgPath = allSettings.GetValueOrDefault(KeyRootsPrefix + imgRootId) ?? GetDefaultRootPath(RootDefaultImagesId, _customBaseDir);
+        string vidPath = allSettings.GetValueOrDefault(KeyRootsPrefix + vidRootId) ?? GetDefaultRootPath(RootDefaultVideosId, _customBaseDir);
+        string audioPath = allSettings.GetValueOrDefault(KeyRootsPrefix + audioRootId) ?? GetDefaultRootPath(RootInternalAudioId, _customBaseDir);
 
         return new StorageRootsSnapshot(
             DocumentsRootId: docRootId,
@@ -217,87 +218,100 @@ public sealed class StorageRootRegistry
         string videosPath,
         CancellationToken cancellationToken = default)
     {
-        var normDocPath = StoragePathGuard.NormalizePath(documentsPath);
-        var normImgPath = StoragePathGuard.NormalizePath(imagesPath);
-        var normVidPath = StoragePathGuard.NormalizePath(videosPath);
-
         await _lock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             await using var dbContext = new TiToAIDbContext(_dbOptions);
-            await EnsureDefaultRootsInternalAsync(dbContext, cancellationToken).ConfigureAwait(false);
-
-            var rootMappings = await dbContext.AppSettings
-                .Where(s => s.Key.StartsWith(KeyRootsPrefix))
-                .ToListAsync(cancellationToken)
-                .ConfigureAwait(false);
-
-            var pathMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var item in rootMappings)
-            {
-                var id = item.Key[KeyRootsPrefix.Length..];
-                var normalizedVal = StoragePathGuard.NormalizePath(item.Value);
-                if (!pathMap.ContainsKey(normalizedVal))
-                {
-                    pathMap[normalizedVal] = id;
-                }
-            }
-
-            var now = DateTimeOffset.UtcNow.ToString("O");
-
-            string ResolveOrRegister(string targetPath, string defaultId)
-            {
-                if (pathMap.TryGetValue(targetPath, out var existingId))
-                {
-                    return existingId;
-                }
-
-                // Nếu trùng path mặc định ban đầu
-                var defPath = StoragePathGuard.NormalizePath(GetDefaultRootPath(defaultId));
-                if (string.Equals(targetPath, defPath, StringComparison.OrdinalIgnoreCase))
-                {
-                    return defaultId;
-                }
-
-                var newRootId = $"root-{Guid.NewGuid():N}";
-                var newKey = KeyRootsPrefix + newRootId;
-                dbContext.AppSettings.Add(new AppSetting
-                {
-                    Key = newKey,
-                    Value = targetPath,
-                    UpdatedAtUtc = now
-                });
-                pathMap[targetPath] = newRootId;
-                return newRootId;
-            }
-
-            var newDocRootId = ResolveOrRegister(normDocPath, RootDefaultDocsId);
-            var newImgRootId = ResolveOrRegister(normImgPath, RootDefaultImagesId);
-            var newVidRootId = ResolveOrRegister(normVidPath, RootDefaultVideosId);
-
-            await SetSettingValueAsync(dbContext, KeyDocumentsRootId, newDocRootId, now, cancellationToken).ConfigureAwait(false);
-            await SetSettingValueAsync(dbContext, KeyImagesRootId, newImgRootId, now, cancellationToken).ConfigureAwait(false);
-            await SetSettingValueAsync(dbContext, KeyVideosRootId, newVidRootId, now, cancellationToken).ConfigureAwait(false);
-
+            var snapshot = await UpdateRootsInternalAsync(dbContext, documentsPath, imagesPath, videosPath, cancellationToken).ConfigureAwait(false);
             await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-
-            var audioPath = StoragePathGuard.NormalizePath(GetDefaultRootPath(RootInternalAudioId));
-
-            return new StorageRootsSnapshot(
-                DocumentsRootId: newDocRootId,
-                DocumentsPath: normDocPath,
-                ImagesRootId: newImgRootId,
-                ImagesPath: normImgPath,
-                VideosRootId: newVidRootId,
-                VideosPath: normVidPath,
-                AudioRootId: RootInternalAudioId,
-                AudioPath: audioPath
-            );
+            return snapshot;
         }
         finally
         {
             _lock.Release();
         }
+    }
+
+    /// <summary>
+    /// Cập nhật ba đường dẫn lưu trữ trên một DbContext được cung cấp để hỗ trợ transaction atomic cùng settings khác.
+    /// </summary>
+    public async Task<StorageRootsSnapshot> UpdateRootsInternalAsync(
+        TiToAIDbContext dbContext,
+        string documentsPath,
+        string imagesPath,
+        string videosPath,
+        CancellationToken cancellationToken = default)
+    {
+        var normDocPath = StoragePathGuard.NormalizePath(documentsPath);
+        var normImgPath = StoragePathGuard.NormalizePath(imagesPath);
+        var normVidPath = StoragePathGuard.NormalizePath(videosPath);
+
+        await EnsureDefaultRootsInternalAsync(dbContext, cancellationToken).ConfigureAwait(false);
+
+        var rootMappings = await dbContext.AppSettings
+            .Where(s => s.Key.StartsWith(KeyRootsPrefix))
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var pathMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in rootMappings)
+        {
+            var id = item.Key[KeyRootsPrefix.Length..];
+            var normalizedVal = StoragePathGuard.NormalizePath(item.Value);
+            if (!pathMap.ContainsKey(normalizedVal))
+            {
+                pathMap[normalizedVal] = id;
+            }
+        }
+
+        var now = DateTimeOffset.UtcNow.ToString("O");
+
+        string ResolveOrRegister(string targetPath, string defaultId)
+        {
+            if (pathMap.TryGetValue(targetPath, out var existingId))
+            {
+                return existingId;
+            }
+
+            // Nếu trùng path mặc định ban đầu
+            var defPath = StoragePathGuard.NormalizePath(GetDefaultRootPath(defaultId, _customBaseDir));
+            if (string.Equals(targetPath, defPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return defaultId;
+            }
+
+            var newRootId = $"root-{Guid.NewGuid():N}";
+            var newKey = KeyRootsPrefix + newRootId;
+            dbContext.AppSettings.Add(new AppSetting
+            {
+                Key = newKey,
+                Value = targetPath,
+                UpdatedAtUtc = now
+            });
+            pathMap[targetPath] = newRootId;
+            return newRootId;
+        }
+
+        var newDocRootId = ResolveOrRegister(normDocPath, RootDefaultDocsId);
+        var newImgRootId = ResolveOrRegister(normImgPath, RootDefaultImagesId);
+        var newVidRootId = ResolveOrRegister(normVidPath, RootDefaultVideosId);
+
+        await SetSettingValueAsync(dbContext, KeyDocumentsRootId, newDocRootId, now, cancellationToken).ConfigureAwait(false);
+        await SetSettingValueAsync(dbContext, KeyImagesRootId, newImgRootId, now, cancellationToken).ConfigureAwait(false);
+        await SetSettingValueAsync(dbContext, KeyVideosRootId, newVidRootId, now, cancellationToken).ConfigureAwait(false);
+
+        var audioPath = StoragePathGuard.NormalizePath(GetDefaultRootPath(RootInternalAudioId, _customBaseDir));
+
+        return new StorageRootsSnapshot(
+            DocumentsRootId: newDocRootId,
+            DocumentsPath: normDocPath,
+            ImagesRootId: newImgRootId,
+            ImagesPath: normImgPath,
+            VideosRootId: newVidRootId,
+            VideosPath: normVidPath,
+            AudioRootId: RootInternalAudioId,
+            AudioPath: audioPath
+        );
     }
 
     private static async Task SetSettingValueAsync(

@@ -17,6 +17,9 @@ export interface BrowserProfileDto {
   operationalState: OperationalState;
   activeJobCount: number;
   activeTabs: string[];
+  providerKey?: string | null;
+  displayName?: string | null;
+  lifecycle?: string;
 }
 
 export interface BrowserListProfilesResponseData {

@@ -3,11 +3,13 @@ using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.EntityFrameworkCore;
 using TiToAI.Application.Prompts;
 using TiToAI.Application.Prompts.Models;
 using TiToAI.Application.Settings;
 using TiToAI.Contracts.Jobs;
 using TiToAI.Contracts.Prompts;
+using TiToAI.Infrastructure.Persistence;
 
 namespace TiToAI.Application.Jobs;
 
@@ -26,13 +28,16 @@ public sealed class JobSnapshotFactory
 
     private readonly SettingsService _settingsService;
     private readonly PromptTemplateService? _promptTemplateService;
+    private readonly DbContextOptions<TiToAIDbContext>? _dbOptions;
 
     public JobSnapshotFactory(
         SettingsService settingsService,
-        PromptTemplateService? promptTemplateService = null)
+        PromptTemplateService? promptTemplateService = null,
+        DbContextOptions<TiToAIDbContext>? dbOptions = null)
     {
         _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
         _promptTemplateService = promptTemplateService;
+        _dbOptions = dbOptions;
     }
 
     /// <summary>
@@ -98,17 +103,31 @@ public sealed class JobSnapshotFactory
         }
         else if (!string.IsNullOrWhiteSpace(request.PromptTemplateId))
         {
-            if (_promptTemplateService is null)
+            PromptRenderSnapshotDto snapshotDto;
+            if (_promptTemplateService is not null)
+            {
+                snapshotDto = await _promptTemplateService.CreateSnapshotAsync(
+                    templateId: request.PromptTemplateId,
+                    purpose: request.TaskType,
+                    workspaceId: request.WorkspaceId,
+                    variables: request.PromptVariables,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+            else if (_dbOptions is not null)
+            {
+                await using var dbContext = new TiToAIDbContext(_dbOptions);
+                var templateService = new PromptTemplateService(dbContext);
+                snapshotDto = await templateService.CreateSnapshotAsync(
+                    templateId: request.PromptTemplateId,
+                    purpose: request.TaskType,
+                    workspaceId: request.WorkspaceId,
+                    variables: request.PromptVariables,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+            else
             {
                 throw new InvalidOperationException("PromptTemplateService chưa được nạp trong bộ điều phối JobSnapshotFactory.");
             }
-
-            var snapshotDto = await _promptTemplateService.CreateSnapshotAsync(
-                templateId: request.PromptTemplateId,
-                purpose: request.TaskType,
-                workspaceId: request.WorkspaceId,
-                variables: request.PromptVariables,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
 
             promptSnapshotText = JsonSerializer.Serialize(snapshotDto, JsonOptions);
         }

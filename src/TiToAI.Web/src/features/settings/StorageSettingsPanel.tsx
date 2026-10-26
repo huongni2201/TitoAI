@@ -122,11 +122,22 @@ export function StorageSettingsPanel({ onClose }: StorageSettingsPanelProps) {
       setFieldErrors({});
       setSuccessMessage("Đã lưu thành công cấu hình thư mục lưu trữ!");
     } catch (err: any) {
-      // Bắt lỗi từ Envelope Error nếu Host trả về VALIDATION_FAILED
-      if (err && typeof err === "object" && err.fieldErrors) {
-        setFieldErrors(err.fieldErrors);
+      // Bắt lỗi từ Envelope Error nếu Host trả về VALIDATION_FAILED kèm fieldErrors trong details
+      const fe =
+        err?.fieldErrors ||
+        err?.details?.fieldErrors ||
+        (err?.details &&
+        typeof err.details === "object" &&
+        ("documentsPath" in err.details ||
+          "imagesPath" in err.details ||
+          "videosPath" in err.details)
+          ? err.details
+          : null);
+
+      if (fe) {
+        setFieldErrors(fe);
       } else {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = err?.message || (err instanceof Error ? err.message : String(err));
         setGeneralError(message || "Không thể lưu cài đặt. Vui lòng kiểm tra lại quyền ghi hoặc đường dẫn.");
       }
     } finally {
@@ -149,9 +160,6 @@ export function StorageSettingsPanel({ onClose }: StorageSettingsPanelProps) {
   return (
     <div
       className="settings-section"
-      role="tabpanel"
-      id="panel-storage"
-      aria-labelledby="tab-storage"
     >
       <div className="section-header">
         <h3>Thư mục lưu trữ độc lập</h3>

@@ -1201,3 +1201,12 @@ video {
     padding: 0.5rem 0;
   }
 }
+
+/* Cài đặt là trang trong shell; các panel giữ nháp khi đổi tab. */
+[hidden] { display: none !important; }
+.settings-page { display: flex; flex-direction: column; gap: 1.5rem; min-width: 0; }
+.settings-page .settings-tabs { overflow-x: auto; flex-shrink: 0; padding: 0; }
+.settings-page .settings-tab-btn { white-space: nowrap; min-height: 44px; }
+.settings-page-body { min-width: 0; }
+.settings-account-links { padding: 1.5rem; border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--surface-card); }
+.settings-linked-account { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.75rem; padding: 0.75rem 0; border-bottom: 1px solid var(--border-subtle); }

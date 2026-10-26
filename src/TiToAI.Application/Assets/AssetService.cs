@@ -82,6 +82,9 @@ public sealed class AssetService
             throw new AssetValidationException($"Chỉ hỗ trợ tệp âm thanh định dạng .mp3 hoặc .wav. Định dạng hiện tại: '{ext}'.");
         }
 
+        // Kiểm tra định dạng nhị phân thực tế và kích thước tệp
+        ValidateAudioFile(request.SourceFilePath, ext);
+
         await using var dbContext = new TiToAIDbContext(_dbOptions);
 
         // Kiểm tra quyền sở hữu Workspace, Project và Scene
@@ -346,6 +349,48 @@ public sealed class AssetService
         if (!sceneExists)
         {
             throw new SceneNotFoundException(sceneId);
+        }
+    }
+
+    private const long MaxAudioFileSizeBytes = 100 * 1024 * 1024; // 100 MB
+
+    private static void ValidateAudioFile(string filePath, string ext)
+    {
+        var fileInfo = new FileInfo(filePath);
+        if (fileInfo.Length == 0)
+        {
+            throw new AssetValidationException("Tệp âm thanh nguồn rỗng (0 bytes).");
+        }
+
+        if (fileInfo.Length > MaxAudioFileSizeBytes)
+        {
+            throw new AssetValidationException($"Kích thước tệp âm thanh ({fileInfo.Length / (1024 * 1024)} MB) vượt quá giới hạn cho phép (tối đa 100 MB).");
+        }
+
+        byte[] header = new byte[12];
+        int bytesRead;
+        using (var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            bytesRead = fs.Read(header, 0, header.Length);
+        }
+
+        if (ext == ".wav")
+        {
+            if (bytesRead < 12 ||
+                header[0] != 0x52 || header[1] != 0x49 || header[2] != 0x46 || header[3] != 0x46 || // "RIFF"
+                header[8] != 0x57 || header[9] != 0x41 || header[10] != 0x56 || header[11] != 0x45)  // "WAVE"
+            {
+                throw new AssetValidationException("Tệp không đúng định dạng WAV hợp lệ (thiếu tiêu đề RIFF/WAVE).");
+            }
+        }
+        else if (ext == ".mp3")
+        {
+            bool isId3 = bytesRead >= 3 && header[0] == 0x49 && header[1] == 0x44 && header[2] == 0x33; // "ID3"
+            bool isMpegSync = bytesRead >= 2 && header[0] == 0xFF && (header[1] & 0xE0) == 0xE0; // MPEG sync frame
+            if (!isId3 && !isMpegSync)
+            {
+                throw new AssetValidationException("Tệp không đúng định dạng MP3 hợp lệ (thiếu ID3 hoặc MPEG audio sync frame).");
+            }
         }
     }
 

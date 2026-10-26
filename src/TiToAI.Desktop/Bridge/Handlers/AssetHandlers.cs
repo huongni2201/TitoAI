@@ -1,4 +1,7 @@
+using System.IO;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 using TiToAI.Application.Assets;
 using TiToAI.Application.Projects;
 using TiToAI.Application.Scenes;
@@ -20,10 +23,20 @@ public sealed class AssetHandlers
     };
 
     private readonly AssetService _assetService;
+    private readonly Func<string?>? _audioPicker;
+    private readonly Func<string?>? _imagePicker;
+    private readonly bool _allowExplicitPath;
 
-    public AssetHandlers(AssetService assetService)
+    public AssetHandlers(
+        AssetService assetService,
+        Func<string?>? audioPicker = null,
+        Func<string?>? imagePicker = null,
+        bool allowExplicitPath = false)
     {
         _assetService = assetService ?? throw new ArgumentNullException(nameof(assetService));
+        _audioPicker = audioPicker;
+        _imagePicker = imagePicker;
+        _allowExplicitPath = allowExplicitPath;
     }
 
     /// <summary>
@@ -76,7 +89,30 @@ public sealed class AssetHandlers
                     retryable: false);
             }
 
-            var result = await _assetService.ImportAudioAsync(payload, cancellationToken);
+            string? sourceFilePath = null;
+            if (_allowExplicitPath && !string.IsNullOrWhiteSpace(payload.SourceFilePath))
+            {
+                sourceFilePath = payload.SourceFilePath;
+            }
+            else
+            {
+                sourceFilePath = _audioPicker != null ? _audioPicker() : ShowAudioOpenFileDialog();
+            }
+
+            if (string.IsNullOrWhiteSpace(sourceFilePath))
+            {
+                // Người dùng hủy hộp thoại chọn file -> không thay đổi Scene
+                return ResponseEnvelopeHelper.CreateSuccess(request.Id, new { asset = (AssetDto?)null, canceled = true });
+            }
+
+            var importRequest = new ImportAudioRequest(
+                WorkspaceId: payload.WorkspaceId,
+                ProjectId: payload.ProjectId,
+                SceneId: payload.SceneId,
+                SourceFilePath: sourceFilePath
+            );
+
+            var result = await _assetService.ImportAudioAsync(importRequest, cancellationToken);
             return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
         }
         catch (OperationCanceledException)
@@ -108,7 +144,30 @@ public sealed class AssetHandlers
                     retryable: false);
             }
 
-            var result = await _assetService.SelectReferenceImageAsync(payload, cancellationToken);
+            string? sourceFilePath = null;
+            if (_allowExplicitPath && !string.IsNullOrWhiteSpace(payload.SourceFilePath))
+            {
+                sourceFilePath = payload.SourceFilePath;
+            }
+            else
+            {
+                sourceFilePath = _imagePicker != null ? _imagePicker() : ShowImageOpenFileDialog();
+            }
+
+            if (string.IsNullOrWhiteSpace(sourceFilePath))
+            {
+                // Người dùng hủy hộp thoại chọn file -> không thay đổi Scene
+                return ResponseEnvelopeHelper.CreateSuccess(request.Id, new { asset = (AssetDto?)null, canceled = true });
+            }
+
+            var imageRequest = new SelectReferenceImageRequest(
+                WorkspaceId: payload.WorkspaceId,
+                ProjectId: payload.ProjectId,
+                SceneId: payload.SceneId,
+                SourceFilePath: sourceFilePath
+            );
+
+            var result = await _assetService.SelectReferenceImageAsync(imageRequest, cancellationToken);
             return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
         }
         catch (OperationCanceledException)
@@ -181,6 +240,78 @@ public sealed class AssetHandlers
         {
             return MapExceptionToError(request.Id, ex);
         }
+    }
+
+    private static string? ShowAudioOpenFileDialog()
+    {
+        string? selected = null;
+        if (OperatingSystem.IsWindows())
+        {
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    var dialogType = Type.GetType("Microsoft.Win32.OpenFileDialog, PresentationFramework");
+                    if (dialogType != null)
+                    {
+                        dynamic dialog = Activator.CreateInstance(dialogType)!;
+                        dialog.Title = "Chọn tệp âm thanh";
+                        dialog.Filter = "Tệp âm thanh (*.mp3;*.wav)|*.mp3;*.wav|Tất cả tệp (*.*)|*.*";
+                        dialog.Multiselect = false;
+                        dialog.CheckFileExists = true;
+                        bool? res = dialog.ShowDialog();
+                        if (res == true)
+                        {
+                            selected = (string)dialog.FileName;
+                        }
+                    }
+                }
+                catch
+                {
+                    selected = null;
+                }
+            });
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            thread.Join(TimeSpan.FromSeconds(60));
+        }
+        return selected;
+    }
+
+    private static string? ShowImageOpenFileDialog()
+    {
+        string? selected = null;
+        if (OperatingSystem.IsWindows())
+        {
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    var dialogType = Type.GetType("Microsoft.Win32.OpenFileDialog, PresentationFramework");
+                    if (dialogType != null)
+                    {
+                        dynamic dialog = Activator.CreateInstance(dialogType)!;
+                        dialog.Title = "Chọn tệp hình ảnh tham chiếu";
+                        dialog.Filter = "Tệp hình ảnh (*.png;*.jpg;*.jpeg;*.webp)|*.png;*.jpg;*.jpeg;*.webp|Tất cả tệp (*.*)|*.*";
+                        dialog.Multiselect = false;
+                        dialog.CheckFileExists = true;
+                        bool? res = dialog.ShowDialog();
+                        if (res == true)
+                        {
+                            selected = (string)dialog.FileName;
+                        }
+                    }
+                }
+                catch
+                {
+                    selected = null;
+                }
+            });
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            thread.Join(TimeSpan.FromSeconds(60));
+        }
+        return selected;
     }
 
     private static T? ParsePayload<T>(RequestEnvelope request) where T : class

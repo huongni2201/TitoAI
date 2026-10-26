@@ -28,8 +28,8 @@ export const ProfileCard: React.FC<ProfileCardProps> = ({
     switch (profile.kind) {
       case "SharedAI":
         return {
-          title: "AI dùng chung",
-          subtitle: "ChatGPT Web & Gemini Web",
+          title: profile.displayName || (profile.providerKey === "chatgpt-web" ? "ChatGPT Web" : profile.providerKey === "gemini-web" ? "Gemini Web" : "Tài khoản AI"),
+          subtitle: profile.accountIdentity || "Chưa xác minh danh tính",
           badgeScope: "Toàn ứng dụng (Tất cả Workspace)",
           icon: (
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -40,9 +40,9 @@ export const ProfileCard: React.FC<ProfileCardProps> = ({
         };
       case "MuseAI":
         return {
-          title: "MuseAI Studio",
+          title: profile.displayName || "MuseAI",
           subtitle: profile.accountIdentity ? `Tài khoản: ${profile.accountIdentity}` : "Chưa liên kết tài khoản",
-          badgeScope: workspaceName ? `Workspace: ${workspaceName}` : "Kênh TikTok",
+          badgeScope: "Dùng chung toàn ứng dụng",
           icon: (
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <rect x="2" y="2" width="20" height="20" rx="5" ry="5" />

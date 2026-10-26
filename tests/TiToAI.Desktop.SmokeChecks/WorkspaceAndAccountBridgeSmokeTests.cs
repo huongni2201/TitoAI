@@ -167,7 +167,7 @@ public static class WorkspaceAndAccountBridgeSmokeTests
             db.Projects.Add(p);
             var s = new Scene { Id = Guid.NewGuid().ToString("D").ToLowerInvariant(), ProjectId = p.Id, WorkspaceId = wsId, Name = "S1", SequenceOrder = 1, TargetDurationSeconds = 10, CreatedAtUtc = "2026-01-01T00:00:00Z", UpdatedAtUtc = "2026-01-01T00:00:00Z" };
             db.Scenes.Add(s);
-            var j = new Job { Id = Guid.NewGuid().ToString("D").ToLowerInvariant(), WorkspaceId = wsId, ProjectId = p.Id, SceneId = s.Id, TaskType = "Script", State = "Running", ProviderKey = "test", StorageRootId = "test", CreatedAtUtc = "2026-01-01T00:00:00Z", UpdatedAtUtc = "2026-01-01T00:00:00Z" };
+            var j = new Job { Id = Guid.NewGuid().ToString("D").ToLowerInvariant(), WorkspaceId = wsId, ProjectId = p.Id, SceneId = s.Id, TaskType = "Image", State = "Running", ProviderKey = "test", StorageRootId = "test", CreatedAtUtc = "2026-01-01T00:00:00Z", UpdatedAtUtc = "2026-01-01T00:00:00Z" };
             db.Jobs.Add(j);
             await db.SaveChangesAsync();
         }

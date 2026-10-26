@@ -14,7 +14,8 @@ namespace TiToAI.Application.Jobs;
 public sealed record JobWakeupSignal(
     string Source,
     string? WorkspaceId = null,
-    string? JobId = null
+    string? JobId = null,
+    string? ProfileId = null
 );
 
 /// <summary>
@@ -49,7 +50,9 @@ public sealed record JobExecutionContext(
     string? PromptSnapshotText,
     string? ConfigSnapshotJson,
     long FencingToken,
-    int Attempts
+    int Attempts,
+    string? ProfileId = null,
+    string? ProviderAccountId = null
 );
 
 /// <summary>
@@ -89,6 +92,8 @@ public interface IBrowserGatekeeper
     bool IsRoleActive(string profileId, string role);
     Task<IDisposable?> TryAcquireTabLeaseAsync(string profileId, string role, string jobId, CancellationToken cancellationToken = default);
     void ReleaseTabLease(string profileId, string role, string jobId);
+    bool IsProfileIdle(string profileId);
+    void CloseProfileIfIdle(string profileId);
 }
 
 /// <summary>
@@ -100,6 +105,7 @@ public class DefaultBrowserGatekeeper : IBrowserGatekeeper
     private readonly ConcurrentDictionary<string, bool> _pausedProfiles = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, bool> _loginBusyProfiles = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> _activeTabRoles = new(StringComparer.OrdinalIgnoreCase);
+    public event Action<string>? OnProfileClosed;
 
     public void SetDispatchPaused(string profileId, bool paused) => _pausedProfiles[profileId] = paused;
     public void SetProfileBusyWithLogin(string profileId, bool busy) => _loginBusyProfiles[profileId] = busy;
@@ -113,12 +119,23 @@ public class DefaultBrowserGatekeeper : IBrowserGatekeeper
     public bool IsRoleActive(string profileId, string role) =>
         _activeTabRoles.ContainsKey(MakeKey(profileId, role));
 
+    public bool IsProfileIdle(string profileId) =>
+        !_activeTabRoles.Keys.Any(k => k.StartsWith($"{profileId}:", StringComparison.OrdinalIgnoreCase));
+
+    public void CloseProfileIfIdle(string profileId)
+    {
+        if (IsProfileIdle(profileId))
+        {
+            OnProfileClosed?.Invoke(profileId);
+        }
+    }
+
     public Task<IDisposable?> TryAcquireTabLeaseAsync(string profileId, string role, string jobId, CancellationToken cancellationToken = default)
     {
         var key = MakeKey(profileId, role);
         if (_activeTabRoles.TryAdd(key, jobId))
         {
-            var lease = new TabLeaseDisposable(() => _activeTabRoles.TryRemove(key, out _));
+            var lease = new TabLeaseDisposable(() => ReleaseTabLease(profileId, role, jobId));
             return Task.FromResult<IDisposable?>(lease);
         }
 
@@ -128,7 +145,10 @@ public class DefaultBrowserGatekeeper : IBrowserGatekeeper
     public void ReleaseTabLease(string profileId, string role, string jobId)
     {
         var key = MakeKey(profileId, role);
-        _activeTabRoles.TryRemove(key, out _);
+        if (_activeTabRoles.TryGetValue(key, out var currentOwner) && string.Equals(currentOwner, jobId, StringComparison.Ordinal))
+        {
+            _activeTabRoles.TryRemove(new KeyValuePair<string, string>(key, jobId));
+        }
     }
 
     private static string MakeKey(string profileId, string role) => $"{profileId}:{role}";
@@ -222,5 +242,28 @@ public sealed class DeterministicFakeJobExecutor : IJobExecutor
             ResultText: ResultTextToReturn,
             SideEffectSubmitted: true
         );
+    }
+}
+
+/// <summary>
+/// Bộ thực thi tác vụ cho môi trường production khi adapter của nhà cung cấp AI chưa sẵn sàng.
+/// Tuyệt đối không mô phỏng thành công giả mạo lên cơ sở dữ liệu ứng dụng.
+/// </summary>
+public sealed class UnavailableAdapterJobExecutor : IJobExecutor
+{
+    public Task<JobExecutionResult> ExecuteAsync(
+        JobExecutionContext context,
+        Func<Task> onPreSideEffectCommitAsync,
+        Func<int, string, Task>? onProgressAsync,
+        CancellationToken cancellationToken)
+    {
+        return Task.FromResult(new JobExecutionResult(
+            Success: false,
+            ResultReference: null,
+            ResultText: null,
+            ReasonCode: "adapter_not_available",
+            ErrorMessage: $"Bộ điều hợp cho nhà cung cấp '{context.ProviderKey}' chưa được cấu hình hoặc chưa sẵn sàng trong phiên bản này.",
+            SideEffectSubmitted: false
+        ));
     }
 }

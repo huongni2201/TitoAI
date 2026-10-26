@@ -221,10 +221,21 @@ namespace TiToAI.Infrastructure.Persistence.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("created_at_utc");
 
+                    b.Property<string>("DisplayName")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("display_name");
+
                     b.Property<string>("Kind")
                         .IsRequired()
                         .HasColumnType("TEXT")
                         .HasColumnName("kind");
+
+                    b.Property<string>("Lifecycle")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("Active")
+                        .HasColumnName("lifecycle");
 
                     b.Property<string>("OperationalState")
                         .IsRequired()
@@ -232,6 +243,16 @@ namespace TiToAI.Infrastructure.Persistence.Migrations
                         .HasColumnType("TEXT")
                         .HasDefaultValue("Stopped")
                         .HasColumnName("operational_state");
+
+                    b.Property<string>("ProviderKey")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("provider_key");
+
+                    b.Property<long>("Revision")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(1L)
+                        .HasColumnName("revision");
 
                     b.Property<string>("SessionStatus")
                         .IsRequired()
@@ -262,6 +283,61 @@ namespace TiToAI.Infrastructure.Persistence.Migrations
                         .HasDatabaseName("ix_browser_profile_workspace");
 
                     b.ToTable("BrowserProfile", (string)null);
+                });
+
+            modelBuilder.Entity("TiToAI.Infrastructure.Persistence.Entities.ExecutionBinding", b =>
+                {
+                    b.Property<string>("JobId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("job_id");
+
+                    b.Property<string>("AssignedAtUtc")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("assigned_at_utc");
+
+                    b.Property<long>("CapacityConfigRevision")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("capacity_config_revision");
+
+                    b.Property<string>("Identity")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("identity");
+
+                    b.Property<string>("LeaseOwnerId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("lease_owner_id");
+
+                    b.Property<long>("LeaseToken")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(0L)
+                        .HasColumnName("lease_token");
+
+                    b.Property<string>("ProfileId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("profile_id");
+
+                    b.Property<string>("ProviderAccountId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("provider_account_id");
+
+                    b.Property<string>("TabSlotId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("tab_slot_id");
+
+                    b.HasKey("JobId");
+
+                    b.HasIndex("ProfileId")
+                        .HasDatabaseName("ix_execution_binding_profile");
+
+                    b.HasIndex("ProviderAccountId", "TabSlotId")
+                        .HasDatabaseName("ix_execution_binding_account_slot");
+
+                    b.ToTable("ExecutionBinding", (string)null);
                 });
 
             modelBuilder.Entity("TiToAI.Infrastructure.Persistence.Entities.Job", b =>
@@ -394,12 +470,15 @@ namespace TiToAI.Infrastructure.Persistence.Migrations
                     b.HasIndex("ProjectId", "WorkspaceId")
                         .HasDatabaseName("ix_job_project_workspace");
 
-                    b.HasIndex("SceneId", "WorkspaceId");
+                    b.HasIndex("SceneId", "ProjectId", "WorkspaceId");
 
                     b.HasIndex("State", "LeaseExpiresAtUtc", "RetryAfterUtc")
                         .HasDatabaseName("ix_job_state_lease_retry");
 
-                    b.ToTable("Job", (string)null);
+                    b.ToTable("Job", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_Job_TaskType_Scene", "(task_type = 'Script' AND scene_id IS NULL) OR (task_type IN ('Image', 'VideoPrompt', 'VideoRender') AND scene_id IS NOT NULL)");
+                        });
                 });
 
             modelBuilder.Entity("TiToAI.Infrastructure.Persistence.Entities.Project", b =>
@@ -544,6 +623,97 @@ namespace TiToAI.Infrastructure.Persistence.Migrations
                     b.ToTable("PromptVersion", (string)null);
                 });
 
+            modelBuilder.Entity("TiToAI.Infrastructure.Persistence.Entities.ProviderAccount", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("id");
+
+                    b.Property<string>("CreatedAtUtc")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("display_name");
+
+                    b.Property<bool>("Enabled")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(false)
+                        .HasColumnName("enabled");
+
+                    b.Property<string>("IdentityVerifiedAtUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("identity_verified_at_utc");
+
+                    b.Property<string>("Lifecycle")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("Active")
+                        .HasColumnName("lifecycle");
+
+                    b.Property<int>("MaxConcurrentJobs")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(3)
+                        .HasColumnName("max_concurrent_jobs");
+
+                    b.Property<int>("MaxTabs")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(3)
+                        .HasColumnName("max_tabs");
+
+                    b.Property<string>("PerTaskLimitsJson")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("per_task_limits_json");
+
+                    b.Property<string>("ProfileId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("profile_id");
+
+                    b.Property<string>("ProviderKey")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("provider_key");
+
+                    b.Property<long>("Revision")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(1L)
+                        .HasColumnName("revision");
+
+                    b.Property<string>("UpdatedAtUtc")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<string>("VerifiedIdentity")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("verified_identity");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProfileId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_provider_account_profile");
+
+                    b.HasIndex("ProviderKey")
+                        .HasDatabaseName("ix_provider_account_provider");
+
+                    b.HasIndex("ProviderKey", "VerifiedIdentity")
+                        .IsUnique()
+                        .HasDatabaseName("ix_provider_account_verified_identity")
+                        .HasFilter("\"verified_identity\" IS NOT NULL AND \"lifecycle\" = 'Active'");
+
+                    b.ToTable("ProviderAccount", (string)null);
+                });
+
             modelBuilder.Entity("TiToAI.Infrastructure.Persistence.Entities.Scene", b =>
                 {
                     b.Property<string>("Id")
@@ -610,6 +780,9 @@ namespace TiToAI.Infrastructure.Persistence.Migrations
 
                     b.HasAlternateKey("Id", "WorkspaceId")
                         .HasName("uq_scene_id_workspace");
+
+                    b.HasAlternateKey("Id", "ProjectId", "WorkspaceId")
+                        .HasName("uq_scene_id_project_workspace");
 
                     b.HasIndex("AudioAssetId");
 
@@ -716,6 +889,33 @@ namespace TiToAI.Infrastructure.Persistence.Migrations
                     b.Navigation("Workspace");
                 });
 
+            modelBuilder.Entity("TiToAI.Infrastructure.Persistence.Entities.ExecutionBinding", b =>
+                {
+                    b.HasOne("TiToAI.Infrastructure.Persistence.Entities.Job", "Job")
+                        .WithOne("ExecutionBinding")
+                        .HasForeignKey("TiToAI.Infrastructure.Persistence.Entities.ExecutionBinding", "JobId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("TiToAI.Infrastructure.Persistence.Entities.BrowserProfile", "Profile")
+                        .WithMany()
+                        .HasForeignKey("ProfileId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("TiToAI.Infrastructure.Persistence.Entities.ProviderAccount", "ProviderAccount")
+                        .WithMany()
+                        .HasForeignKey("ProviderAccountId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Job");
+
+                    b.Navigation("Profile");
+
+                    b.Navigation("ProviderAccount");
+                });
+
             modelBuilder.Entity("TiToAI.Infrastructure.Persistence.Entities.Job", b =>
                 {
                     b.HasOne("TiToAI.Infrastructure.Persistence.Entities.Project", "Project")
@@ -727,8 +927,8 @@ namespace TiToAI.Infrastructure.Persistence.Migrations
 
                     b.HasOne("TiToAI.Infrastructure.Persistence.Entities.Scene", "Scene")
                         .WithMany()
-                        .HasForeignKey("SceneId", "WorkspaceId")
-                        .HasPrincipalKey("Id", "WorkspaceId")
+                        .HasForeignKey("SceneId", "ProjectId", "WorkspaceId")
+                        .HasPrincipalKey("Id", "ProjectId", "WorkspaceId")
                         .OnDelete(DeleteBehavior.Cascade);
 
                     b.Navigation("Project");
@@ -776,6 +976,17 @@ namespace TiToAI.Infrastructure.Persistence.Migrations
                     b.Navigation("Template");
                 });
 
+            modelBuilder.Entity("TiToAI.Infrastructure.Persistence.Entities.ProviderAccount", b =>
+                {
+                    b.HasOne("TiToAI.Infrastructure.Persistence.Entities.BrowserProfile", "Profile")
+                        .WithMany()
+                        .HasForeignKey("ProfileId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Profile");
+                });
+
             modelBuilder.Entity("TiToAI.Infrastructure.Persistence.Entities.Scene", b =>
                 {
                     b.HasOne("TiToAI.Infrastructure.Persistence.Entities.Asset", "AudioAsset")
@@ -807,6 +1018,11 @@ namespace TiToAI.Infrastructure.Persistence.Migrations
                     b.Navigation("Project");
 
                     b.Navigation("VideoAsset");
+                });
+
+            modelBuilder.Entity("TiToAI.Infrastructure.Persistence.Entities.Job", b =>
+                {
+                    b.Navigation("ExecutionBinding");
                 });
 
             modelBuilder.Entity("TiToAI.Infrastructure.Persistence.Entities.PromptTemplate", b =>

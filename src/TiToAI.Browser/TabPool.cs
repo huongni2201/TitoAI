@@ -96,6 +96,23 @@ public sealed class TabPool : ITabPool
         return Task.CompletedTask;
     }
 
+    public Task ReleaseTabAsync(string profileId, string role, string jobId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(profileId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(role);
+        ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
+
+        if (_profileTabs.TryGetValue(profileId, out var tabs))
+        {
+            if (tabs.TryGetValue(role, out var handle) && string.Equals(handle.JobId, jobId, StringComparison.Ordinal))
+            {
+                tabs.TryRemove(new KeyValuePair<string, BrowserTabHandle>(role, handle));
+            }
+        }
+
+        return Task.CompletedTask;
+    }
+
     public Task ResetTabContextAsync(string profileId, string role, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(profileId);
@@ -137,7 +154,7 @@ public sealed class TabPool : ITabPool
         {
             if (Interlocked.Exchange(ref _isDisposed, 1) == 0)
             {
-                await _pool.ReleaseTabAsync(ProfileId, Role);
+                await _pool.ReleaseTabAsync(ProfileId, Role, JobId);
             }
         }
     }

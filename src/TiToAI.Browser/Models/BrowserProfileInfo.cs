@@ -12,6 +12,9 @@ public sealed class BrowserProfileInfo
     public string Kind { get; set; } = BrowserProfileKind.SharedAI;
     public string? WorkspaceId { get; set; }
     public string? AccountIdentity { get; set; }
+    public string? ProviderKey { get; set; }
+    public string? DisplayName { get; set; }
+    public string Lifecycle { get; set; } = "Active";
     public string UserDataDir { get; set; } = string.Empty;
     public string VisibilityState { get; set; } = BrowserVisibilityState.Hidden;
     public string SessionStatus { get; set; } = BrowserSessionStatus.Unverified;
@@ -29,5 +32,8 @@ public sealed class BrowserProfileInfo
             SessionStatus: SessionStatus,
             OperationalState: OperationalState,
             ActiveJobCount: ActiveJobCount,
-            ActiveTabs: ActiveTabs.AsReadOnly());
+            ActiveTabs: ActiveTabs.AsReadOnly(),
+            ProviderKey: ProviderKey,
+            DisplayName: DisplayName,
+            Lifecycle: Lifecycle);
 }

@@ -263,26 +263,24 @@ public sealed class ProjectService
                 }
 
                 // 1. Strict Nonterminal & Unreconciled Side-Effect Job Guard:
-                // Chặn xóa nếu bất kỳ cảnh nào thuộc dự án có Job chưa kết thúc (Queued, Reserved, Running, AwaitingUser)
+                // Chặn xóa nếu có bất kỳ Job nào thuộc dự án (cả cấp Project với SceneId = null lẫn cấp Scene)
+                // đang ở trạng thái chưa kết thúc (Queued, Reserved, Running, AwaitingUser)
                 // hoặc job có SideEffectSubmitted == 1 mà chưa đối soát xong (ResultReference null/rỗng hoặc đang ở AwaitingUser).
-                bool hasActiveOrUnreconciledJobs = await (
-                    from s in dbContext.Scenes
-                    where s.ProjectId == normalizedProjectId && s.WorkspaceId == normalizedWorkspaceId
-                    join j in dbContext.Jobs on new { s.Id, s.WorkspaceId } equals new { Id = j.SceneId, j.WorkspaceId }
-                    where (
+                bool hasActiveOrUnreconciledJobs = await dbContext.Jobs
+                    .Where(j => j.ProjectId == normalizedProjectId && j.WorkspaceId == normalizedWorkspaceId)
+                    .Where(j =>
                         j.State == "Queued" ||
                         j.State == "Reserved" ||
                         j.State == "Running" ||
                         j.State == "AwaitingUser" ||
                         (j.SideEffectSubmitted == 1 && (j.ResultReference == null || j.ResultReference.Trim() == "" || j.State == "AwaitingUser"))
                     )
-                    select j.Id
-                ).AnyAsync(cancellationToken);
+                    .AnyAsync(cancellationToken);
 
                 if (hasActiveOrUnreconciledJobs)
                 {
                     throw new WorkspaceConcurrencyConflictException(
-                        "Không thể xóa dự án trong khi có tác vụ thuộc các cảnh đang chờ, đang chạy hoặc tác vụ có tác dụng phụ (side-effect) chưa đối soát xong.");
+                        "Không thể xóa dự án trong khi có tác vụ thuộc dự án hoặc các cảnh đang chờ, đang chạy hoặc tác vụ có tác dụng phụ (side-effect) chưa đối soát xong.");
                 }
 
                 // 2. Safe Asset Detach:

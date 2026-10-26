@@ -208,6 +208,30 @@ public static class Program
             "Task R1: Browser Handlers (list_profiles, request_login, cancel_login, check_session, errors)",
             async () => await BrowserBridgeSmokeTests.RunAllAsync());
 
+        Console.WriteLine("\n[10] Task T15 Job Queue & Scheduler Smoke Checks:");
+        await RunCheckAsync(
+            "Task T15: Durable Job Queue, Atomic Reservation, Fair Scheduler & Crash Recovery",
+            async () =>
+            {
+                int exitCode = await JobQueueSmokeTests.RunAllAsync();
+                if (exitCode != 0)
+                {
+                    throw new InvalidOperationException($"JobQueueSmokeTests failed with exit code {exitCode}");
+                }
+            });
+
+        Console.WriteLine("\n[11] Global AI Account Pool v1.1 Smoke Checks:");
+        await RunCheckAsync(
+            "Task T13a: Global AI Pool (10 Workspaces / 1 ChatGPT, 10 Videos / 4 MuseAI, Isolation & 8 Combinations)",
+            async () =>
+            {
+                int exitCode = await GlobalAiPoolSmokeTests.RunAllAsync();
+                if (exitCode != 0)
+                {
+                    throw new InvalidOperationException($"GlobalAiPoolSmokeTests failed with exit code {exitCode}");
+                }
+            });
+
         Console.WriteLine("\n=================================================================");
         if (failed == 0)
         {

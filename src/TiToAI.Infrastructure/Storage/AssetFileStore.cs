@@ -34,12 +34,21 @@ public sealed class AssetFileStore
         ArgumentNullException.ThrowIfNull(sourceStream);
 
         var finalPath = StoragePathGuard.CombineAndVerify(storageRootPath, relativePath);
-        var rootNormalized = StoragePathGuard.NormalizePath(storageRootPath);
-
-        var stagingDir = Path.Combine(rootNormalized, ".staging");
+        var stagingDir = StoragePathGuard.CombineAndVerify(storageRootPath, ".staging");
         StoragePathGuard.EnsureDirectoryExists(stagingDir);
 
-        var stagingFile = Path.Combine(stagingDir, $"{Guid.NewGuid():N}.tmp");
+        var stagingFileName = $"{Guid.NewGuid():N}.tmp";
+        var stagingFile = StoragePathGuard.CombineAndVerify(storageRootPath, Path.Combine(".staging", stagingFileName));
+
+        var destDir = Path.GetDirectoryName(finalPath);
+        if (!string.IsNullOrEmpty(destDir))
+        {
+            if (!StoragePathGuard.IsSubPathOf(storageRootPath, destDir))
+            {
+                throw new System.Security.SecurityException($"Thư mục đích '{destDir}' nằm ngoài root '{storageRootPath}'.");
+            }
+            StoragePathGuard.EnsureDirectoryExists(destDir);
+        }
 
         long totalBytes = 0;
         byte[] hashBytes;
@@ -72,7 +81,6 @@ public sealed class AssetFileStore
                 hashBytes = incrementalHash.GetHashAndReset();
             }
 
-            var destDir = Path.GetDirectoryName(finalPath);
             if (!string.IsNullOrEmpty(destDir))
             {
                 StoragePathGuard.EnsureDirectoryExists(destDir);

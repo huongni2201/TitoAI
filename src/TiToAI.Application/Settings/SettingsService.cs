@@ -120,17 +120,22 @@ public sealed class SettingsService
             throw new SettingsValidationException(validationResult.FieldErrors);
         }
 
-        // Cập nhật Storage Roots và mappings
-        await _rootRegistry.UpdateRootsAsync(
-            request.DocumentsPath,
-            request.ImagesPath,
-            request.VideosPath,
-            cancellationToken
-        ).ConfigureAwait(false);
+        // Thực hiện cập nhật roots, providers và cấu hình trong CÙNG một transaction SQLite để đảm bảo tính atomic
+        await using var dbContext = new TiToAIDbContext(_dbOptions);
+        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
 
-        // Cập nhật providers AI nếu có truyền
-        await using (var dbContext = new TiToAIDbContext(_dbOptions))
+        try
         {
+            // 1. Cập nhật Storage Roots và mappings
+            await _rootRegistry.UpdateRootsInternalAsync(
+                dbContext,
+                request.DocumentsPath,
+                request.ImagesPath,
+                request.VideosPath,
+                cancellationToken
+            ).ConfigureAwait(false);
+
+            // 2. Cập nhật providers AI nếu có truyền
             var now = DateTimeOffset.UtcNow.ToString("O");
 
             if (request.ImageProvider is not null)
@@ -149,6 +154,12 @@ public sealed class SettingsService
             }
 
             await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
+            throw;
         }
 
         return await GetSettingsAsync(cancellationToken).ConfigureAwait(false);

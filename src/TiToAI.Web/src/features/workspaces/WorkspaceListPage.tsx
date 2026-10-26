@@ -1,7 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { workspaceApi, type WorkspaceSummaryDto } from "./workspaceApi";
 import { WorkspaceForm } from "./WorkspaceForm";
-import { AccountLinkDialog } from "./AccountLinkDialog";
 import { bridgeClient } from "../../services/bridgeClient";
 import type { ErrorDto } from "../../contracts/bridge";
 import {
@@ -73,7 +72,6 @@ export function WorkspaceListPage({
   const [formMode, setFormMode] = useState<"create" | "edit">("create");
   const [editingWorkspace, setEditingWorkspace] = useState<WorkspaceSummaryDto | null>(null);
 
-  const [linkAccountWorkspace, setLinkAccountWorkspace] = useState<WorkspaceSummaryDto | null>(null);
 
   // Modal xác nhận xóa
   const [deletingWorkspace, setDeletingWorkspace] = useState<WorkspaceSummaryDto | null>(null);
@@ -567,25 +565,6 @@ export function WorkspaceListPage({
                               color: "var(--text-primary)",
                               cursor: "pointer",
                             }}
-                            onClick={() => {
-                              setActiveMenuWorkspaceId(null);
-                              setLinkAccountWorkspace(ws);
-                            }}
-                          >
-                            🔗 Liên kết tài khoản
-                          </button>
-                          <button
-                            type="button"
-                            className="dropdown-item"
-                            style={{
-                              background: "transparent",
-                              border: "none",
-                              textAlign: "left",
-                              padding: "0.5rem 0.85rem",
-                              fontSize: "0.82rem",
-                              color: "var(--text-primary)",
-                              cursor: "pointer",
-                            }}
                             onClick={() => handleToggleStatus(ws)}
                           >
                             {isActive ? "⏸️ Tạm dừng kênh" : "▶️ Kích hoạt lại"}
@@ -654,34 +633,6 @@ export function WorkspaceListPage({
 
                 {/* Phần liên kết tài khoản và Footer */}
                 <div style={{ marginTop: "0.75rem", borderTop: "1px solid var(--border-subtle)", paddingTop: "0.75rem" }}>
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      marginBottom: "0.75rem",
-                      fontSize: "0.8rem",
-                    }}
-                  >
-                    <button
-                      type="button"
-                      style={{
-                        background: "none",
-                        border: "none",
-                        padding: 0,
-                        color: "var(--accent)",
-                        cursor: "pointer",
-                        fontSize: "0.8rem",
-                        fontWeight: 600,
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "0.25rem",
-                      }}
-                      onClick={() => setLinkAccountWorkspace(ws)}
-                    >
-                      🔗 Liên kết tài khoản AI & TikTok
-                    </button>
-                  </div>
 
                   {/* Nút hành động chính: Mở workspace */}
                   <button
@@ -712,19 +663,6 @@ export function WorkspaceListPage({
           onSelectWorkspace?.(savedId);
         }}
       />
-
-      {/* Dialog Liên kết Tài khoản */}
-      {linkAccountWorkspace && (
-        <AccountLinkDialog
-          isOpen={!!linkAccountWorkspace}
-          workspaceId={linkAccountWorkspace.workspaceId}
-          workspaceName={linkAccountWorkspace.name}
-          onClose={() => setLinkAccountWorkspace(null)}
-          onSuccess={() => {
-            fetchWorkspaces();
-          }}
-        />
-      )}
 
       {/* Modal Xác Nhận Xóa Workspace */}
       {deletingWorkspace && (

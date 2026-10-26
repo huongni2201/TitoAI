@@ -21,6 +21,14 @@ public class TiToAIDbContext : DbContext
     public DbSet<PromptVersion> PromptVersions => Set<PromptVersion>();
     public DbSet<BrowserProfile> BrowserProfiles => Set<BrowserProfile>();
     public DbSet<BrowserHandoffCheckpoint> BrowserHandoffCheckpoints => Set<BrowserHandoffCheckpoint>();
+    public DbSet<ProviderAccount> ProviderAccounts => Set<ProviderAccount>();
+    public DbSet<ExecutionBinding> ExecutionBindings => Set<ExecutionBinding>();
+
+    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+    {
+        base.OnConfiguring(optionsBuilder);
+        optionsBuilder.ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning));
+    }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

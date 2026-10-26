@@ -107,9 +107,16 @@ public sealed record JobListActiveRequest(string? WorkspaceId = null);
 public sealed record JobListActiveResponseData(IReadOnlyList<JobSummaryDto> Jobs);
 
 public sealed record JobCancelRequest(string WorkspaceId, string JobId);
-public sealed record JobCancelResponseData(string JobId, string State, bool CancelRequested, string Message);
+public sealed record JobCancelResponseData(string JobId, string State, bool CancelRequested, string Message, string? PreviousState = null);
 
-public sealed record JobReconcileRequest(string WorkspaceId, string JobId, string Action);
+public sealed record JobReconcileRequest(
+    string WorkspaceId,
+    string JobId,
+    string Action,
+    bool? ConfirmedNotReceived = null,
+    string? ResultText = null,
+    string? ResultReference = null
+);
 public sealed record JobReconcileResponseData(
     string JobId,
     string PreviousState,
@@ -120,6 +127,7 @@ public sealed record JobReconcileResponseData(
 
 public sealed record JobProgressUpdatedPayload(
     string JobId,
+    string WorkspaceId,
     string ProjectId,
     string? SceneId,
     string State,
@@ -129,6 +137,8 @@ public sealed record JobProgressUpdatedPayload(
 
 public sealed record JobStateChangedPayload(
     string JobId,
+    string WorkspaceId,
+    string? ProjectId,
     string PreviousState,
     string NewState,
     string? ReasonCode,

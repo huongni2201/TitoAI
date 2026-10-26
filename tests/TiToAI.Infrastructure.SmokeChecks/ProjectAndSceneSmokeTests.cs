@@ -588,10 +588,10 @@ public static class ProjectAndSceneSmokeTests
                 WorkspaceId = ws1Id,
                 ProjectId = proj1Id,
                 SceneId = scene1Id,
-                TaskType = "Script",
+                TaskType = "Image",
                 State = "Queued", // Job đang chờ thực thi!
                 ProviderKey = "gemini-web",
-                StorageRootId = "root-internal",
+                StorageRootId = "root-default-images",
                 CreatedAtUtc = nowUtc,
                 UpdatedAtUtc = nowUtc
             });

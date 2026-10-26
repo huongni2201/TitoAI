@@ -57,6 +57,16 @@ public interface ITabPool
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Giải phóng quyền sở hữu role tab với kiểm tra chính xác owner jobId.
+    /// Tránh trường hợp worker khác xóa nhầm lease của tab đang hoạt động.
+    /// </summary>
+    Task ReleaseTabAsync(
+        string profileId,
+        string role,
+        string jobId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Xóa sạch context nghiệp vụ (cookies/history/chat session) của role tab trước khi tái sử dụng.
     /// </summary>
     Task ResetTabContextAsync(

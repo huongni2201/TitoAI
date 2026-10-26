@@ -294,10 +294,10 @@ public static class WorkspaceAndAccountSmokeTests
                 WorkspaceId = wsId,
                 ProjectId = project.Id,
                 SceneId = scene.Id,
-                TaskType = "Script",
+                TaskType = "Image",
                 State = "Running", // Nonterminal State!
                 ProviderKey = "chatgpt-web",
-                StorageRootId = "root-default-docs",
+                StorageRootId = "root-default-images",
                 CreatedAtUtc = DateTime.UtcNow.ToString("o"),
                 UpdatedAtUtc = DateTime.UtcNow.ToString("o")
             };
@@ -445,10 +445,10 @@ public static class WorkspaceAndAccountSmokeTests
                         WorkspaceId = wsId,
                         ProjectId = projId,
                         SceneId = sceneId,
-                        TaskType = "Script",
+                        TaskType = "Image",
                         State = "Queued",
                         ProviderKey = "chatgpt-web",
-                        StorageRootId = "root-default-docs",
+                        StorageRootId = "root-default-images",
                         CreatedAtUtc = DateTime.UtcNow.ToString("o"),
                         UpdatedAtUtc = DateTime.UtcNow.ToString("o")
                     };
@@ -860,12 +860,12 @@ public static class WorkspaceAndAccountSmokeTests
                     WorkspaceId = wsId,
                     ProjectId = projId,
                     SceneId = sceneId,
-                    TaskType = "Script",
+                    TaskType = "Image",
                     State = "AwaitingUser", // State này chưa xong đối soát với user!
                     SideEffectSubmitted = 1,
                     ResultReference = "https://example.com/checkpoints/1",
                     ProviderKey = "chatgpt-web",
-                    StorageRootId = "root-default-docs",
+                    StorageRootId = "root-default-images",
                     CreatedAtUtc = DateTime.UtcNow.ToString("o"),
                     UpdatedAtUtc = DateTime.UtcNow.ToString("o")
                 });
@@ -924,12 +924,12 @@ public static class WorkspaceAndAccountSmokeTests
                     WorkspaceId = wsId,
                     ProjectId = projId,
                     SceneId = sceneId,
-                    TaskType = "Script",
+                    TaskType = "Image",
                     State = "Succeeded",
                     SideEffectSubmitted = 0, // Không có side-effect ngoài
                     ResultReference = null,
                     ProviderKey = "chatgpt-web",
-                    StorageRootId = "root-default-docs",
+                    StorageRootId = "root-default-images",
                     CreatedAtUtc = DateTime.UtcNow.ToString("o"),
                     UpdatedAtUtc = DateTime.UtcNow.ToString("o")
                 });

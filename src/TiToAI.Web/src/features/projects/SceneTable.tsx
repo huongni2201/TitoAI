@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { projectApi, type SceneDto } from "./projectApi";
+import { bridgeClient } from "../../services/bridgeClient";
 import type { ErrorDto } from "../../contracts/bridge";
 import {
   IconCheck,
@@ -34,6 +35,60 @@ export function SceneTable({
   const [deletingScene, setDeletingScene] = useState<SceneDto | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [activeAssetOperation, setActiveAssetOperation] = useState<{
+    sceneId: string;
+    type: "audio" | "image";
+  } | null>(null);
+
+  // Thao tác nhập âm thanh gốc (MP3/WAV)
+  const handleImportAudio = async (sceneId: string) => {
+    setActiveAssetOperation({ sceneId, type: "audio" });
+    setErrorMessage(null);
+    try {
+      const response = await bridgeClient.invoke<{ asset?: { id: string } | null; canceled?: boolean }>(
+        "asset.import_audio",
+        {
+          workspaceId,
+          projectId,
+          sceneId,
+        }
+      );
+      if (response && !response.canceled) {
+        onRefresh();
+      }
+    } catch (err: unknown) {
+      const errorDto = err as ErrorDto;
+      console.error("[SceneTable] Lỗi nhập âm thanh:", errorDto);
+      setErrorMessage(errorDto?.message || "Không thể nhập tệp âm thanh. Vui lòng kiểm tra lại định dạng MP3/WAV.");
+    } finally {
+      setActiveAssetOperation(null);
+    }
+  };
+
+  // Thao tác chọn ảnh tham chiếu (PNG/JPG/WEBP)
+  const handleSelectImage = async (sceneId: string) => {
+    setActiveAssetOperation({ sceneId, type: "image" });
+    setErrorMessage(null);
+    try {
+      const response = await bridgeClient.invoke<{ asset?: { id: string } | null; canceled?: boolean }>(
+        "asset.select_reference_image",
+        {
+          workspaceId,
+          projectId,
+          sceneId,
+        }
+      );
+      if (response && !response.canceled) {
+        onRefresh();
+      }
+    } catch (err: unknown) {
+      const errorDto = err as ErrorDto;
+      console.error("[SceneTable] Lỗi chọn ảnh tham chiếu:", errorDto);
+      setErrorMessage(errorDto?.message || "Không thể chọn tệp hình ảnh tham chiếu.");
+    } finally {
+      setActiveAssetOperation(null);
+    }
+  };
 
   // Thao tác đổi thứ tự (Reorder Lên / Xuống)
   const handleMove = async (index: number, direction: "up" | "down") => {
@@ -204,25 +259,36 @@ export function SceneTable({
                       {scene.sceneSequence}
                     </td>
 
-                    {/* Thumbnail Xem trước */}
+                    {/* Thumbnail Xem trước & Thao tác chọn ảnh */}
                     <td style={{ padding: "0.85rem 1rem" }}>
-                      <div
+                      <button
+                        type="button"
+                        onClick={() => handleSelectImage(scene.sceneId)}
+                        disabled={!!activeAssetOperation}
                         style={{
-                          width: 48,
-                          height: 36,
+                          width: 52,
+                          height: 38,
                           borderRadius: "var(--radius-sm)",
                           backgroundColor: "var(--surface-card-subtle)",
-                          border: "1px solid var(--border)",
+                          border: hasImage ? "1px solid var(--status-success)" : "1px dashed var(--border)",
                           display: "flex",
                           alignItems: "center",
                           justifyContent: "center",
-                          color: "var(--text-muted)",
-                          fontSize: "0.75rem",
+                          color: hasImage ? "var(--status-success)" : "var(--text-muted)",
+                          fontSize: "0.72rem",
                           fontWeight: 600,
+                          cursor: "pointer",
+                          padding: 0,
+                          transition: "all 0.15s ease",
                         }}
+                        title={hasImage ? "Bấm để thay đổi ảnh tham chiếu" : "Bấm để chọn ảnh tham chiếu"}
                       >
-                        {hasImage ? "🖼️" : "Ảnh"}
-                      </div>
+                        {activeAssetOperation?.sceneId === scene.sceneId && activeAssetOperation.type === "image"
+                          ? "..."
+                          : hasImage
+                          ? "🖼️ Đổi"
+                          : "+ Ảnh"}
+                      </button>
                     </td>
 
                     {/* Tên cảnh & Lời dẫn */}
@@ -352,17 +418,28 @@ export function SceneTable({
                       )}
                     </td>
 
-                    {/* Cột Âm thanh độc lập */}
+                    {/* Cột Âm thanh độc lập & Thao tác nhập âm thanh */}
                     <td style={{ padding: "0.85rem 1rem" }}>
-                      {hasAudio ? (
-                        <span className="badge badge-success" style={{ fontSize: "0.75rem" }}>
-                          🎵 Đã có âm thanh
-                        </span>
-                      ) : (
-                        <span className="badge badge-neutral" style={{ fontSize: "0.75rem" }}>
-                          Chưa có
-                        </span>
-                      )}
+                      <button
+                        type="button"
+                        className={`badge ${hasAudio ? "badge-success" : "badge-neutral"}`}
+                        style={{
+                          fontSize: "0.75rem",
+                          cursor: "pointer",
+                          border: hasAudio ? "none" : "1px dashed var(--border)",
+                          background: hasAudio ? undefined : "transparent",
+                          padding: "0.25rem 0.6rem",
+                        }}
+                        onClick={() => handleImportAudio(scene.sceneId)}
+                        disabled={!!activeAssetOperation}
+                        title={hasAudio ? "Bấm để thay đổi tệp âm thanh (MP3/WAV)" : "Bấm để nhập tệp âm thanh gốc (MP3/WAV)"}
+                      >
+                        {activeAssetOperation?.sceneId === scene.sceneId && activeAssetOperation.type === "audio"
+                          ? "Đang nạp..."
+                          : hasAudio
+                          ? "🎵 Đã có âm thanh"
+                          : "+ Nhập âm thanh"}
+                      </button>
                     </td>
 
                     {/* Trạng thái cảnh */}

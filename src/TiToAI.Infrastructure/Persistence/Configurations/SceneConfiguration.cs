@@ -97,5 +97,8 @@ public class SceneConfiguration : IEntityTypeConfiguration<Scene>
 
         builder.HasAlternateKey(s => new { s.Id, s.WorkspaceId })
             .HasName("uq_scene_id_workspace");
+
+        builder.HasAlternateKey(s => new { s.Id, s.ProjectId, s.WorkspaceId })
+            .HasName("uq_scene_id_project_workspace");
     }
 }

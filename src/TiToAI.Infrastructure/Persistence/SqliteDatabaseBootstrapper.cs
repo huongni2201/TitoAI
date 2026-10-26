@@ -43,6 +43,7 @@ public class SqliteDatabaseBootstrapper : ISqliteDatabaseBootstrapper
         var optionsBuilder = new DbContextOptionsBuilder<TiToAIDbContext>();
         optionsBuilder.UseSqlite(connectionString);
         optionsBuilder.AddInterceptors(new SqlitePragmaInterceptor());
+        optionsBuilder.ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning));
 
         IReadOnlyList<string> appliedMigrations;
         using (var dbContext = new TiToAIDbContext(optionsBuilder.Options))

@@ -210,21 +210,7 @@ public sealed class BrowserHandlers
         }
     }
 
-    private static BrowserProfileDto MapToDto(BrowserProfileInfo info)
-    {
-        return new BrowserProfileDto(
-            ProfileId: info.ProfileId,
-            Kind: info.Kind,
-            AccountIdentity: info.AccountIdentity,
-            WorkspaceId: info.WorkspaceId,
-            VisibilityState: info.VisibilityState,
-            SessionStatus: info.SessionStatus,
-            OperationalState: info.OperationalState,
-            ActiveJobCount: info.ActiveJobCount,
-            ActiveTabs: info.ActiveTabs is { Count: > 0 }
-                ? info.ActiveTabs.AsReadOnly()
-                : Array.Empty<string>());
-    }
+    private static BrowserProfileDto MapToDto(BrowserProfileInfo info) => info.ToDto();
 
     private static T? ParsePayload<T>(RequestEnvelope request) where T : class
     {

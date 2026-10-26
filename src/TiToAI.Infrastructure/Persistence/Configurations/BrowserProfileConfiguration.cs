@@ -48,6 +48,26 @@ public class BrowserProfileConfiguration : IEntityTypeConfiguration<BrowserProfi
             .HasDefaultValue("Stopped")
             .IsRequired();
 
+        builder.Property(p => p.ProviderKey)
+            .HasColumnName("provider_key")
+            .HasColumnType("TEXT");
+
+        builder.Property(p => p.DisplayName)
+            .HasColumnName("display_name")
+            .HasColumnType("TEXT");
+
+        builder.Property(p => p.Lifecycle)
+            .HasColumnName("lifecycle")
+            .HasColumnType("TEXT")
+            .HasDefaultValue("Active")
+            .IsRequired();
+
+        builder.Property(p => p.Revision)
+            .HasColumnName("revision")
+            .HasColumnType("INTEGER")
+            .HasDefaultValue(1L)
+            .IsRequired();
+
         builder.Property(p => p.CreatedAtUtc)
             .HasColumnName("created_at_utc")
             .HasColumnType("TEXT")

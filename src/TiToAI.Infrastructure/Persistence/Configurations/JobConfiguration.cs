@@ -8,7 +8,11 @@ public class JobConfiguration : IEntityTypeConfiguration<Job>
 {
     public void Configure(EntityTypeBuilder<Job> builder)
     {
-        builder.ToTable("Job");
+        builder.ToTable("Job", t =>
+        {
+            t.HasCheckConstraint("CK_Job_TaskType_Scene",
+                "(task_type = 'Script' AND scene_id IS NULL) OR (task_type IN ('Image', 'VideoPrompt', 'VideoRender') AND scene_id IS NOT NULL)");
+        });
 
         builder.HasKey(j => j.Id);
 
@@ -140,9 +144,14 @@ public class JobConfiguration : IEntityTypeConfiguration<Job>
 
         builder.HasOne(j => j.Scene)
             .WithMany()
-            .HasForeignKey(j => new { j.SceneId, j.WorkspaceId })
-            .HasPrincipalKey(s => new { s.Id, s.WorkspaceId })
+            .HasForeignKey(j => new { j.SceneId, j.ProjectId, j.WorkspaceId })
+            .HasPrincipalKey(s => new { s.Id, s.ProjectId, s.WorkspaceId })
             .IsRequired(false)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        builder.HasOne(j => j.ExecutionBinding)
+            .WithOne(b => b.Job)
+            .HasForeignKey<ExecutionBinding>(b => b.JobId)
             .OnDelete(DeleteBehavior.Cascade);
 
         builder.HasIndex(j => new { j.State, j.LeaseExpiresAtUtc, j.RetryAfterUtc })

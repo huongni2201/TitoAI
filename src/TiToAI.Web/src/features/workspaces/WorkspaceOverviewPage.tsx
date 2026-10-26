@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { workspaceApi, type WorkspaceDetailDto } from "./workspaceApi";
 import { projectApi, type ProjectSummaryDto } from "../projects/projectApi";
 import { WorkspaceForm } from "./WorkspaceForm";
-import { AccountLinkDialog } from "./AccountLinkDialog";
 import { ProjectForm } from "../projects/ProjectForm";
 import type { ErrorDto } from "../../contracts/bridge";
 import {
@@ -52,7 +51,6 @@ export function WorkspaceOverviewPage({
 
   // Dialogs
   const [isEditFormOpen, setIsEditFormOpen] = useState(false);
-  const [isAccountLinkOpen, setIsAccountLinkOpen] = useState(false);
   const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
 
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -195,14 +193,6 @@ export function WorkspaceOverviewPage({
 
         {/* Nút hành động */}
         <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={() => setIsAccountLinkOpen(true)}
-            style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}
-          >
-            🔗 Tài khoản liên kết
-          </button>
           <button
             type="button"
             className="btn btn-secondary"
@@ -624,17 +614,6 @@ export function WorkspaceOverviewPage({
         onClose={() => setIsEditFormOpen(false)}
         onSuccess={() => {
           setIsEditFormOpen(false);
-          fetchData();
-        }}
-      />
-
-      {/* Dialog Liên kết tài khoản */}
-      <AccountLinkDialog
-        isOpen={isAccountLinkOpen}
-        workspaceId={workspaceId}
-        workspaceName={workspace.name}
-        onClose={() => setIsAccountLinkOpen(false)}
-        onSuccess={() => {
           fetchData();
         }}
       />

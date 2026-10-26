@@ -176,7 +176,12 @@ public sealed class SettingsHandlers
         return ex switch
         {
             SettingsValidationException validation =>
-                ResponseEnvelopeHelper.CreateError(requestId, "VALIDATION_FAILED", validation.Message, retryable: false),
+                ResponseEnvelopeHelper.CreateError(
+                    requestId,
+                    "VALIDATION_FAILED",
+                    validation.Message,
+                    retryable: false,
+                    details: JsonSerializer.SerializeToElement(new { fieldErrors = validation.FieldErrors })),
 
             ArgumentException arg =>
                 ResponseEnvelopeHelper.CreateError(requestId, "INVALID_ARGUMENT", arg.Message, retryable: false),

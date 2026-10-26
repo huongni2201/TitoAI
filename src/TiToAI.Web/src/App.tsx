@@ -24,6 +24,7 @@ import { WorkspaceListPage } from "./features/workspaces/WorkspaceListPage";
 import { WorkspaceOverviewPage } from "./features/workspaces/WorkspaceOverviewPage";
 import { ProjectListPage } from "./features/projects/ProjectListPage";
 import { ProjectPage } from "./features/projects/ProjectPage";
+import { PromptTemplateManager } from "./features/prompts";
 
 type ActiveRoute = "overview" | "workspaces" | "projects" | "browsers" | "library";
 
@@ -40,6 +41,7 @@ function AppContent() {
   const [isWorkspaceDropdownOpen, setIsWorkspaceDropdownOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isQueueOpen, setIsQueueOpen] = useState(false);
+  const [libraryTab, setLibraryTab] = useState<"prompts" | "media">("prompts");
 
   // References cho việc phục hồi focus sau khi đóng modal/drawer và quản lý lifecycle
   const settingsBtnRef = useRef<HTMLButtonElement>(null);
@@ -543,23 +545,62 @@ function AppContent() {
           )}
 
           {activeRoute === "library" && (
-            <div className="not-ready-view">
-              <div className="page-header">
-                <h2 className="page-title">Thư viện Tài nguyên Media</h2>
-              </div>
-              <div className="empty-card">
-                <div className="empty-icon">
-                  <IconLibrary size={40} />
+            <div className="library-view" style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+              <div
+                className="page-header"
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  flexWrap: "wrap",
+                  gap: "0.75rem",
+                }}
+              >
+                <div>
+                  <h2 className="page-title">Thư viện &amp; Mẫu Prompt</h2>
+                  <p
+                    className="page-subtitle"
+                    style={{ color: "var(--text-muted)", fontSize: "0.85rem", margin: "0.2rem 0 0" }}
+                  >
+                    Quản lý mẫu lời dẫn AI (Script / Image / Video Prompt) và tài nguyên media đa phương tiện
+                  </p>
                 </div>
-                <h3>Thư viện media</h3>
-                <p>
-                  Quản lý ảnh AI, video thành phẩm và tệp âm thanh gốc theo ba
-                  thư mục độc lập (Documents, Images, Videos). Tính năng quản lý
-                  thư viện media chưa khả dụng trong phiên bản hiện tại.
-                </p>
+                <div style={{ display: "flex", gap: "0.5rem" }}>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${libraryTab === "prompts" ? "btn-primary" : "btn-secondary"}`}
+                    onClick={() => setLibraryTab("prompts")}
+                  >
+                    Mẫu Prompt (AI Templates)
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${libraryTab === "media" ? "btn-primary" : "btn-secondary"}`}
+                    onClick={() => setLibraryTab("media")}
+                  >
+                    Tài nguyên Media
+                  </button>
+                </div>
               </div>
+
+              {libraryTab === "prompts" ? (
+                <PromptTemplateManager workspaceId={selectedWorkspaceId} />
+              ) : (
+                <div className="empty-card" style={{ marginTop: "1rem" }}>
+                  <div className="empty-icon">
+                    <IconLibrary size={40} />
+                  </div>
+                  <h3>Thư viện media</h3>
+                  <p>
+                    Quản lý ảnh AI, video thành phẩm và tệp âm thanh gốc theo ba
+                    thư mục độc lập (Documents, Images, Videos). Tính năng quản lý
+                    thư viện media sẽ được tích hợp cùng bộ Pipeline Orchestration.
+                  </p>
+                </div>
+              )}
             </div>
           )}
+
         </main>
       </div>
 

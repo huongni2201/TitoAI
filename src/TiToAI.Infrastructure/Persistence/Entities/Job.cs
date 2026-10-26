@@ -30,4 +30,5 @@ public class Job
 
     public Project? Project { get; set; }
     public Scene? Scene { get; set; }
+    public ExecutionBinding? ExecutionBinding { get; set; }
 }

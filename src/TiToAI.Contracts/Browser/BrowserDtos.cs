@@ -11,7 +11,10 @@ public sealed record BrowserProfileDto(
     [property: JsonPropertyName("sessionStatus")] string SessionStatus,
     [property: JsonPropertyName("operationalState")] string OperationalState,
     [property: JsonPropertyName("activeJobCount")] int ActiveJobCount,
-    [property: JsonPropertyName("activeTabs")] IReadOnlyList<string> ActiveTabs);
+    [property: JsonPropertyName("activeTabs")] IReadOnlyList<string> ActiveTabs,
+    [property: JsonPropertyName("providerKey")] string? ProviderKey = null,
+    [property: JsonPropertyName("displayName")] string? DisplayName = null,
+    [property: JsonPropertyName("lifecycle")] string Lifecycle = "Active");
 
 public sealed record BrowserListProfilesRequest(
     [property: JsonPropertyName("workspaceId")] string? WorkspaceId);
