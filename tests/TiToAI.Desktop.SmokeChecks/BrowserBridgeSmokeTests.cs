@@ -1,0 +1,622 @@
+using System.IO;
+using System.Text.Json;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
+using TiToAI.Browser;
+using TiToAI.Browser.Models;
+using TiToAI.Contracts.Bridge;
+using TiToAI.Contracts.Browser;
+using TiToAI.Desktop.Bridge;
+using TiToAI.Desktop.Bridge.Handlers;
+using TiToAI.Infrastructure.Persistence;
+using TiToAI.Infrastructure.Persistence.Entities;
+
+namespace TiToAI.Desktop.SmokeChecks;
+
+/// <summary>
+/// Bộ kiểm thử khói (Smoke Tests) cho Track R1:
+/// Desktop Browser Handlers & Bridge Integration.
+/// Kiểm thử toàn diện qua BridgeDispatcher:
+/// - browser.list_profiles (workspaceId = null và workspaceId cụ thể)
+/// - browser.request_login (VisibleActive slot đầu tiên, VisibleWaiting queue)
+/// - browser.cancel_login (giải phóng slot hiển thị, cập nhật trạng thái Hidden)
+/// - browser.check_session (trạng thái thực Unverified / Connected, không trả fake PASS)
+/// - UNKNOWN_COMMAND cho lệnh ngoài allow-list
+/// - INVALID_ARGUMENT cho payload null hoặc sai/thiếu trường
+/// - ENTITY_NOT_FOUND cho profile không tồn tại
+/// - Unregister dọn dẹp handler
+/// </summary>
+public static class BrowserBridgeSmokeTests
+{
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true
+    };
+
+    private static async Task<(SqliteConnection Connection, Func<TiToAIDbContext> Factory)> CreateInMemoryDbContextFactoryAsync()
+    {
+        var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync();
+
+        var options = new DbContextOptionsBuilder<TiToAIDbContext>()
+            .UseSqlite(connection)
+            .Options;
+
+        using (var initialDb = new TiToAIDbContext(options))
+        {
+            await initialDb.Database.EnsureCreatedAsync();
+        }
+
+        return (connection, () => new TiToAIDbContext(options));
+    }
+
+    private static async Task SeedWorkspaceAsync(Func<TiToAIDbContext> factory, string id, string name)
+    {
+        await using var db = factory();
+        string nowUtc = DateTime.UtcNow.ToString("o");
+        db.Workspaces.Add(new Workspace
+        {
+            Id = id,
+            Name = name,
+            ChannelHandle = $"@{id}",
+            Topic = "Smoke Testing Channel",
+            Status = "Active",
+            CreatedAtUtc = nowUtc,
+            UpdatedAtUtc = nowUtc
+        });
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// Test 1: browser.list_profiles với workspaceId = null và workspaceId cụ thể; kiểm tra mapping DTO.
+    /// </summary>
+    public static async Task Test_ListProfiles_WorkspaceNull_And_SpecificWorkspace()
+    {
+        var (connection, factory) = await CreateInMemoryDbContextFactoryAsync();
+        await using (connection)
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "titoai_test_bridge_lp_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+
+            try
+            {
+                var registry = new ProfileRegistry(factory, tempDir);
+                using var coordinator = new LoginCoordinator(registry);
+                var probe = new SessionProbe(registry);
+                var handlers = new BrowserHandlers(registry, coordinator, probe);
+
+                var dispatcher = new BridgeDispatcher();
+                handlers.Register(dispatcher);
+
+                // Khởi tạo các Workspace hợp lệ để thỏa mãn ràng buộc khóa ngoại (Foreign Key)
+                await SeedWorkspaceAsync(factory, "ws-alpha", "Workspace Alpha");
+                await SeedWorkspaceAsync(factory, "ws-beta", "Workspace Beta");
+
+                // Khởi tạo các profile thử nghiệm:
+                // 1 SharedAI (workspaceId = null)
+                // 1 MuseAI thuộc workspace "ws-alpha"
+                // 1 MuseAI thuộc workspace "ws-beta"
+                await registry.EnsureProfileAsync("shared_ai", BrowserProfileKind.SharedAI, workspaceId: null, accountIdentity: null);
+                await registry.EnsureProfileAsync("museai_alpha", BrowserProfileKind.MuseAI, workspaceId: "ws-alpha", accountIdentity: "alpha@tito.local");
+                await registry.EnsureProfileAsync("museai_beta", BrowserProfileKind.MuseAI, workspaceId: "ws-beta", accountIdentity: "beta@tito.local");
+
+                // Scenario A: workspaceId = null -> trả về tất cả 3 profile
+                var reqAll = CreateRequest("browser.list_profiles", new BrowserListProfilesRequest(null));
+                var resAll = await dispatcher.DispatchAsync(reqAll, CancellationToken.None);
+
+                Assert(resAll.Success, "browser.list_profiles với workspaceId = null phải thành công");
+                var dataAll = DeserializeData<BrowserListProfilesResponseData>(resAll);
+                Assert(dataAll.Profiles.Count == 3, $"Kỳ vọng 3 profile nhưng nhận được {dataAll.Profiles.Count}");
+
+                // Kiểm tra chi tiết ánh xạ DTO của profile SharedAI
+                var sharedProfile = dataAll.Profiles.FirstOrDefault(p => p.ProfileId == "shared_ai");
+                Assert(sharedProfile != null, "Profile shared_ai phải có trong kết quả trả về");
+                Assert(sharedProfile!.Kind == BrowserProfileKind.SharedAI, "Kind phải là SharedAI");
+                Assert(sharedProfile.WorkspaceId == null, "WorkspaceId của SharedAI phải là null");
+                Assert(sharedProfile.VisibilityState == BrowserVisibilityState.Hidden, "VisibilityState mặc định phải là Hidden");
+                Assert(sharedProfile.SessionStatus == BrowserSessionStatus.Unverified, "SessionStatus mặc định phải là Unverified");
+                Assert(sharedProfile.OperationalState == BrowserOperationalState.Stopped, "OperationalState mặc định phải là Stopped");
+                Assert(sharedProfile.ActiveTabs != null, "ActiveTabs không được null");
+
+                // Scenario B: workspaceId = "ws-alpha" -> chỉ trả về SharedAI + profile của ws-alpha
+                var reqAlpha = CreateRequest("browser.list_profiles", new BrowserListProfilesRequest("ws-alpha"));
+                var resAlpha = await dispatcher.DispatchAsync(reqAlpha, CancellationToken.None);
+
+                Assert(resAlpha.Success, "browser.list_profiles với workspaceId = ws-alpha phải thành công");
+                var dataAlpha = DeserializeData<BrowserListProfilesResponseData>(resAlpha);
+                Assert(dataAlpha.Profiles.Count == 2, $"Kỳ vọng 2 profile (SharedAI + ws-alpha) nhưng nhận được {dataAlpha.Profiles.Count}");
+                Assert(dataAlpha.Profiles.Any(p => p.ProfileId == "shared_ai"), "Kết quả phải chứa shared_ai");
+                Assert(dataAlpha.Profiles.Any(p => p.ProfileId == "museai_alpha"), "Kết quả phải chứa museai_alpha");
+                Assert(!dataAlpha.Profiles.Any(p => p.ProfileId == "museai_beta"), "Kết quả không được chứa museai_beta");
+
+                // Scenario C: Request không kèm payload (Payload null) -> coi như workspaceId = null và trả về cả 3 profile
+                var reqNullPayload = CreateRequestWithRawJson("browser.list_profiles", "null");
+                var resNullPayload = await dispatcher.DispatchAsync(reqNullPayload, CancellationToken.None);
+                Assert(resNullPayload.Success, "browser.list_profiles với payload null phải thành công");
+                var dataNullPayload = DeserializeData<BrowserListProfilesResponseData>(resNullPayload);
+                Assert(dataNullPayload.Profiles.Count == 3, "Payload null phải trả về toàn bộ danh sách profile");
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir))
+                {
+                    try { Directory.Delete(tempDir, true); } catch { }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Test 2: browser.request_login: profile đầu nhận VisibleActive, profile sau xếp vào queue VisibleWaiting.
+    /// </summary>
+    public static async Task Test_RequestLogin_FirstActive_SecondQueued_VisibleWaiting()
+    {
+        var (connection, factory) = await CreateInMemoryDbContextFactoryAsync();
+        await using (connection)
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "titoai_test_bridge_rl_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+
+            try
+            {
+                var registry = new ProfileRegistry(factory, tempDir);
+                using var coordinator = new LoginCoordinator(registry);
+                var probe = new SessionProbe(registry);
+                var handlers = new BrowserHandlers(registry, coordinator, probe);
+
+                var dispatcher = new BridgeDispatcher();
+                handlers.Register(dispatcher);
+
+                await SeedWorkspaceAsync(factory, "ws-1", "Workspace One");
+
+                await registry.EnsureProfileAsync("prof_first", BrowserProfileKind.SharedAI);
+                await registry.EnsureProfileAsync("prof_second", BrowserProfileKind.MuseAI, workspaceId: "ws-1");
+
+                // Profile đầu tiên yêu cầu login: nhận ngay VisibleActive
+                var reqFirst = CreateRequest("browser.request_login", new BrowserRequestLoginRequest("prof_first"));
+                var resFirst = await dispatcher.DispatchAsync(reqFirst, CancellationToken.None);
+
+                Assert(resFirst.Success, "Yêu cầu đăng nhập profile đầu tiên phải thành công");
+                var dataFirst = DeserializeData<BrowserRequestLoginResponseData>(resFirst);
+                Assert(!dataFirst.Queued, "Profile đầu tiên không được ở trạng thái queued");
+                Assert(dataFirst.VisibilityState == BrowserVisibilityState.VisibleActive, "VisibilityState phải là VisibleActive");
+                Assert(dataFirst.CurrentHolder == "prof_first", "CurrentHolder phải là prof_first");
+
+                // Kiểm tra trạng thái đã được ghi bền vững vào ProfileRegistry
+                var storedFirst = await registry.GetProfileAsync("prof_first");
+                Assert(storedFirst?.VisibilityState == BrowserVisibilityState.VisibleActive, "Trạng thái trong registry phải là VisibleActive");
+
+                // Profile thứ hai yêu cầu login khi slot đang bận: phải bị xếp vào queue VisibleWaiting
+                var reqSecond = CreateRequest("browser.request_login", new BrowserRequestLoginRequest("prof_second"));
+                var resSecond = await dispatcher.DispatchAsync(reqSecond, CancellationToken.None);
+
+                Assert(resSecond.Success, "Yêu cầu đăng nhập profile thứ hai phải thành công (dưới dạng xếp hàng)");
+                var dataSecond = DeserializeData<BrowserRequestLoginResponseData>(resSecond);
+                Assert(dataSecond.Queued, "Profile thứ hai phải ở trạng thái queued == true");
+                Assert(dataSecond.VisibilityState == BrowserVisibilityState.VisibleWaiting, "VisibilityState phải là VisibleWaiting");
+                Assert(dataSecond.CurrentHolder == "prof_first", "CurrentHolder vẫn phải là prof_first");
+
+                // Kiểm tra trạng thái của profile thứ hai trong registry
+                var storedSecond = await registry.GetProfileAsync("prof_second");
+                Assert(storedSecond?.VisibilityState == BrowserVisibilityState.VisibleWaiting, "Trạng thái trong registry phải là VisibleWaiting");
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir))
+                {
+                    try { Directory.Delete(tempDir, true); } catch { }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Test 3: browser.cancel_login: giải phóng slot hiển thị, cập nhật trạng thái Hidden.
+    /// </summary>
+    public static async Task Test_CancelLogin_ReleasesVisibleSlot_UpdatesHiddenState()
+    {
+        var (connection, factory) = await CreateInMemoryDbContextFactoryAsync();
+        await using (connection)
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "titoai_test_bridge_cl_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+
+            try
+            {
+                var registry = new ProfileRegistry(factory, tempDir);
+                using var coordinator = new LoginCoordinator(registry);
+                var probe = new SessionProbe(registry);
+                var handlers = new BrowserHandlers(registry, coordinator, probe);
+
+                var dispatcher = new BridgeDispatcher();
+                handlers.Register(dispatcher);
+
+                await SeedWorkspaceAsync(factory, "ws-1", "Workspace One");
+
+                await registry.EnsureProfileAsync("prof_active", BrowserProfileKind.SharedAI);
+                await registry.EnsureProfileAsync("prof_queued", BrowserProfileKind.MuseAI, workspaceId: "ws-1");
+
+                // Chiếm slot cho prof_active và xếp hàng prof_queued
+                await dispatcher.DispatchAsync(CreateRequest("browser.request_login", new BrowserRequestLoginRequest("prof_active")), CancellationToken.None);
+                await dispatcher.DispatchAsync(CreateRequest("browser.request_login", new BrowserRequestLoginRequest("prof_queued")), CancellationToken.None);
+
+                // Hủy đăng nhập prof_active (người đang giữ slot)
+                var reqCancelActive = CreateRequest("browser.cancel_login", new BrowserCancelLoginRequest("prof_active"));
+                var resCancelActive = await dispatcher.DispatchAsync(reqCancelActive, CancellationToken.None);
+
+                Assert(resCancelActive.Success, "Hủy đăng nhập slot active phải thành công");
+                var dataCancelActive = DeserializeData<BrowserCancelLoginResponseData>(resCancelActive);
+                Assert(dataCancelActive.Canceled, "Canceled phải là true");
+
+                // Kiểm tra trạng thái prof_active trong registry đã chuyển về Hidden / Stopped
+                var storedActive = await registry.GetProfileAsync("prof_active");
+                Assert(storedActive?.VisibilityState == BrowserVisibilityState.Hidden, "Trạng thái prof_active phải là Hidden sau khi hủy");
+                Assert(storedActive?.OperationalState == BrowserOperationalState.Stopped, "Trạng thái vận hành phải là Stopped");
+                Assert(!coordinator.IsVisibleLoginActive, "Coordinator không còn cửa sổ active nào");
+
+                // Hủy prof_queued đang chờ trong hàng đợi
+                var reqCancelQueued = CreateRequest("browser.cancel_login", new BrowserCancelLoginRequest("prof_queued"));
+                var resCancelQueued = await dispatcher.DispatchAsync(reqCancelQueued, CancellationToken.None);
+
+                Assert(resCancelQueued.Success, "Hủy đăng nhập slot queued phải thành công");
+                var dataCancelQueued = DeserializeData<BrowserCancelLoginResponseData>(resCancelQueued);
+                Assert(dataCancelQueued.Canceled, "Canceled phải là true");
+
+                var storedQueued = await registry.GetProfileAsync("prof_queued");
+                Assert(storedQueued?.VisibilityState == BrowserVisibilityState.Hidden, "Trạng thái prof_queued phải là Hidden sau khi hủy");
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir))
+                {
+                    try { Directory.Delete(tempDir, true); } catch { }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Test 4: browser.check_session: trả về trạng thái session thật (Unverified / Connected), không trả kết quả giả.
+    /// </summary>
+    public static async Task Test_CheckSession_RealStatus_UnverifiedAndConnected_NoFakePass()
+    {
+        var (connection, factory) = await CreateInMemoryDbContextFactoryAsync();
+        await using (connection)
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "titoai_test_bridge_cs_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+
+            try
+            {
+                var registry = new ProfileRegistry(factory, tempDir);
+                using var coordinator = new LoginCoordinator(registry);
+                var probe = new SessionProbe(registry);
+                var handlers = new BrowserHandlers(registry, coordinator, probe);
+
+                var dispatcher = new BridgeDispatcher();
+                handlers.Register(dispatcher);
+
+                await SeedWorkspaceAsync(factory, "ws-1", "Workspace One");
+
+                await registry.EnsureProfileAsync("prof_unverified", BrowserProfileKind.SharedAI);
+                await registry.EnsureProfileAsync("prof_connected", BrowserProfileKind.MuseAI, workspaceId: "ws-1", accountIdentity: "user@tito.local");
+                await registry.UpdateProfileStateAsync("prof_connected", sessionStatus: BrowserSessionStatus.Connected);
+
+                // Kiểm tra profile chưa xác minh
+                var reqUnverified = CreateRequest("browser.check_session", new BrowserCheckSessionRequest("prof_unverified"));
+                var resUnverified = await dispatcher.DispatchAsync(reqUnverified, CancellationToken.None);
+
+                Assert(resUnverified.Success, "check_session trên prof_unverified phải thành công");
+                var dataUnverified = DeserializeData<BrowserCheckSessionResponseData>(resUnverified);
+                Assert(dataUnverified.SessionStatus == BrowserSessionStatus.Unverified, "SessionStatus phải là Unverified");
+                Assert(dataUnverified.IdentityMatches == null, "IdentityMatches phải là null khi chưa liên kết danh tính");
+
+                // Kiểm tra profile đã kết nối thực
+                var reqConnected = CreateRequest("browser.check_session", new BrowserCheckSessionRequest("prof_connected"));
+                var resConnected = await dispatcher.DispatchAsync(reqConnected, CancellationToken.None);
+
+                Assert(resConnected.Success, "check_session trên prof_connected phải thành công");
+                var dataConnected = DeserializeData<BrowserCheckSessionResponseData>(resConnected);
+                Assert(dataConnected.SessionStatus == BrowserSessionStatus.Connected, "SessionStatus phải là Connected");
+                Assert(dataConnected.IdentityMatches == true, "IdentityMatches phải là true khi danh tính trùng khớp");
+
+                // Profile không tồn tại trong hệ thống: trả về trạng thái Unverified (không trả PASS giả)
+                var reqNonExistent = CreateRequest("browser.check_session", new BrowserCheckSessionRequest("prof_non_existent"));
+                var resNonExistent = await dispatcher.DispatchAsync(reqNonExistent, CancellationToken.None);
+
+                Assert(resNonExistent.Success, "check_session trên profile không tồn tại vẫn trả về envelope thành công chứa Unverified");
+                var dataNonExistent = DeserializeData<BrowserCheckSessionResponseData>(resNonExistent);
+                Assert(dataNonExistent.SessionStatus == BrowserSessionStatus.Unverified, "SessionStatus cho profile không tồn tại phải là Unverified");
+                Assert(dataNonExistent.IdentityMatches == null, "IdentityMatches cho profile không tồn tại phải là null");
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir))
+                {
+                    try { Directory.Delete(tempDir, true); } catch { }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Test 5: Lệnh không nằm trong Allow-list trả về UNKNOWN_COMMAND.
+    /// </summary>
+    public static async Task Test_UnknownCommand_RejectedWithUnknownCommand()
+    {
+        var (connection, factory) = await CreateInMemoryDbContextFactoryAsync();
+        await using (connection)
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "titoai_test_bridge_uc_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+
+            try
+            {
+                var registry = new ProfileRegistry(factory, tempDir);
+                using var coordinator = new LoginCoordinator(registry);
+                var probe = new SessionProbe(registry);
+                var handlers = new BrowserHandlers(registry, coordinator, probe);
+
+                var dispatcher = new BridgeDispatcher();
+                handlers.Register(dispatcher);
+
+                var reqUnknown = CreateRequest("browser.launch_stealth", new { profileId = "shared_ai" });
+                var resUnknown = await dispatcher.DispatchAsync(reqUnknown, CancellationToken.None);
+
+                Assert(!resUnknown.Success, "Lệnh không hợp lệ phải trả về Success = false");
+                Assert(resUnknown.Error?.Code == "UNKNOWN_COMMAND", $"Mã lỗi phải là UNKNOWN_COMMAND, nhận được: {resUnknown.Error?.Code}");
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir))
+                {
+                    try { Directory.Delete(tempDir, true); } catch { }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Test 6: Payload sai/thiếu trường hoặc định dạng không hợp lệ trả về INVALID_ARGUMENT.
+    /// </summary>
+    public static async Task Test_PayloadValidation_InvalidArguments_Rejected()
+    {
+        var (connection, factory) = await CreateInMemoryDbContextFactoryAsync();
+        await using (connection)
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "titoai_test_bridge_val_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+
+            try
+            {
+                var registry = new ProfileRegistry(factory, tempDir);
+                using var coordinator = new LoginCoordinator(registry);
+                var probe = new SessionProbe(registry);
+                var handlers = new BrowserHandlers(registry, coordinator, probe);
+
+                var dispatcher = new BridgeDispatcher();
+                handlers.Register(dispatcher);
+
+                // 1. request_login thiếu profileId
+                var reqMissing1 = CreateRequestWithRawJson("browser.request_login", "{}");
+                var resMissing1 = await dispatcher.DispatchAsync(reqMissing1, CancellationToken.None);
+                Assert(!resMissing1.Success, "request_login thiếu profileId phải thất bại");
+                Assert(resMissing1.Error?.Code == "INVALID_ARGUMENT", "Mã lỗi phải là INVALID_ARGUMENT");
+
+                // 2. request_login với profileId rỗng
+                var reqEmpty1 = CreateRequest("browser.request_login", new { profileId = "   " });
+                var resEmpty1 = await dispatcher.DispatchAsync(reqEmpty1, CancellationToken.None);
+                Assert(!resEmpty1.Success, "request_login với profileId khoảng trắng phải thất bại");
+                Assert(resEmpty1.Error?.Code == "INVALID_ARGUMENT", "Mã lỗi phải là INVALID_ARGUMENT");
+
+                // 3. cancel_login thiếu profileId (payload null)
+                var reqNullCancel = CreateRequestWithRawJson("browser.cancel_login", "null");
+                var resNullCancel = await dispatcher.DispatchAsync(reqNullCancel, CancellationToken.None);
+                Assert(!resNullCancel.Success, "cancel_login với payload null phải thất bại");
+                Assert(resNullCancel.Error?.Code == "INVALID_ARGUMENT", "Mã lỗi phải là INVALID_ARGUMENT");
+
+                // 4. check_session với profileId rỗng
+                var reqEmptyCs = CreateRequest("browser.check_session", new { profileId = "" });
+                var resEmptyCs = await dispatcher.DispatchAsync(reqEmptyCs, CancellationToken.None);
+                Assert(!resEmptyCs.Success, "check_session với profileId rỗng phải thất bại");
+                Assert(resEmptyCs.Error?.Code == "INVALID_ARGUMENT", "Mã lỗi phải là INVALID_ARGUMENT");
+
+                // 5. list_profiles với JSON không phải object (ví dụ số nguyên hoặc chuỗi trần)
+                var reqMalformed = CreateRequestWithRawJson("browser.list_profiles", "12345");
+                var resMalformed = await dispatcher.DispatchAsync(reqMalformed, CancellationToken.None);
+                Assert(!resMalformed.Success, "list_profiles với payload số nguyên phải thất bại");
+                Assert(resMalformed.Error?.Code == "INVALID_ARGUMENT", "Mã lỗi phải là INVALID_ARGUMENT");
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir))
+                {
+                    try { Directory.Delete(tempDir, true); } catch { }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Test 7: Yêu cầu login hoặc hủy login trên profile không tồn tại trả về ENTITY_NOT_FOUND.
+    /// </summary>
+    public static async Task Test_EntityNotFound_ForNonExistentProfile_OnLoginAndCancel()
+    {
+        var (connection, factory) = await CreateInMemoryDbContextFactoryAsync();
+        await using (connection)
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "titoai_test_bridge_enf_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+
+            try
+            {
+                var registry = new ProfileRegistry(factory, tempDir);
+                using var coordinator = new LoginCoordinator(registry);
+                var probe = new SessionProbe(registry);
+                var handlers = new BrowserHandlers(registry, coordinator, probe);
+
+                var dispatcher = new BridgeDispatcher();
+                handlers.Register(dispatcher);
+
+                // request_login với profile không tồn tại -> ENTITY_NOT_FOUND
+                var reqLoginNotFound = CreateRequest("browser.request_login", new BrowserRequestLoginRequest("ghost_profile_123"));
+                var resLoginNotFound = await dispatcher.DispatchAsync(reqLoginNotFound, CancellationToken.None);
+                Assert(!resLoginNotFound.Success, "request_login với profile không tồn tại phải thất bại");
+                Assert(resLoginNotFound.Error?.Code == "ENTITY_NOT_FOUND", $"Mã lỗi phải là ENTITY_NOT_FOUND, nhận được: {resLoginNotFound.Error?.Code}");
+
+                // cancel_login với profile không tồn tại -> ENTITY_NOT_FOUND
+                var reqCancelNotFound = CreateRequest("browser.cancel_login", new BrowserCancelLoginRequest("ghost_profile_123"));
+                var resCancelNotFound = await dispatcher.DispatchAsync(reqCancelNotFound, CancellationToken.None);
+                Assert(!resCancelNotFound.Success, "cancel_login với profile không tồn tại phải thất bại");
+                Assert(resCancelNotFound.Error?.Code == "ENTITY_NOT_FOUND", $"Mã lỗi phải là ENTITY_NOT_FOUND, nhận được: {resCancelNotFound.Error?.Code}");
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir))
+                {
+                    try { Directory.Delete(tempDir, true); } catch { }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Test 8: Unregister dọn dẹp các handler sạch sẽ khỏi BridgeDispatcher.
+    /// </summary>
+    public static async Task Test_Unregister_RemovesHandlersCleanly()
+    {
+        var (connection, factory) = await CreateInMemoryDbContextFactoryAsync();
+        await using (connection)
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "titoai_test_bridge_unreg_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+
+            try
+            {
+                var registry = new ProfileRegistry(factory, tempDir);
+                using var coordinator = new LoginCoordinator(registry);
+                var probe = new SessionProbe(registry);
+                var handlers = new BrowserHandlers(registry, coordinator, probe);
+
+                var dispatcher = new BridgeDispatcher();
+                handlers.Register(dispatcher);
+
+                // Hủy đăng ký toàn bộ
+                handlers.Unregister(dispatcher);
+
+                // Dispatch lệnh đã hủy: do lệnh vẫn nằm trong allow-list nhưng không còn handler -> INTERNAL_ERROR
+                var req = CreateRequest("browser.list_profiles", new BrowserListProfilesRequest(null));
+                var res = await dispatcher.DispatchAsync(req, CancellationToken.None);
+
+                Assert(!res.Success, "Lệnh sau khi Unregister không được thành công");
+                Assert(res.Error?.Code == "INTERNAL_ERROR", $"Mã lỗi phải là INTERNAL_ERROR khi handler đã hủy, nhận được: {res.Error?.Code}");
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir))
+                {
+                    try { Directory.Delete(tempDir, true); } catch { }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Chạy toàn bộ các bài kiểm tra khói của Track R1 (Desktop Browser Handlers & Bridge Integration).
+    /// </summary>
+    public static async Task RunAllAsync()
+    {
+        Console.WriteLine("\n[Track R1] Desktop Browser Handlers & Bridge Integration Smoke Checks:");
+
+        async Task RunAsync(string name, Func<Task> test)
+        {
+            Console.Write($"  [RUN] {name} ... ");
+            try
+            {
+                await test();
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.WriteLine("PASS");
+                Console.ResetColor();
+            }
+            catch (Exception ex)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine("FAIL");
+                Console.ResetColor();
+                Console.WriteLine($"        -> Lỗi: {ex.GetType().Name}: {ex.Message}");
+                throw;
+            }
+        }
+
+        await RunAsync("Test 1: List profiles (workspaceId = null & specific workspace, DTO mapping)", Test_ListProfiles_WorkspaceNull_And_SpecificWorkspace);
+        await RunAsync("Test 2: Request login (VisibleActive first slot & VisibleWaiting queue)", Test_RequestLogin_FirstActive_SecondQueued_VisibleWaiting);
+        await RunAsync("Test 3: Cancel login (Releases visible slot & updates Hidden state)", Test_CancelLogin_ReleasesVisibleSlot_UpdatesHiddenState);
+        await RunAsync("Test 4: Check session (Real Unverified / Connected status, no fake PASS)", Test_CheckSession_RealStatus_UnverifiedAndConnected_NoFakePass);
+        await RunAsync("Test 5: Unknown command rejected with UNKNOWN_COMMAND", Test_UnknownCommand_RejectedWithUnknownCommand);
+        await RunAsync("Test 6: Invalid / missing payload rejected with INVALID_ARGUMENT", Test_PayloadValidation_InvalidArguments_Rejected);
+        await RunAsync("Test 7: Non-existent profile rejected with ENTITY_NOT_FOUND", Test_EntityNotFound_ForNonExistentProfile_OnLoginAndCancel);
+        await RunAsync("Test 8: Unregister handlers cleans up registration", Test_Unregister_RemovesHandlersCleanly);
+    }
+
+    private static RequestEnvelope CreateRequest(string command, object? payload)
+    {
+        JsonElement payloadElement;
+        if (payload is null)
+        {
+            using var doc = JsonDocument.Parse("null");
+            payloadElement = doc.RootElement.Clone();
+        }
+        else if (payload is JsonElement elem)
+        {
+            payloadElement = elem;
+        }
+        else
+        {
+            var jsonBytes = JsonSerializer.SerializeToUtf8Bytes(payload, JsonOptions);
+            using var doc = JsonDocument.Parse(jsonBytes);
+            payloadElement = doc.RootElement.Clone();
+        }
+
+        return new RequestEnvelope(
+            Id: Guid.NewGuid(),
+            Type: "request",
+            Command: command,
+            Payload: payloadElement,
+            ClientTimestampUtc: DateTimeOffset.UtcNow,
+            ContractVersion: BridgeContract.Version
+        );
+    }
+
+    private static RequestEnvelope CreateRequestWithRawJson(string command, string rawJson)
+    {
+        using var doc = JsonDocument.Parse(rawJson);
+        var payloadElement = doc.RootElement.Clone();
+
+        return new RequestEnvelope(
+            Id: Guid.NewGuid(),
+            Type: "request",
+            Command: command,
+            Payload: payloadElement,
+            ClientTimestampUtc: DateTimeOffset.UtcNow,
+            ContractVersion: BridgeContract.Version
+        );
+    }
+
+    private static T DeserializeData<T>(ResponseEnvelope response)
+    {
+        Assert(response.Data.HasValue, "Response.Data phải có giá trị");
+        var json = response.Data!.Value.GetRawText();
+        var obj = JsonSerializer.Deserialize<T>(json, JsonOptions);
+        Assert(obj is not null, "Deserialization kết quả trả về null");
+        return obj!;
+    }
+
+    private static void Assert(bool condition, string message)
+    {
+        if (!condition)
+        {
+            throw new InvalidOperationException($"Assertion failed: {message}");
+        }
+    }
+}

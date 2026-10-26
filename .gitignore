@@ -1,0 +1,26 @@
+# Build outputs
+**/bin/
+**/obj/
+**/dist/
+**/node_modules/
+**/TestResults/
+
+# Local tooling and generated indexes
+.template-engine/
+.nuget/
+.codegraph/
+.dotnet-home/
+.pnpm-store/
+.build-diagnostic.log
+
+# Local agent orchestration, review evidence, and scratch scripts
+/AGENTS.md
+/docs/agents/
+/docs/reviews/
+/scratch/
+
+# IDE state
+*.user
+*.suo
+.vs/
+.idea/

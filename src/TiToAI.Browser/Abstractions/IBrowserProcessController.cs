@@ -1,0 +1,57 @@
+using Microsoft.Playwright;
+
+namespace TiToAI.Browser.Abstractions;
+
+/// <summary>
+/// Đại diện cho một phiên ngữ cảnh trình duyệt Playwright đang chạy dưới quyền sở hữu độc quyền.
+/// </summary>
+public interface IBrowserContextHandle : IAsyncDisposable, IDisposable
+{
+    /// <summary>
+    /// ID hồ sơ trình duyệt được quản lý.
+    /// </summary>
+    string ProfileId { get; }
+
+    /// <summary>
+    /// Ngữ cảnh trình duyệt Playwright Chromium Persistent Context.
+    /// </summary>
+    IBrowserContext Context { get; }
+
+    /// <summary>
+    /// Khóa sở hữu độc quyền single-instance lock (.titoai_lock).
+    /// </summary>
+    IProfileOwnerLock OwnerLock { get; }
+
+    /// <summary>
+    /// Cho biết trình duyệt đang chạy ở chế độ ẩn (headless) hay hiển thị.
+    /// </summary>
+    bool IsHeadless { get; }
+}
+
+/// <summary>
+/// Quản lý tiến trình và vòng đời Browser Chromium Persistent Context của Playwright.
+/// Tích hợp cơ chế Single-Instance Lock (.titoai_lock) để đảm bảo không xung đột dữ liệu profile.
+/// </summary>
+public interface IBrowserProcessController : IAsyncDisposable, IDisposable
+{
+    /// <summary>
+    /// Khởi chạy persistent context của Chromium cho profile được chỉ định.
+    /// Bắt buộc chiếm single-instance lock (.titoai_lock) trước khi mở trình duyệt.
+    /// </summary>
+    Task<IBrowserContextHandle> LaunchPersistentContextAsync(
+        string profileId,
+        bool isHeadless,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Đóng persistent context của profile và giải phóng single-instance lock an toàn.
+    /// </summary>
+    Task CloseContextAsync(
+        string profileId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Kiểm tra xem profileId hiện có đang chạy tiến trình Playwright persistent context hay không.
+    /// </summary>
+    bool IsRunning(string profileId);
+}
