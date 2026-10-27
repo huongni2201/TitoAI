@@ -10,7 +10,7 @@ namespace TiToAI.Application.Providers;
 /// Định nghĩa năng lực chuẩn (Capabilities) của các AI Provider theo execution-contract-v1.1 §1, §3.4.
 /// Quy tắc an toàn: Khi chưa qua T19 verification thực tế trên môi trường live,
 /// VerificationStatus luôn là NOT_VERIFIED, AutomationSupported = false,
-/// ManualSupported = true (cho các tác vụ nội dung) hoặc false nếu không hỗ trợ.
+/// ManualSupported = false; quy trình chỉ chạy tự động.
 /// Tuyệt đối không giả mạo VERIFIED khi chưa xác minh thật.
 /// </summary>
 public static class ProviderCapabilities
@@ -22,7 +22,7 @@ public static class ProviderCapabilities
             TaskType: JobTaskType.Script,
             VerificationStatus: ProviderVerificationStatus.NotVerified,
             AutomationSupported: false,
-            ManualSupported: true,
+            ManualSupported: false,
             RequiresReferenceImage: false,
             MaxInputLength: 8000,
             EvidenceId: null,
@@ -38,7 +38,7 @@ public static class ProviderCapabilities
             TaskType: JobTaskType.Image,
             VerificationStatus: ProviderVerificationStatus.NotVerified,
             AutomationSupported: false,
-            ManualSupported: true,
+            ManualSupported: false,
             RequiresReferenceImage: true,
             MaxInputLength: 4000,
             EvidenceId: null,
@@ -54,7 +54,7 @@ public static class ProviderCapabilities
             TaskType: JobTaskType.VideoPrompt,
             VerificationStatus: ProviderVerificationStatus.NotVerified,
             AutomationSupported: false,
-            ManualSupported: true,
+            ManualSupported: false,
             RequiresReferenceImage: true,
             MaxInputLength: 4000,
             EvidenceId: null,
@@ -90,7 +90,7 @@ public static class ProviderCapabilities
             TaskType: JobTaskType.Script,
             VerificationStatus: ProviderVerificationStatus.NotVerified,
             AutomationSupported: false,
-            ManualSupported: true,
+            ManualSupported: false,
             RequiresReferenceImage: false,
             MaxInputLength: 8000,
             EvidenceId: null,
@@ -106,7 +106,7 @@ public static class ProviderCapabilities
             TaskType: JobTaskType.Image,
             VerificationStatus: ProviderVerificationStatus.NotVerified,
             AutomationSupported: false,
-            ManualSupported: true,
+            ManualSupported: false,
             RequiresReferenceImage: true,
             MaxInputLength: 4000,
             EvidenceId: null,
@@ -122,7 +122,7 @@ public static class ProviderCapabilities
             TaskType: JobTaskType.VideoPrompt,
             VerificationStatus: ProviderVerificationStatus.NotVerified,
             AutomationSupported: false,
-            ManualSupported: true,
+            ManualSupported: false,
             RequiresReferenceImage: true,
             MaxInputLength: 4000,
             EvidenceId: null,
@@ -158,7 +158,7 @@ public static class ProviderCapabilities
             TaskType: JobTaskType.VideoRender,
             VerificationStatus: ProviderVerificationStatus.NotVerified,
             AutomationSupported: false,
-            ManualSupported: true,
+            ManualSupported: false,
             RequiresReferenceImage: true,
             MaxInputLength: 2000,
             EvidenceId: null,
@@ -272,12 +272,12 @@ public static class ProviderCapabilities
     }
 
     /// <summary>
-    /// Kiểm tra xem provider có hỗ trợ tác vụ (dù ở mode thủ công hay automation) hay không.
+    /// Kiểm tra loại tác vụ có trong năng lực provider; readiness automation được kiểm tra riêng.
     /// </summary>
     public static bool IsSupportedTask(string providerKey, string taskType)
     {
         var cap = GetDefaultCapability(providerKey, taskType);
-        return cap != null && cap.VerificationStatus != ProviderVerificationStatus.Unsupported && (cap.ManualSupported || cap.AutomationSupported);
+        return cap != null && cap.VerificationStatus != ProviderVerificationStatus.Unsupported;
     }
 
     /// <summary>

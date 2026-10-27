@@ -67,7 +67,7 @@ public sealed class ProfileRegistry : IProfileRegistry
     public async Task<IReadOnlyList<BrowserProfileInfo>> ListProfilesAsync(string? workspaceId = null, CancellationToken cancellationToken = default)
     {
         await using var db = _dbContextFactory();
-        IQueryable<BrowserProfile> query = db.BrowserProfiles.AsNoTracking();
+        IQueryable<BrowserProfile> query = db.BrowserProfiles.AsNoTracking().Where(p => p.Lifecycle != "Deleted");
 
         if (!string.IsNullOrWhiteSpace(workspaceId))
         {
@@ -191,6 +191,35 @@ public sealed class ProfileRegistry : IProfileRegistry
                     ReasonCode: reasonCode);
 
                 await ProfileStateChanged.Invoke(payload);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Xoá thư mục dữ liệu trình duyệt (cookie, phiên đăng nhập) của profile. Thử lại vì Chromium có thể còn giữ file.
+    /// </summary>
+    public async Task DeleteUserDataAsync(string profileId, CancellationToken cancellationToken = default)
+    {
+        var profile = await GetProfileAsync(profileId, cancellationToken);
+        if (profile == null) return;
+
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                if (Directory.Exists(profile.UserDataDir))
+                {
+                    Directory.Delete(profile.UserDataDir, recursive: true);
+                }
+                return;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                if (attempt >= 5)
+                {
+                    throw new InvalidOperationException("Không thể xoá dữ liệu trình duyệt vì đang bị khoá. Hãy đóng cửa sổ trình duyệt của tài khoản rồi thử lại.", ex);
+                }
+                await Task.Delay(500 * attempt, cancellationToken);
             }
         }
     }

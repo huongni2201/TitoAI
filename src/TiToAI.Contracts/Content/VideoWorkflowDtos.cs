@@ -110,7 +110,9 @@ public sealed record ProjectWorkflowConfigDto(
     [property: JsonPropertyName("targetDurationPerSceneSeconds")] int TargetDurationPerSceneSeconds,
     [property: JsonPropertyName("runState")] string RunState,
     [property: JsonPropertyName("currentRunId")] string? CurrentRunId,
-    [property: JsonPropertyName("updatedAtUtc")] string UpdatedAtUtc);
+    [property: JsonPropertyName("updatedAtUtc")] string UpdatedAtUtc,
+    [property: JsonPropertyName("scriptPromptText")] string? ScriptPromptText = null,
+    [property: JsonPropertyName("videoPromptText")] string? VideoPromptText = null);
 
 /// <summary>
 /// Thông tin chi tiết quy trình của một Cảnh (Scene Workflow Detail).
@@ -137,7 +139,8 @@ public sealed record SceneWorkflowDetailDto(
     [property: JsonPropertyName("activeJobState")] string? ActiveJobState,
     [property: JsonPropertyName("activeJobProgressPercent")] int? ActiveJobProgressPercent,
     [property: JsonPropertyName("videoCandidateHistory")] IReadOnlyList<string>? VideoCandidateHistory,
-    [property: JsonPropertyName("revision")] string Revision);
+    [property: JsonPropertyName("revision")] string Revision,
+    [property: JsonPropertyName("staleTaskTypes")] IReadOnlyList<string>? StaleTaskTypes = null);
 
 /// <summary>
 /// Yêu cầu lấy cấu hình workflow của Dự án.
@@ -160,7 +163,9 @@ public sealed record SaveProjectWorkflowConfigRequest(
     [property: JsonPropertyName("audioOption")] string AudioOption,
     [property: JsonPropertyName("audioAssetId")] string? AudioAssetId,
     [property: JsonPropertyName("targetSceneCount")] int TargetSceneCount,
-    [property: JsonPropertyName("targetDurationPerSceneSeconds")] int TargetDurationPerSceneSeconds);
+    [property: JsonPropertyName("targetDurationPerSceneSeconds")] int TargetDurationPerSceneSeconds,
+    [property: JsonPropertyName("scriptPromptText")] string? ScriptPromptText = null,
+    [property: JsonPropertyName("videoPromptText")] string? VideoPromptText = null);
 
 /// <summary>
 /// Yêu cầu bấm "Bắt đầu tạo video" một lần duy nhất cho toàn bộ dự án.
@@ -267,3 +272,51 @@ public sealed record PreviewAiPromptResponseData(
     [property: JsonPropertyName("composedPrompt")] string ComposedPrompt,
     [property: JsonPropertyName("outputContractVersion")] int OutputContractVersion
 );
+
+/// <summary>
+/// DTO chứa nội dung kịch bản và prompt video được AI tạo tự động theo schema { idea, hook, video_script, video_prompt, tiktok_content }.
+/// Hiển thị dạng bảng cho người dùng xem và quyết định tạo video.
+/// </summary>
+public sealed record VideoContentItemDto(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("projectId")] string ProjectId,
+    [property: JsonPropertyName("workspaceId")] string WorkspaceId,
+    [property: JsonPropertyName("sceneId")] string? SceneId,
+    [property: JsonPropertyName("sequenceOrder")] int SequenceOrder,
+    [property: JsonPropertyName("idea")] string Idea,
+    [property: JsonPropertyName("hook")] string Hook,
+    [property: JsonPropertyName("video_script")] string VideoScript,
+    [property: JsonPropertyName("video_prompt")] string VideoPrompt,
+    [property: JsonPropertyName("tiktok_content")] string TikTokContent,
+    [property: JsonPropertyName("imageAssetId")] string? ImageAssetId,
+    [property: JsonPropertyName("videoAssetId")] string? VideoAssetId,
+    [property: JsonPropertyName("audioAssetId")] string? AudioAssetId,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("createdAtUtc")] string CreatedAtUtc,
+    [property: JsonPropertyName("updatedAtUtc")] string UpdatedAtUtc
+);
+
+/// <summary>
+/// Yêu cầu cập nhật nội dung hàng kịch bản trong bảng.
+/// </summary>
+public sealed record UpdateVideoContentItemRequest(
+    [property: JsonPropertyName("workspaceId")] string WorkspaceId,
+    [property: JsonPropertyName("projectId")] string ProjectId,
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("idea")] string? Idea = null,
+    [property: JsonPropertyName("hook")] string? Hook = null,
+    [property: JsonPropertyName("video_script")] string? VideoScript = null,
+    [property: JsonPropertyName("video_prompt")] string? VideoPrompt = null,
+    [property: JsonPropertyName("tiktok_content")] string? TikTokContent = null
+);
+
+/// <summary>
+/// Yêu cầu tạo video từ hàng kịch bản trong bảng (Action Tạo video).
+/// </summary>
+public sealed record CreateSceneVideoRequest(
+    [property: JsonPropertyName("workspaceId")] string WorkspaceId,
+    [property: JsonPropertyName("projectId")] string ProjectId,
+    [property: JsonPropertyName("contentItemId")] string? ContentItemId = null,
+    [property: JsonPropertyName("sceneId")] string? SceneId = null
+);
+

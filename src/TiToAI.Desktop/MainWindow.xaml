@@ -17,7 +17,8 @@
                 Background="#0B1220"
                 Padding="32">
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="600">
-                <TextBlock Text="Không thể khởi tạo WebView2"
+                <TextBlock x:Name="ErrorTitleText"
+                           Text="Không thể khởi tạo ứng dụng"
                            Foreground="#F4F7FC"
                            FontSize="20"
                            FontWeight="SemiBold"

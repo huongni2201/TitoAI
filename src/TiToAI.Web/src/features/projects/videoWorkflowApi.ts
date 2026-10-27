@@ -53,6 +53,8 @@ export interface ProjectWorkflowConfigDto {
   runState: WorkflowRunState;
   currentRunId: string | null;
   updatedAtUtc: string;
+  scriptPromptText?: string | null;
+  videoPromptText?: string | null;
 }
 
 export interface SaveProjectWorkflowConfigRequest {
@@ -67,6 +69,8 @@ export interface SaveProjectWorkflowConfigRequest {
   audioAssetId?: string | null;
   targetSceneCount: number;
   targetDurationPerSceneSeconds: number;
+  scriptPromptText?: string | null;
+  videoPromptText?: string | null;
 }
 
 export interface SceneWorkflowDetailDto {
@@ -128,6 +132,42 @@ export interface PreviewAiPromptResponseData {
   userBrief: string;
   composedPrompt: string;
   outputContractVersion: number;
+}
+
+export interface VideoContentItemDto {
+  id: string;
+  projectId: string;
+  workspaceId: string;
+  sceneId?: string | null;
+  sequenceOrder: number;
+  idea: string;
+  hook: string;
+  videoScript: string;
+  videoPrompt: string;
+  tiktokContent: string;
+  imageAssetId?: string | null;
+  videoAssetId?: string | null;
+  audioAssetId?: string | null;
+  status: string;
+  createdAtUtc: string;
+  updatedAtUtc: string;
+}
+
+export interface UpdateVideoContentItemRequest {
+  workspaceId: string;
+  projectId: string;
+  itemId: string;
+  idea?: string;
+  hook?: string;
+  videoScript?: string;
+  videoPrompt?: string;
+  tiktokContent?: string;
+}
+
+export interface CreateSceneVideoRequest {
+  workspaceId: string;
+  projectId: string;
+  itemId: string;
 }
 
 export const DEFAULT_SUPPORTED_DURATIONS = [10, 15] as const;
@@ -203,5 +243,32 @@ export const videoWorkflowApi = {
       { workspaceId: req.workspaceId }
     );
     return data!;
+  },
+
+  async listContentItems(workspaceId: string, projectId: string): Promise<VideoContentItemDto[]> {
+    const res = await bridgeClient.invoke<{ items: VideoContentItemDto[] }>(
+      "workflow.list_content_items",
+      { workspaceId, projectId },
+      { workspaceId }
+    );
+    return res?.items || [];
+  },
+
+  async updateContentItem(req: UpdateVideoContentItemRequest): Promise<VideoContentItemDto> {
+    const data = await bridgeClient.invoke<{ item: VideoContentItemDto }>(
+      "workflow.update_content_item",
+      req,
+      { workspaceId: req.workspaceId }
+    );
+    return data?.item!;
+  },
+
+  async createSceneVideo(req: CreateSceneVideoRequest): Promise<unknown> {
+    const data = await bridgeClient.invoke<unknown>(
+      "workflow.create_scene_video",
+      req,
+      { workspaceId: req.workspaceId }
+    );
+    return data;
   },
 };

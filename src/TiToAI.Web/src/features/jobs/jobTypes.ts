@@ -78,6 +78,7 @@ export interface JobSummaryDto {
   resultReference?: string | null;
   progressPercent: number | null;
   currentStep: string | null;
+  revision?: number;
   createdAtUtc: string;
 }
 
@@ -99,6 +100,7 @@ export interface JobDetailDto {
   hasUnresolvedSideEffect?: boolean;
   resultReference: string | null;
   resultText: string | null;
+  revision: number;
   createdAtUtc: string;
   updatedAtUtc: string;
 }
@@ -159,6 +161,32 @@ export interface JobReconcileResponseData {
   currentState: JobState;
   reconcileResult: string;
   resultReference: string | null;
+  revision?: number;
+}
+
+export interface JobRetryRequest {
+  workspaceId: string;
+  jobId: string;
+  expectedRevision: number;
+}
+
+export interface JobRetryResponseData {
+  jobId: string;
+  state: JobState;
+  message: string;
+  revision: number;
+}
+
+export interface JobListHistoryRequest {
+  workspaceId?: string;
+  projectId?: string;
+  cursor?: string | null;
+  pageSize?: number;
+}
+
+export interface JobListHistoryResponseData {
+  items: JobSummaryDto[];
+  nextCursor: string | null;
 }
 
 export interface JobProgressUpdatedPayload {
@@ -169,6 +197,7 @@ export interface JobProgressUpdatedPayload {
   state: JobState;
   progressPercent: number;
   currentStep: string;
+  jobRevision?: number;
 }
 
 export interface JobStateChangedPayload {
@@ -180,6 +209,7 @@ export interface JobStateChangedPayload {
   reasonCode: JobReasonCode | null;
   resultReference: string | null;
   timestampUtc: string;
+  jobRevision?: number;
 }
 
 export type QueueTabFilter = "all" | "running" | "awaiting" | "failed" | "completed";
@@ -286,7 +316,7 @@ export function getStateBadgeInfo(state: JobState, cancelRequested?: boolean): S
 
 export function formatReasonCode(reasonCode?: string | null): string {
   if (!reasonCode) return "";
-  switch (reasonCode) {
+  switch (reasonCode.toLowerCase()) {
     case "login_required":
       return "Cần đăng nhập tài khoản provider để tiếp tục.";
     case "session_expired":
@@ -294,7 +324,13 @@ export function formatReasonCode(reasonCode?: string | null): string {
     case "wrong_account":
       return "Tài khoản trong trình duyệt không khớp với tài khoản đã liên kết.";
     case "automation_blocked":
-      return "Nhà cung cấp yêu cầu CAPTCHA hoặc chặn tự động hóa. Vui lòng xử lý thủ công.";
+    case "manual_input_required":
+    case "manual_handoff_required":
+      return "Tự động hóa của nhà cung cấp chưa sẵn sàng. Luồng tạo video chỉ chạy tự động.";
+    case "capability_unsupported":
+      return "Nhà cung cấp không hỗ trợ tác vụ này.";
+    case "missing_provider":
+      return "Tác vụ chưa có nhà cung cấp AI trong cấu hình đã lưu.";
     case "network_error":
       return "Lỗi kết nối mạng trong quá trình thực thi.";
     case "auth_closed":
@@ -330,6 +366,17 @@ export function formatReasonCode(reasonCode?: string | null): string {
   }
 }
 
+function isAutomationUnavailable(reasonCode?: string | null): boolean {
+  return [
+    "automation_blocked",
+    "adapter_not_available",
+    "missing_provider",
+    "capability_unsupported",
+    "manual_input_required",
+    "manual_handoff_required",
+  ].includes(reasonCode?.toLowerCase() ?? "");
+}
+
 export function getRecommendedAction(
   job: Pick<JobSummaryDto, "state" | "reasonCode"> & {
     cancelRequested?: boolean;
@@ -341,7 +388,7 @@ export function getRecommendedAction(
     isHydrating?: boolean;
   }
 ): {
-  type: "login" | "navigate_settings_accounts" | "reconcile" | "resume" | "retry" | "cancel" | "manual_handoff" | "none";
+  type: "login" | "navigate_settings_accounts" | "reconcile" | "resume" | "retry" | "cancel" | "none";
   label: string;
   icon: ComponentType<{ className?: string }>;
   description?: string;
@@ -384,6 +431,29 @@ export function getRecommendedAction(
     };
   }
 
+  if (
+    job.state === "AwaitingUser" &&
+    isAutomationUnavailable(job.reasonCode) &&
+    (job.hasUnresolvedSideEffect === true || job.sideEffectSubmitted === 1)
+  ) {
+    return {
+      type: "reconcile",
+      label: "Đối soát tác vụ",
+      icon: SearchCheck,
+      variant: "default",
+      description: "Kiểm tra kết quả đã gửi tới provider trước khi chạy tiếp.",
+    };
+  }
+
+  if (isAutomationUnavailable(job.reasonCode)) {
+    return {
+      type: "none",
+      label: "",
+      icon: AlertCircle,
+      description: "Tự động hóa chưa sẵn sàng. Kiểm tra nhà cung cấp trước khi tạo yêu cầu mới.",
+    };
+  }
+
   // AwaitingUser state
   if (job.state === "AwaitingUser") {
     if (
@@ -421,20 +491,6 @@ export function getRecommendedAction(
       };
     }
 
-    if (
-      job.reasonCode === "automation_blocked" ||
-      job.reasonCode === "adapter_not_available" ||
-      job.reasonCode === "manual_input_required"
-    ) {
-      return {
-        type: "manual_handoff",
-        label: "Xử lý thủ công",
-        icon: Sparkles,
-        variant: "default",
-        description: "Mở bảng Xử lý thủ công để copy prompt hoặc import kết quả.",
-      };
-    }
-
     return {
       type: "resume",
       label: "Tiếp tục",
@@ -444,10 +500,38 @@ export function getRecommendedAction(
     };
   }
 
-  // T17-R2: Failed state: chỉ cho phép retry khi chắc chắn sideEffectSubmitted === 0 và attempts < maxAttempts
+  // T17-R2: Failed state: chỉ cho phép retry khi chắc chắn sideEffectSubmitted === 0, hasUnresolvedSideEffect !== true, attempts < maxAttempts và lý do hợp lệ
   if (job.state === "Failed") {
     // Nếu job đã bị hủy hoặc có cờ hủy: cấm retry
     if (job.cancelRequested) {
+      return {
+        type: "none",
+        label: "",
+        icon: HelpCircle,
+      };
+    }
+
+    // Nếu còn tồn tại unresolved side effect: cấm retry tự động
+    if (job.hasUnresolvedSideEffect === true) {
+      return {
+        type: "none",
+        label: "",
+        icon: HelpCircle,
+      };
+    }
+
+    // Lý do cấm retry theo v1.1 §5
+    const NON_RETRYABLE_REASONS = [
+      "user_canceled",
+      "canceled_late_result",
+      "login_required",
+      "session_expired",
+      "auth_closed",
+      "wrong_account",
+      "storage_root_unavailable",
+      "adapter_not_available",
+    ];
+    if (job.reasonCode && NON_RETRYABLE_REASONS.includes(job.reasonCode)) {
       return {
         type: "none",
         label: "",
@@ -468,7 +552,7 @@ export function getRecommendedAction(
       };
     }
 
-    // Chỉ khi sideEffectSubmitted xác nhận rõ ràng bằng 0: mới cho retry tự động
+    // Chỉ khi sideEffectSubmitted xác nhận rõ ràng bằng 0: mới cho retry
     if (job.sideEffectSubmitted === 0) {
       return {
         type: "retry",

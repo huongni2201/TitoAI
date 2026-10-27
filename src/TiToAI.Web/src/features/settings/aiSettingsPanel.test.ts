@@ -28,7 +28,6 @@ const mockProviders = [
     supportedTasks: ["Script", "Image", "VideoPrompt"],
     verificationStatus: "VERIFIED",
     sessionStatus: "Connected",
-    manualHandoffMode: "InAppManual",
   },
   {
     providerKey: "chatgpt-web",
@@ -36,7 +35,6 @@ const mockProviders = [
     supportedTasks: ["Script", "Image", "VideoPrompt"],
     verificationStatus: "NOT_VERIFIED",
     sessionStatus: "Unverified",
-    manualHandoffMode: "InAppManual",
   },
 ];
 
@@ -73,14 +71,14 @@ const mockTasks = [
     providerKey: "gemini-web",
     verificationStatus: "VERIFIED",
     automationSupported: true,
-    manualSupported: true,
+    manualSupported: false,
   },
   {
     taskType: "Script",
     providerKey: "chatgpt-web",
     verificationStatus: "NOT_VERIFIED",
     automationSupported: false,
-    manualSupported: true,
+    manualSupported: false,
   },
 ];
 
@@ -460,9 +458,9 @@ async function runAiSettingsPanelTests() {
   console.log("  -> [PASS TEST 5] Bấm Hủy và resetSignal khôi phục chính xác dữ liệu đã lưu, reset dirty state.");
 
   // =========================================================================
-  // TEST 6: Provider NOT_VERIFIED hiển thị đúng nhãn chế độ thủ công (Manual Mode)
+  // TEST 6: Provider NOT_VERIFIED hiển thị đúng nhãn automation chưa sẵn sàng
   // =========================================================================
-  console.log("\n--- [TEST 6] Provider NOT_VERIFIED hiển thị đúng nhãn chế độ thủ công (Manual Mode) ---");
+  console.log("\n--- [TEST 6] Provider NOT_VERIFIED hiển thị đúng nhãn automation chưa sẵn sàng ---");
 
   // Khi chọn Gemini Web (đã xác minh):
   await act(async () => {
@@ -482,8 +480,8 @@ async function runAiSettingsPanelTests() {
 
   const updatedBadges = Array.from(container.querySelectorAll('[data-testid="verification-badge"]'));
   const unverifiedBadge = updatedBadges[0];
-  if (!unverifiedBadge || !unverifiedBadge.textContent?.includes("Chưa xác minh — Chỉ hỗ trợ chế độ thủ công (Manual Mode)")) {
-    throw new Error(`FAIL: ChatGPT Web kỳ vọng 'Chưa xác minh — Chỉ hỗ trợ chế độ thủ công (Manual Mode)', nhận: '${unverifiedBadge?.textContent}'`);
+  if (!unverifiedBadge || !unverifiedBadge.textContent?.includes("Chưa xác minh — Tự động hóa chưa sẵn sàng")) {
+    throw new Error(`FAIL: ChatGPT Web kỳ vọng 'Chưa xác minh — Tự động hóa chưa sẵn sàng', nhận: '${unverifiedBadge?.textContent}'`);
   }
 
   // Kiểm tra liên kết điều hướng sang Cài đặt -> Tài khoản
@@ -503,7 +501,7 @@ async function runAiSettingsPanelTests() {
     throw new Error("FAIL: Bấm liên kết phải gọi onNavigateToAccounts");
   }
 
-  console.log("  -> [PASS TEST 6] NOT_VERIFIED hiển thị đúng 'Manual Mode', VERIFIED hiển thị tự động hóa, liên kết tài khoản hoạt động.");
+  console.log("  -> [PASS TEST 6] NOT_VERIFIED hiển thị đúng 'Tự động hóa chưa sẵn sàng', VERIFIED hiển thị tự động hóa, liên kết tài khoản hoạt động.");
 
   console.log("\n=================================================================");
   console.log(">>> TOÀN BỘ 6 BỘ KIỂM THỬ AI PROVIDER SETTINGS ĐÃ VƯỢT QUA (PASS 100%) <<<");

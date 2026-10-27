@@ -71,9 +71,11 @@ export const accountSettingsApi = {
   },
 
   async probeSession(id: string): Promise<ProbeSessionResponseData> {
+    // Probe mở trình duyệt ẩn và đợi trang Provider tải xong, nên lâu hơn timeout mặc định 15s của Bridge
     const res = await bridgeClient.invoke<ProbeSessionResponseData>(
       "provider_account.probe_session",
-      { id }
+      { id },
+      { timeoutMs: 60000 }
     );
     return res;
   },
@@ -86,9 +88,9 @@ export const accountSettingsApi = {
     return res.account;
   },
 
-  async archiveAccount(id: string): Promise<void> {
+  async deleteAccount(id: string): Promise<void> {
     await bridgeClient.invoke(
-      "provider_account.archive",
+      "provider_account.delete",
       { id }
     );
   },

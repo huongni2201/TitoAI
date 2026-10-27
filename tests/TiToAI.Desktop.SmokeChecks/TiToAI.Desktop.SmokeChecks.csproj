@@ -12,6 +12,7 @@
     <ProjectReference Include="..\..\src\TiToAI.Desktop\TiToAI.Desktop.csproj" />
     <ProjectReference Include="..\..\src\TiToAI.Application\TiToAI.Application.csproj" />
     <ProjectReference Include="..\..\src\TiToAI.Browser\TiToAI.Browser.csproj" />
+    <ProjectReference Include="..\..\src\TiToAI.Infrastructure\TiToAI.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>

@@ -1,5 +1,7 @@
 # TiToAI — Quyết định Kiến trúc & Hợp đồng Tạo nội dung qua AI Web (AC0)
 
+> **Delta sản phẩm 2026-10-27:** [VIDEO_FIRST_ARCHITECTURE_PLAN.md](../plans/VIDEO_FIRST_ARCHITECTURE_PLAN.md) bỏ Workspace scope và định nghĩa Project là một video đích. Nội dung/caption TikTok vẫn thuộc video Project đó; publish là attempt riêng cần user xác nhận và capability đã xác minh.
+
 Ngày 2026-10-27 (UTC+07).  
 Trạng thái: **CHỐT CONTRACT (AC0 HOÀN TẤT) & HƯỚNG DẪN AI TỰ NHIÊN (AC1 HOÀN TẤT)**.  
 Nguồn tham chiếu: [SOURCE](../plans/SOURCE_PLAN.md) §7.4,9; [AI Web Plan](../plans/AI_WEB_CONTENT_CREATION_PLAN.md); [Bộ Prompts](../plans/AI_WEB_CONTENT_CREATION_PROMPTS.md); [ORCHESTRATION](../agents/ORCHESTRATION.md); [ENGINEERING_RULES](../agents/ENGINEERING_RULES.md).

@@ -145,7 +145,7 @@ public static class JobRetryAndCancelPolicy
         }
 
         // TUYỆT ĐỐI CẤM retry tự động các lỗi cần người dùng can thiệp
-        if (IsUserInterventionRequired(reasonCode))
+        if (IsUserInterventionRequired(reasonCode) || IsAutomationUnavailable(reasonCode))
         {
             return false;
         }
@@ -164,7 +164,7 @@ public static class JobRetryAndCancelPolicy
     /// Kiểm tra xem lý do lỗi có bắt buộc người dùng can thiệp hay không.
     /// Bao gồm: auth/session (login_required, session_expired, auth_closed),
     /// sai tài khoản (wrong_account), thiếu thư mục lưu trữ (storage_root_unavailable),
-    /// hoặc adapter chưa sẵn sàng (adapter_not_available).
+    /// Adapter/capability chưa sẵn sàng được phân loại riêng để không chuyển giao thủ công.
     /// </summary>
     public static bool IsUserInterventionRequired(string? reasonCode)
     {
@@ -177,9 +177,16 @@ public static class JobRetryAndCancelPolicy
             || string.Equals(reasonCode, JobReasonCode.SessionExpired, StringComparison.OrdinalIgnoreCase)
             || string.Equals(reasonCode, JobReasonCode.AuthClosed, StringComparison.OrdinalIgnoreCase)
             || string.Equals(reasonCode, JobReasonCode.WrongAccount, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(reasonCode, JobReasonCode.StorageRootUnavailable, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(reasonCode, "adapter_not_available", StringComparison.OrdinalIgnoreCase);
+            || string.Equals(reasonCode, JobReasonCode.StorageRootUnavailable, StringComparison.OrdinalIgnoreCase);
     }
+
+    public static bool IsAutomationUnavailable(string? reasonCode) =>
+        string.Equals(reasonCode, "automation_blocked", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(reasonCode, "adapter_not_available", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(reasonCode, "missing_provider", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(reasonCode, "CAPABILITY_UNSUPPORTED", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(reasonCode, "manual_input_required", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(reasonCode, "MANUAL_HANDOFF_REQUIRED", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Đánh giá toàn diện kết quả thực thi thất bại, phân loại hành động và tính toán trạng thái đích.
@@ -201,7 +208,20 @@ public static class JobRetryAndCancelPolicy
             );
         }
 
-        // 2. Lỗi cần người dùng can thiệp (Auth, Session, Wrong Account, Storage Root, Adapter)
+        // Automation chưa sẵn sàng: dừng rõ lý do, không retry hoặc yêu cầu nhập kết quả thủ công.
+        if (IsAutomationUnavailable(reasonCode))
+        {
+            return new JobRetryDecision(
+                CanRetry: false,
+                TargetState: JobState.Failed,
+                FinalReasonCode: reasonCode!,
+                RetryDelay: null,
+                ShouldRollbackAttempts: false,
+                Classification: FailureClassification.PermanentFailure
+            );
+        }
+
+        // 2. Lỗi cần người dùng can thiệp (Auth, Session, Wrong Account, Storage Root)
         if (IsUserInterventionRequired(reasonCode))
         {
             return new JobRetryDecision(

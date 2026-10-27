@@ -173,6 +173,7 @@
       "titoai.application": {
         "type": "Project",
         "dependencies": {
+          "TiToAI.Browser": "[1.0.0, )",
           "TiToAI.Contracts": "[1.0.0, )",
           "TiToAI.Infrastructure": "[1.0.0, )"
         }

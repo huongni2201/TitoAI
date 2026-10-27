@@ -30,7 +30,6 @@ import {
   AlertDialogCancel,
 } from "@/components/ui/alert-dialog";
 import {
-  ArrowLeft,
   Plus,
   Search,
   RefreshCw,
@@ -46,8 +45,8 @@ import { cn } from "@/lib/utils";
 
 export interface ProjectListPageProps {
   workspaceId: string;
-  onSelectProject: (projectId: string) => void;
-  onBackToWorkspaces?: () => void;
+  onSelectProject: (projectId: string, workspaceId: string) => void;
+  onDefaultWorkspaceResolved?: (workspaceId: string) => void;
 }
 
 type StatusFilter = "all" | "Draft" | "InProgress" | "Completed";
@@ -55,7 +54,7 @@ type StatusFilter = "all" | "Draft" | "InProgress" | "Completed";
 export function ProjectListPage({
   workspaceId,
   onSelectProject,
-  onBackToWorkspaces,
+  onDefaultWorkspaceResolved,
 }: ProjectListPageProps) {
   const [projects, setProjects] = useState<ProjectSummaryDto[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -78,8 +77,6 @@ export function ProjectListPage({
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const fetchProjects = useCallback(async () => {
-    if (!workspaceId) return;
-
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
@@ -90,20 +87,23 @@ export function ProjectListPage({
     setErrorMessage(null);
 
     try {
-      const list = await projectApi.listByWorkspace(workspaceId);
+      const list = await projectApi.listAll();
       if (controller.signal.aborted) return;
       setProjects(list);
+      if (!workspaceId && list.length > 0) {
+        onDefaultWorkspaceResolved?.(list[0].workspaceId);
+      }
     } catch (err: unknown) {
       if (controller.signal.aborted) return;
       const errorDto = err as ErrorDto;
       console.error("[ProjectListPage] Lỗi tải dự án:", errorDto);
-      setErrorMessage(errorDto?.message || "Không thể tải danh sách dự án của kênh.");
+      setErrorMessage(errorDto?.message || "Không thể tải danh sách dự án.");
     } finally {
       if (!controller.signal.aborted) {
         setIsLoading(false);
       }
     }
-  }, [workspaceId]);
+  }, [onDefaultWorkspaceResolved, workspaceId]);
 
   useEffect(() => {
     fetchProjects();
@@ -135,7 +135,7 @@ export function ProjectListPage({
     setDeleteError(null);
 
     try {
-      await projectApi.deleteProject(workspaceId, deletingProject.projectId);
+      await projectApi.deleteProject(deletingProject.workspaceId, deletingProject.projectId);
       setProjects((prev) => prev.filter((p) => p.projectId !== deletingProject.projectId));
       setDeletingProject(null);
     } catch (err: unknown) {
@@ -156,23 +156,12 @@ export function ProjectListPage({
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex items-start sm:items-center gap-3">
-          {onBackToWorkspaces && (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={onBackToWorkspaces}
-              className="gap-1.5"
-            >
-              <ArrowLeft className="h-4 w-4" /> Danh sách kênh
-            </Button>
-          )}
           <div>
             <h2 className="text-2xl font-bold tracking-tight text-foreground">
-              Dự Án Video
+              Dự án video
             </h2>
             <p className="text-sm text-muted-foreground mt-0.5">
-              Quản lý kịch bản phân cảnh, prompt chuyển động và video hoàn chỉnh cho kênh.
+              Mỗi dự án tập trung vào một video TikTok từ ý tưởng đến đăng bài.
             </p>
           </div>
         </div>
@@ -186,7 +175,7 @@ export function ProjectListPage({
           }}
           className="gap-1.5 self-start sm:self-auto"
         >
-          <Plus className="h-4 w-4" /> Tạo Dự Án Mới
+          <Plus className="h-4 w-4" /> Tạo video
         </Button>
       </div>
 
@@ -301,9 +290,9 @@ export function ProjectListPage({
           <div className="rounded-full bg-primary/10 p-4 mb-4 text-primary">
             <Film className="h-10 w-10" />
           </div>
-          <h3 className="text-lg font-semibold text-foreground mb-1">Chưa có dự án nào trong kênh này</h3>
+          <h3 className="text-lg font-semibold text-foreground mb-1">Chưa có dự án video nào</h3>
           <p className="text-sm text-muted-foreground max-w-md mb-4">
-            Hãy tạo dự án video đầu tiên để bắt đầu xây dựng kịch bản phân cảnh và tự động sinh prompt.
+            Tạo dự án đầu tiên để chuẩn bị đầu vào và tạo video TikTok.
           </p>
           <Button
             onClick={() => {
@@ -312,7 +301,7 @@ export function ProjectListPage({
               setIsFormOpen(true);
             }}
           >
-            <Plus className="mr-2 h-4 w-4" /> Tạo Dự Án Mới
+            <Plus className="mr-2 h-4 w-4" /> Tạo video
           </Button>
         </Card>
       ) : filteredProjects.length === 0 ? (
@@ -386,7 +375,11 @@ export function ProjectListPage({
                   <div className="flex items-center justify-between text-xs">
                     <Badge variant="secondary" className="gap-1 font-medium">
                       <Film className="h-3 w-3 text-muted-foreground" />
-                      {prj.sceneCount} cảnh
+                      {prj.sceneCount > 1
+                        ? `${prj.sceneCount} cảnh cũ`
+                        : prj.hasVideo
+                          ? "Video sẵn sàng"
+                          : "Chưa có video"}
                     </Badge>
                     <Badge
                       variant={
@@ -410,7 +403,7 @@ export function ProjectListPage({
                   <Button
                     type="button"
                     size="sm"
-                    onClick={() => onSelectProject(prj.projectId)}
+                    onClick={() => onSelectProject(prj.projectId, prj.workspaceId)}
                   >
                     Mở dự án →
                   </Button>

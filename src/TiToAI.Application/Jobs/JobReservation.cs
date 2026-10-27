@@ -32,7 +32,8 @@ public sealed record JobReservationResult(
 public sealed record JobCommitSuccessResult(
     string State,
     string? ReasonCode,
-    bool WasCancelRequested
+    bool WasCancelRequested,
+    long Revision = 1
 );
 
 /// <summary>
@@ -117,7 +118,15 @@ public sealed class JobReservation
                     .AsNoTracking()
                     .FirstOrDefaultAsync(s => s.Key == wfConfigKey, cancellationToken).ConfigureAwait(false);
 
-                if (wfSetting != null && wfSetting.Value.Contains("\"runState\":\"Paused\"", StringComparison.OrdinalIgnoreCase))
+                var workflowRunId = GetWorkflowRunId(job.ConfigSnapshotJson);
+                if (workflowRunId != null &&
+                    (wfSetting == null || !IsWorkflowRunDispatchable(wfSetting.Value, workflowRunId)))
+                {
+                    await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
+                    return JobReservationResult.Failure("Workflow run đã bị dừng hoặc thay thế; job cũ không được dispatch.");
+                }
+                if (workflowRunId == null && wfSetting != null &&
+                    wfSetting.Value.Contains("\"runState\":\"Paused\"", StringComparison.OrdinalIgnoreCase))
                 {
                     await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
                     return JobReservationResult.Failure("Workflow run của dự án đang ở trạng thái Paused.");
@@ -344,6 +353,7 @@ public sealed class JobReservation
 
                     // v1.1 §3.1: Giữ nguyên binding đã cấp cho các lần retry/reconcile, không đổi account ngầm
                     job.State = JobState.Reserved;
+                    job.Revision += 1;
                     job.Attempts += 1;
                     job.LeaseOwnerId = workerId;
                     job.FencingToken += 1;
@@ -496,6 +506,7 @@ public sealed class JobReservation
 
                 // 5. Cập nhật Job sang trạng thái Reserved
                 job.State = JobState.Reserved;
+                job.Revision += 1;
                 job.Attempts += 1;
                 job.LeaseOwnerId = workerId;
                 job.FencingToken += 1;
@@ -522,6 +533,46 @@ public sealed class JobReservation
 
                 return JobReservationResult.Failure($"Lỗi giao dịch reservation: {ex.Message}");
             }
+        }
+    }
+
+    private static string? GetWorkflowRunId(string? configSnapshotJson)
+    {
+        if (string.IsNullOrWhiteSpace(configSnapshotJson)) return null;
+        try
+        {
+            using var document = JsonDocument.Parse(configSnapshotJson);
+            if (!document.RootElement.TryGetProperty("WorkflowRunId", out var runId) &&
+                !document.RootElement.TryGetProperty("workflowRunId", out runId))
+            {
+                return null;
+            }
+            return runId.ValueKind == JsonValueKind.String ? runId.GetString() : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static bool IsWorkflowRunDispatchable(string configJson, string jobRunId)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(configJson);
+            var root = document.RootElement;
+            var runId = root.TryGetProperty("CurrentRunId", out var currentRunId) || root.TryGetProperty("currentRunId", out currentRunId)
+                ? currentRunId.GetString()
+                : null;
+            var runState = root.TryGetProperty("RunState", out var state) || root.TryGetProperty("runState", out state)
+                ? state.GetString()
+                : null;
+            return string.Equals(runId, jobRunId, StringComparison.Ordinal) &&
+                   string.Equals(runState, "Running", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (JsonException)
+        {
+            return false;
         }
     }
 
@@ -576,7 +627,8 @@ public sealed class JobReservation
 
         const string updateSql = @"
             UPDATE Job
-            SET state = 'Running',
+            SET revision = revision + 1,
+                state = 'Running',
                 updated_at_utc = @now
             WHERE id = @jobId
               AND fencing_token = @token
@@ -616,7 +668,8 @@ public sealed class JobReservation
 
         const string updateSql = @"
             UPDATE Job
-            SET lease_expires_at_utc = @newLeaseExpires,
+            SET revision = revision + 1,
+                lease_expires_at_utc = @newLeaseExpires,
                 last_heartbeat_at_utc = @now,
                 updated_at_utc = @now
             WHERE id = @jobId
@@ -657,7 +710,8 @@ public sealed class JobReservation
 
         const string updateSql = @"
             UPDATE Job
-            SET side_effect_submitted = 1,
+            SET revision = revision + 1,
+                side_effect_submitted = 1,
                 side_effect_at_utc = @now,
                 updated_at_utc = @now
             WHERE id = @jobId
@@ -706,7 +760,8 @@ public sealed class JobReservation
 
         const string updateSql = @"
             UPDATE Job
-            SET state = CASE WHEN cancel_requested = 1 THEN 'Canceled' ELSE 'Succeeded' END,
+            SET revision = revision + 1,
+                state = CASE WHEN cancel_requested = 1 THEN 'Canceled' ELSE 'Succeeded' END,
                 reason_code = CASE WHEN cancel_requested = 1 THEN 'user_canceled' ELSE NULL END,
                 result_reference = @resultRef,
                 result_text = @resultText,
@@ -767,7 +822,7 @@ public sealed class JobReservation
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
 
-        return new JobCommitSuccessResult(targetState, reasonCode, wasCancelRequested);
+        return new JobCommitSuccessResult(targetState, reasonCode, wasCancelRequested, committedJob?.Revision ?? 1);
     }
 
     /// <summary>
@@ -793,7 +848,8 @@ public sealed class JobReservation
 
             const string retrySql = @"
                 UPDATE Job
-                SET state = 'Queued',
+                SET revision = revision + 1,
+                    state = 'Queued',
                     reason_code = @reason,
                     lease_expires_at_utc = NULL,
                     retry_after_utc = @retryAfter,
@@ -823,7 +879,8 @@ public sealed class JobReservation
         {
             const string failSql = @"
                 UPDATE Job
-                SET state = 'Failed',
+                SET revision = revision + 1,
+                    state = 'Failed',
                     reason_code = @reason,
                     lease_expires_at_utc = NULL,
                     updated_at_utc = @now
@@ -872,7 +929,8 @@ public sealed class JobReservation
 
         const string updateSql = @"
             UPDATE Job
-            SET state = 'Queued',
+            SET revision = revision + 1,
+                state = 'Queued',
                 attempts = MAX(0, attempts - 1),
                 lease_owner_id = NULL,
                 lease_expires_at_utc = NULL,

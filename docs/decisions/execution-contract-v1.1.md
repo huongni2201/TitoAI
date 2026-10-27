@@ -1,5 +1,7 @@
 # TiToAI — contract bổ sung browser, pool tài khoản, job và pipeline v1.1
 
+> **Delta sản phẩm 2026-10-27:** [Kiến trúc video-first, không Workspace](../plans/VIDEO_FIRST_ARCHITECTURE_PLAN.md) supersede mọi Workspace scope/ownership trong contract này. Durable queue, account slot reservation, snapshot, fencing, recovery và provider identity isolation vẫn là nền tảng ở cấp app. Chốt DTO/schema migration mới tại VF0 trước triển khai.
+
 > **Đã chốt 2026-10-27:** [Luồng sản xuất từ ảnh](../plans/PRODUCT_IMAGE_VIDEO_WORKFLOW_PLAN.md) tự chạy sau một lần Bắt đầu: lập nhiều cảnh theo prompt → ảnh → prompt chuyển động → video, không bắt duyệt trung gian. Audio tùy chọn; mẫu và sản phẩm dùng lại trong thư viện Workspace. Trong mode này, tự áp output hợp lệ bằng revision guard; yêu cầu audio bắt buộc/duyệt từng bước bên dưới là baseline cũ đã được thay trong phạm vi này. Contract/version/validator/adapter còn phải triển khai đồng bộ; chưa là evidence code hỗ trợ. Lỗi, capability không tương thích, login, xung đột hoặc uncertainty vẫn dừng đúng policy.
 
 

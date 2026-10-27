@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using TiToAI.Application.Workspaces;
 using TiToAI.Contracts.Bridge;
 using TiToAI.Contracts.Workspaces;
@@ -41,6 +41,8 @@ public sealed class WorkspaceHandlers
         dispatcher.AllowCommand("workspace.update");
         dispatcher.AllowCommand("workspace.delete");
         dispatcher.AllowCommand("workspace.set_status");
+        dispatcher.AllowCommand("workspace.pause");
+        dispatcher.AllowCommand("workspace.resume");
 
         dispatcher.RegisterHandler("workspace.list", HandleListAsync);
         dispatcher.RegisterHandler("workspace.get", HandleGetAsync);
@@ -48,6 +50,8 @@ public sealed class WorkspaceHandlers
         dispatcher.RegisterHandler("workspace.update", HandleUpdateAsync);
         dispatcher.RegisterHandler("workspace.delete", HandleDeleteAsync);
         dispatcher.RegisterHandler("workspace.set_status", HandleSetStatusAsync);
+        dispatcher.RegisterHandler("workspace.pause", HandlePauseAsync);
+        dispatcher.RegisterHandler("workspace.resume", HandleResumeAsync);
     }
 
     /// <summary>
@@ -63,6 +67,8 @@ public sealed class WorkspaceHandlers
         dispatcher.UnregisterHandler("workspace.update");
         dispatcher.UnregisterHandler("workspace.delete");
         dispatcher.UnregisterHandler("workspace.set_status");
+        dispatcher.UnregisterHandler("workspace.pause");
+        dispatcher.UnregisterHandler("workspace.resume");
     }
 
     public async Task<ResponseEnvelope> HandleListAsync(RequestEnvelope request, CancellationToken cancellationToken)
@@ -246,6 +252,118 @@ public sealed class WorkspaceHandlers
             }
 
             var result = await _workspaceService.DeleteAsync(payload.WorkspaceId, cancellationToken);
+            return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return MapExceptionToError(request.Id, ex);
+        }
+    }
+
+    public async Task<ResponseEnvelope> HandlePauseAsync(RequestEnvelope request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        try
+        {
+            var payload = ParsePayload<WorkspaceGetRequest>(request);
+            if (payload is null || string.IsNullOrWhiteSpace(payload.WorkspaceId))
+            {
+                return ResponseEnvelopeHelper.CreateError(
+                    request.Id,
+                    "INVALID_ARGUMENT",
+                    "Payload yêu cầu tạm dừng workspace thiếu 'workspaceId'.",
+                    retryable: false);
+            }
+
+            var result = await _workspaceService.SetStatusAsync(
+                new WorkspaceSetStatusRequest(payload.WorkspaceId, "Paused"),
+                cancellationToken);
+
+            if (_eventSink is not null)
+            {
+                var seq = Interlocked.Increment(ref _eventSequenceCounter);
+                var eventPayload = new WorkspaceStatusChangedPayload(
+                    result.WorkspaceId,
+                    result.Status,
+                    result.UpdatedAtUtc);
+
+                var eventEnvelope = ResponseEnvelopeHelper.CreateEvent(
+                    "workspace.status_changed",
+                    result.WorkspaceId,
+                    seq,
+                    eventPayload);
+
+                try
+                {
+                    await _eventSink(eventEnvelope);
+                }
+                catch (Exception sinkEx)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[WorkspaceHandlers] Lỗi gửi event workspace.status_changed: {sinkEx.Message}");
+                }
+            }
+
+            return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return MapExceptionToError(request.Id, ex);
+        }
+    }
+
+    public async Task<ResponseEnvelope> HandleResumeAsync(RequestEnvelope request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        try
+        {
+            var payload = ParsePayload<WorkspaceGetRequest>(request);
+            if (payload is null || string.IsNullOrWhiteSpace(payload.WorkspaceId))
+            {
+                return ResponseEnvelopeHelper.CreateError(
+                    request.Id,
+                    "INVALID_ARGUMENT",
+                    "Payload yêu cầu tiếp tục workspace thiếu 'workspaceId'.",
+                    retryable: false);
+            }
+
+            var result = await _workspaceService.SetStatusAsync(
+                new WorkspaceSetStatusRequest(payload.WorkspaceId, "Active"),
+                cancellationToken);
+
+            if (_eventSink is not null)
+            {
+                var seq = Interlocked.Increment(ref _eventSequenceCounter);
+                var eventPayload = new WorkspaceStatusChangedPayload(
+                    result.WorkspaceId,
+                    result.Status,
+                    result.UpdatedAtUtc);
+
+                var eventEnvelope = ResponseEnvelopeHelper.CreateEvent(
+                    "workspace.status_changed",
+                    result.WorkspaceId,
+                    seq,
+                    eventPayload);
+
+                try
+                {
+                    await _eventSink(eventEnvelope);
+                }
+                catch (Exception sinkEx)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[WorkspaceHandlers] Lỗi gửi event workspace.status_changed: {sinkEx.Message}");
+                }
+            }
+
             return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
         }
         catch (OperationCanceledException)

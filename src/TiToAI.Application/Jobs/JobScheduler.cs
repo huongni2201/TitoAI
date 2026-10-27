@@ -231,7 +231,7 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
                 var assignedProfileId = reserveResult.Binding?.ProfileId ?? "default_profile";
                 var assignedAccountId = reserveResult.Binding?.ProviderAccountId;
 
-                NotifyStateChanged(reserveResult.Job.Id, reserveResult.Job.WorkspaceId, reserveResult.Job.ProjectId, JobState.Queued, JobState.Reserved, null, null);
+                NotifyStateChanged(reserveResult.Job.Id, reserveResult.Job.WorkspaceId, reserveResult.Job.ProjectId, JobState.Queued, JobState.Reserved, null, null, reserveResult.Job.Revision);
 
                 var workerJob = reserveResult.Job;
                 var workerTask = Task.Run(async () =>
@@ -291,7 +291,8 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
                 // Thất bại chiếm lease (do role tab đang bận):
                 // Tuyệt đối KHÔNG thực thi executor! Hoàn trả job về Queued an toàn (không tăng attempts).
                 await _reservation.ReleaseReservationDueToNoCapacityAsync(jobId, fencingToken, CancellationToken.None).ConfigureAwait(false);
-                NotifyStateChanged(jobId, reservedJob.WorkspaceId, reservedJob.ProjectId, JobState.Reserved, JobState.Queued, "tab_capacity_unavailable", null);
+                reservedJob.Revision += 1;
+                NotifyStateChanged(jobId, reservedJob.WorkspaceId, reservedJob.ProjectId, JobState.Reserved, JobState.Queued, "tab_capacity_unavailable", null, reservedJob.Revision);
                 return;
             }
 
@@ -300,7 +301,8 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
 
             // 2. Đã chiếm được lease -> Chuyển trạng thái từ Reserved sang Running
             await _reservation.TransitionToRunningAsync(jobId, fencingToken, workerCts.Token).ConfigureAwait(false);
-            NotifyStateChanged(jobId, reservedJob.WorkspaceId, reservedJob.ProjectId, JobState.Reserved, JobState.Running, null, null);
+            reservedJob.Revision += 1;
+            NotifyStateChanged(jobId, reservedJob.WorkspaceId, reservedJob.ProjectId, JobState.Reserved, JobState.Running, null, null, reservedJob.Revision);
 
             // 3. Khởi tạo Heartbeat Timer gia hạn lease định kỳ mỗi HeartbeatInterval
             heartbeatTimer = new Timer(async _ =>
@@ -363,7 +365,8 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
                         SceneId: reservedJob.SceneId,
                         State: JobState.Running,
                         ProgressPercent: percent,
-                        CurrentStep: step
+                        CurrentStep: step,
+                        JobRevision: reservedJob.Revision
                     ));
                     return Task.CompletedTask;
                 },
@@ -386,7 +389,7 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
                     result.ResultText,
                     workerCts.Token).ConfigureAwait(false);
 
-                NotifyStateChanged(jobId, reservedJob.WorkspaceId, reservedJob.ProjectId, JobState.Running, commitResult.State, commitResult.ReasonCode, result.ResultReference);
+                NotifyStateChanged(jobId, reservedJob.WorkspaceId, reservedJob.ProjectId, JobState.Running, commitResult.State, commitResult.ReasonCode, result.ResultReference, commitResult.Revision);
             }
             else
             {
@@ -399,7 +402,8 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
                     var nowIso = UtcNow.ToString("o");
                     await dbContext.Database.ExecuteSqlRawAsync(
                         @"UPDATE Job
-                          SET result_text = COALESCE(@resText, result_text),
+                          SET revision = revision + 1,
+                              result_text = COALESCE(@resText, result_text),
                               result_reference = COALESCE(@resRef, result_reference),
                               side_effect_submitted = 1,
                               updated_at_utc = @now
@@ -462,7 +466,8 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
 
                 await dbContext.Database.ExecuteSqlRawAsync(
                     @"UPDATE Job
-                      SET state = 'AwaitingUser',
+                      SET revision = revision + 1,
+                          state = 'AwaitingUser',
                           reason_code = @reason,
                           lease_expires_at_utc = NULL,
                           updated_at_utc = @now
@@ -475,13 +480,15 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
                         new SqliteParameter("@token", fencingToken)
                     }).ConfigureAwait(false);
 
-                NotifyStateChanged(job.Id, job.WorkspaceId, job.ProjectId, JobState.Running, JobState.AwaitingUser, decision.FinalReasonCode, null);
+                job.Revision += 1;
+                NotifyStateChanged(job.Id, job.WorkspaceId, job.ProjectId, JobState.Running, JobState.AwaitingUser, decision.FinalReasonCode, null, job.Revision);
             }
             else if (decision.ShouldRollbackAttempts)
             {
                 // Hạn ngạch tab/capacity: bảo toàn attempts
                 await _reservation.ReleaseReservationDueToNoCapacityAsync(job.Id, fencingToken, CancellationToken.None).ConfigureAwait(false);
-                NotifyStateChanged(job.Id, job.WorkspaceId, job.ProjectId, JobState.Running, JobState.Queued, decision.FinalReasonCode, null);
+                job.Revision += 1;
+                NotifyStateChanged(job.Id, job.WorkspaceId, job.ProjectId, JobState.Running, JobState.Queued, decision.FinalReasonCode, null, job.Revision);
             }
             else
             {
@@ -496,8 +503,9 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
                     retryDelay,
                     CancellationToken.None).ConfigureAwait(false);
 
+                job.Revision += 1;
                 var newState = canRetry ? JobState.Queued : JobState.Failed;
-                NotifyStateChanged(job.Id, job.WorkspaceId, job.ProjectId, JobState.Running, newState, decision.FinalReasonCode, null);
+                NotifyStateChanged(job.Id, job.WorkspaceId, job.ProjectId, JobState.Running, newState, decision.FinalReasonCode, null, job.Revision);
             }
         }
         catch (FencingTokenStaleException)
@@ -511,7 +519,7 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
         }
     }
 
-    private void NotifyStateChanged(string jobId, string workspaceId, string? projectId, string prevState, string newState, string? reasonCode, string? resultRef)
+    private void NotifyStateChanged(string jobId, string workspaceId, string? projectId, string prevState, string newState, string? reasonCode, string? resultRef, long jobRevision = 0)
     {
         OnJobStateChanged?.Invoke(new JobStateChangedPayload(
             JobId: jobId,
@@ -521,7 +529,8 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
             NewState: newState,
             ReasonCode: reasonCode,
             ResultReference: resultRef,
-            TimestampUtc: UtcNow.ToString("o")
+            TimestampUtc: UtcNow.ToString("o"),
+            JobRevision: jobRevision
         ));
     }
 

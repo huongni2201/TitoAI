@@ -1,4 +1,4 @@
-export const bridgeContractVersion = "1.0.4" as const;
+export const bridgeContractVersion = "1.1.0" as const;
 export const bridgeOrigin = "https://appassets.local" as const;
 export const maxBridgeEnvelopeBytes = 4 * 1024 * 1024;
 
@@ -7,6 +7,7 @@ export const maxBridgeEnvelopeBytes = 4 * 1024 * 1024;
  */
 export const bridgeCommandAllowlist = [
   // Gate G1 — Foundation
+  // Legacy commands retained in the wire type for old data/helpers; desktop no longer registers Workspace handlers.
   "workspace.list",
   "settings.get",
   "settings.save",
@@ -15,12 +16,13 @@ export const bridgeCommandAllowlist = [
   "theme.get_preference",
   "theme.set_preference",
 
-  // Gate G2 — Workspaces & Accounts
+  // Gate G2 — Accounts
   "workspace.get",
   "workspace.create",
   "workspace.update",
   "workspace.pause",
   "workspace.resume",
+  "workspace.set_status",
   "workspace.delete",
   "account.list_by_workspace",
   "account.link",
@@ -32,11 +34,12 @@ export const bridgeCommandAllowlist = [
   "provider_account.update",
   "provider_account.probe_session",
   "provider_account.enable",
-  "provider_account.archive",
+  "provider_account.delete",
 
   // Gate G2 — Prompts
   "prompt.list_templates",
   "prompt.get_template",
+  "prompt.save_template",
   "prompt.list_versions",
   "prompt.create_version",
   "prompt.preview",
@@ -44,6 +47,7 @@ export const bridgeCommandAllowlist = [
   "prompt.delete_override",
 
   // Gate G2 — Projects & Scenes
+  "project.list",
   "project.list_by_workspace",
   "project.get",
   "project.create",
@@ -76,9 +80,11 @@ export const bridgeCommandAllowlist = [
   "job.enqueue",
   "job.get_status",
   "job.list_active",
+  "job.list_history",
   "job.cancel",
   "job.reconcile",
   "job.resume",
+  "job.retry",
   "job.get_handoff",
   "job.import_result",
 
@@ -107,6 +113,20 @@ export const bridgeCommandAllowlist = [
   "workflow.pause",
   "workflow.resume",
   "workflow.preview_ai_prompt",
+  "workflow.list_content_items",
+  "workflow.update_content_item",
+  "workflow.create_scene_video",
+
+  // Gate G3 / T25 — TikTok Analytics & Affiliate Dashboard
+  "analytics.get_summary",
+  "analytics.list_tiktok_accounts",
+  "analytics.get_timeseries",
+  "analytics.list_top_videos",
+  "analytics.import_data",
+  "analytics.export_data",
+  "analytics.check_tiktok_session",
+  "analytics.open_tiktok_login",
+  "analytics.sync_tiktok_channel",
 ] as const;
 
 export const g1CommandAllowlist = bridgeCommandAllowlist;

@@ -21,14 +21,10 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Progress } from "@/components/ui/progress";
 import {
   ArrowLeft,
-  Plus,
   Pencil,
   RefreshCw,
   Loader2,
   AlertCircle,
-  Clapperboard,
-  BarChart3,
-  FolderArchive,
   Sparkles,
 } from "lucide-react";
 
@@ -119,12 +115,6 @@ export function ProjectPage({ workspaceId, projectId, onBack }: ProjectPageProps
     };
   }, [scenes]);
 
-  const handleOpenCreateScene = () => {
-    setEditingScene(null);
-    setSceneFormMode("create");
-    setIsSceneFormOpen(true);
-  };
-
   const handleEditScene = (scene: SceneDto) => {
     setEditingScene(scene);
     setSceneFormMode("edit");
@@ -209,14 +199,6 @@ export function ProjectPage({ workspaceId, projectId, onBack }: ProjectPageProps
             >
               <Pencil className="h-3.5 w-3.5" /> Sửa dự án
             </Button>
-            <Button
-              type="button"
-              size="sm"
-              onClick={handleOpenCreateScene}
-              className="gap-1.5"
-            >
-              <Plus className="h-4 w-4" /> Thêm Cảnh
-            </Button>
           </div>
         </div>
       </Card>
@@ -227,22 +209,10 @@ export function ProjectPage({ workspaceId, projectId, onBack }: ProjectPageProps
         onValueChange={(val) => setActiveTab(val as ProjectTab)}
         className="w-full"
       >
-        <TabsList className="grid w-full grid-cols-4 sm:w-auto sm:inline-flex h-10">
+        <TabsList className="grid w-full grid-cols-1 sm:w-auto sm:inline-flex h-10">
           <TabsTrigger value="production" className="gap-2">
             <Sparkles className="h-4 w-4 text-primary" />
             <span>Sản xuất video</span>
-          </TabsTrigger>
-          <TabsTrigger value="scenes" className="gap-2">
-            <Clapperboard className="h-4 w-4" />
-            <span>Bảng phân cảnh ({scenes.length})</span>
-          </TabsTrigger>
-          <TabsTrigger value="overview" className="gap-2">
-            <BarChart3 className="h-4 w-4" />
-            <span>Tổng quan tiến độ</span>
-          </TabsTrigger>
-          <TabsTrigger value="assets" className="gap-2">
-            <FolderArchive className="h-4 w-4" />
-            <span>Tài nguyên phân cảnh</span>
           </TabsTrigger>
         </TabsList>
 

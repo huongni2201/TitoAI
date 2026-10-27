@@ -1,5 +1,9 @@
 # TiToAI — bổ sung plan Cài đặt
 
+> **Kiến trúc sản phẩm mới 2026-10-27:** [VIDEO_FIRST_ARCHITECTURE_PLAN.md](VIDEO_FIRST_ARCHITECTURE_PLAN.md) bỏ Workspace làm scope lưu trữ và ownership. Settings tiếp tục quản lý provider accounts/storage toàn app; TikTok identities là tài khoản đăng cấp app, không gắn với Workspace.
+>
+> **Yêu cầu mới nhất 2026-10-27:** [Luồng tạo video chỉ chạy tự động](AUTOMATIC_VIDEO_WORKFLOW_PLAN.md). Trong phạm vi này, Settings không cung cấp Manual Mode; capability chưa xác minh/không hỗ trợ thì báo automation chưa sẵn sàng, không hướng dẫn nhập kết quả handoff. Quản lý tài khoản và đăng nhập vẫn giữ nguyên.
+
 **Phiên bản:** 1.2 — cập nhật ngày 2026-10-26.  
 **Mức ưu tiên:** P0 trong MVP.  
 **Trạng thái:** spec hiện hành; thay đổi mới chưa nghiệm thu. [Plan queue/Settings 1.2](QUEUE_EXECUTION_SETTINGS_PLAN.md) chốt luồng thực thi, tab ngang và ownership; [STATUS](../agents/STATUS.md) giữ checkpoint.

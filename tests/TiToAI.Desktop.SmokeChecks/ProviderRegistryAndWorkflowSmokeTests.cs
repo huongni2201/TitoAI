@@ -127,7 +127,7 @@ public static class ProviderRegistryAndWorkflowSmokeTests
 
         try
         {
-            await RunTestAsync("Test 8: Triển khai Adapters T20a, T20b, T21 & Ranh giới Manual Handoff an toàn (Mốc 3)", Test_8_ProviderAdaptersExecutionAndManualHandoffBoundary);
+            await RunTestAsync("Test 8: Triển khai Adapters T20a, T20b, T21 & Ranh giới automation chưa sẵn sàng (Mốc 3)", Test_8_ProviderAdaptersExecutionAndAutomationBoundary);
             passed++;
         }
         catch (Exception ex)
@@ -238,8 +238,8 @@ public static class ProviderRegistryAndWorkflowSmokeTests
                 $"chatgpt-web {task} phải có VerificationStatus là NOT_VERIFIED.");
             Assert(cap.AutomationSupported == false,
                 $"chatgpt-web {task} phải có AutomationSupported = false khi chưa xác minh.");
-            Assert(cap.ManualSupported == true,
-                $"chatgpt-web {task} phải có ManualSupported = true để hỗ trợ làm thủ công.");
+            Assert(cap.ManualSupported == false,
+                $"chatgpt-web {task} phải có ManualSupported = false vì chỉ chạy tự động.");
 
             // Automation check
             Assert(!registry.IsAutomationSupported(ProviderKeys.ChatGPTWeb, task),
@@ -256,8 +256,8 @@ public static class ProviderRegistryAndWorkflowSmokeTests
                 $"gemini-web {task} phải có VerificationStatus là NOT_VERIFIED.");
             Assert(cap.AutomationSupported == false,
                 $"gemini-web {task} phải có AutomationSupported = false.");
-            Assert(cap.ManualSupported == true,
-                $"gemini-web {task} phải có ManualSupported = true.");
+            Assert(cap.ManualSupported == false,
+                $"gemini-web {task} phải có ManualSupported = false.");
 
             Assert(!registry.IsAutomationSupported(ProviderKeys.GeminiWeb, task),
                 $"IsAutomationSupported phải trả về false cho gemini-web {task}.");
@@ -293,7 +293,7 @@ public static class ProviderRegistryAndWorkflowSmokeTests
                     JobTaskType.Script,
                     ProviderVerificationStatus.NotVerified,
                     AutomationSupported: true, // Cố tình bật cờ automation
-                    ManualSupported: true,
+                    ManualSupported: false,
                     RequiresReferenceImage: false,
                     MaxInputLength: 4000,
                     EvidenceId: null,
@@ -315,7 +315,7 @@ public static class ProviderRegistryAndWorkflowSmokeTests
                     JobTaskType.Script,
                     ProviderVerificationStatus.Verified,
                     AutomationSupported: true,
-                    ManualSupported: true,
+                    ManualSupported: false,
                     RequiresReferenceImage: false,
                     MaxInputLength: 4000,
                     EvidenceId: "EV-001",
@@ -681,7 +681,7 @@ public static class ProviderRegistryAndWorkflowSmokeTests
         Assert(chatgptImageCap!.SupportsDualReferenceImages, "ChatGPT Web Image phải có cờ SupportsDualReferenceImages = true.");
         Assert(chatgptImageCap.VerificationStatus == ProviderVerificationStatus.NotVerified, "ChatGPT Web Image phải ở trạng thái NOT_VERIFIED khi chưa qua live verification.");
         Assert(!chatgptImageCap.AutomationSupported, "ChatGPT Web Image AutomationSupported phải là false khi chưa verify.");
-        Assert(chatgptImageCap.ManualSupported, "ChatGPT Web Image phải hỗ trợ Manual Handoff.");
+        Assert(!chatgptImageCap.ManualSupported, "ChatGPT Web Image không cung cấp Manual Handoff.");
 
         var chatgptPromptCap = registry.GetCapability(ProviderKeys.ChatGPTWeb, JobTaskType.VideoPrompt);
         Assert(chatgptPromptCap != null, "ChatGPT Web phải có capability cho VideoPrompt.");
@@ -720,9 +720,9 @@ public static class ProviderRegistryAndWorkflowSmokeTests
     }
 
     /// <summary>
-    /// Test 8: Triển khai Adapters T20a, T20b, T21 & Ranh giới Manual Handoff an toàn (Mốc 3)
+    /// Test 8: Triển khai Adapters T20a, T20b, T21 & Ranh giới automation chưa sẵn sàng (Mốc 3)
     /// </summary>
-    public static async Task Test_8_ProviderAdaptersExecutionAndManualHandoffBoundary()
+    public static async Task Test_8_ProviderAdaptersExecutionAndAutomationBoundary()
     {
         var chatgptAdapter = new ChatGptWebAdapter();
         var geminiAdapter = new GeminiWebAdapter();
@@ -758,9 +758,13 @@ public static class ProviderRegistryAndWorkflowSmokeTests
         // 1. Thử execute với ChatGPT khi chưa verify: Phải từ chối automation ngầm, không đoán selector
         var resultChatgpt = await chatgptAdapter.ExecuteAsync(contextImage, CommitSideEffectHook, null);
         Assert(!resultChatgpt.Success, "Execute ChatGPT chưa verify phải trả Success = false.");
-        Assert(resultChatgpt.ReasonCode == "MANUAL_HANDOFF_REQUIRED", "ReasonCode phải là MANUAL_HANDOFF_REQUIRED.");
+        Assert(resultChatgpt.ReasonCode == "automation_blocked", "ReasonCode phải là automation_blocked.");
         Assert(!resultChatgpt.SideEffectSubmitted, "SideEffectSubmitted phải là false để bảo toàn database.");
         Assert(!sideEffectCommitted, "Hook commit side effect không được gọi khi chưa submit.");
+
+        var resultGemini = await geminiAdapter.ExecuteAsync(contextImage with { ProviderKey = ProviderKeys.GeminiWeb }, CommitSideEffectHook, null);
+        Assert(!resultGemini.Success && resultGemini.ReasonCode == "automation_blocked" && !sideEffectCommitted,
+            "Gemini chưa sẵn sàng phải chặn automation trước submit, không yêu cầu handoff.");
 
         // 2. Thử execute với MuseAI cho VideoRender khi chưa verify: Phải từ chối automation ngầm
         var contextVideo = new JobExecutionContext(
@@ -781,7 +785,7 @@ public static class ProviderRegistryAndWorkflowSmokeTests
 
         var resultMuse = await museAdapter.ExecuteAsync(contextVideo, CommitSideEffectHook, null);
         Assert(!resultMuse.Success, "Execute MuseAI chưa verify phải trả Success = false.");
-        Assert(resultMuse.ReasonCode == "MANUAL_HANDOFF_REQUIRED", "ReasonCode phải là MANUAL_HANDOFF_REQUIRED.");
+        Assert(resultMuse.ReasonCode == "automation_blocked", "ReasonCode phải là automation_blocked.");
         Assert(!resultMuse.SideEffectSubmitted, "SideEffectSubmitted phải là false.");
 
         // 3. MuseAI cho Script: Unsupported
@@ -812,6 +816,18 @@ public static class ProviderRegistryAndWorkflowSmokeTests
         Assert(fakeResult.SideEffectSubmitted, "Fake adapter phải đánh dấu SideEffectSubmitted = true.");
         Assert(fakeCommitCalled, "Fake adapter phải gọi onPreSideEffectCommitAsync theo đúng chuẩn T16.");
         Assert(fakeResult.ResultReference != null && fakeResult.ResultReference.Contains("generated-image"), "Fake adapter phải trả ResultReference ảnh hợp lệ.");
+
+        var registry = new ProviderRegistry();
+        registry.RegisterAdapter(fakeAdapter);
+        var executor = new ProductionJobExecutor(registry);
+        fakeCommitCalled = false;
+        var routed = await executor.ExecuteAsync(contextImage, () => { fakeCommitCalled = true; return Task.CompletedTask; }, null, CancellationToken.None);
+        Assert(routed.Success && fakeCommitCalled, "Capability đã xác minh phải tiếp tục chạy qua executor tự động.");
+
+        registry.RegisterAdapter(museAdapter);
+        var unsupported = await executor.ExecuteAsync(contextUnsupported, CommitSideEffectHook, null, CancellationToken.None);
+        Assert(!unsupported.Success && unsupported.ReasonCode == "CAPABILITY_UNSUPPORTED",
+            "Executor phải từ chối capability không hỗ trợ trước khi gọi adapter.");
     }
 
     private static void AssertThrows<TException>(Action action, string message) where TException : Exception
@@ -893,7 +909,7 @@ public static class ProviderRegistryAndWorkflowSmokeTests
                     JobTaskType.Script,
                     ProviderVerificationStatus.NotVerified,
                     AutomationSupported: false,
-                    ManualSupported: true,
+                    ManualSupported: false,
                     RequiresReferenceImage: false,
                     MaxInputLength: 4000,
                     EvidenceId: null,

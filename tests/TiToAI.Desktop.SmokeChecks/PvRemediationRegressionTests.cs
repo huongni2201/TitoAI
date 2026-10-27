@@ -538,6 +538,8 @@ public static class PvRemediationRegressionTests
                 TargetDurationPerSceneSeconds: 15
             ));
 
+            await workflowService.StartWorkflowAsync(new StartProjectWorkflowRequest(wsId, prjId));
+
             int jobsBefore;
             using (var db = new TiToAIDbContext(dbOptions))
             {
@@ -633,6 +635,8 @@ public static class PvRemediationRegressionTests
                 TargetDurationPerSceneSeconds: 15
             ));
 
+            await workflowService.StartWorkflowAsync(new StartProjectWorkflowRequest(wsId, prjId));
+
             // Tạo Job Image hoàn tất
             string imageJobId = Guid.NewGuid().ToString("D").ToLowerInvariant();
             using (var db = new TiToAIDbContext(dbOptions))
@@ -680,16 +684,15 @@ public static class PvRemediationRegressionTests
     }
 
     /// <summary>
-    /// Ca 7: PV-R2 — Manual Handoff import kết quả thủ công phải kích hoạt ApplyJobOutputAsync và tạo successor job
+    /// Ca 7: Kết quả tự động phải áp dụng vào Scene và tạo successor job
     /// </summary>
-    public static async Task Test_Repro7_ManualHandoff_MustTriggerApplyAndSuccessorJobAsync()
+    public static async Task Test_Repro7_AutomaticResult_MustTriggerApplyAndSuccessorJobAsync()
     {
         var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
         try
         {
             var (_, jobService, workflowService) = await SetupServicesAsync(dbOptions, tempDir);
-            var manualHandoffService = new ManualHandoffService(dbOptions, (jId, ct) => workflowService.ApplyJobOutputAsync(jId, ct));
-            var readyAssetId = SeedAsset(dbOptions, wsId, "Image", "ready/r_manual.jpg");
+            var readyAssetId = SeedAsset(dbOptions, wsId, "Image", "ready/r_automatic.jpg");
 
             string sceneId = Guid.NewGuid().ToString("D").ToLowerInvariant();
             var now = DateTimeOffset.UtcNow.ToString("o");
@@ -726,7 +729,9 @@ public static class PvRemediationRegressionTests
                 TargetDurationPerSceneSeconds: 15
             ));
 
-            // Tạo một Job Image ở trạng thái AwaitingUser
+            await workflowService.StartWorkflowAsync(new StartProjectWorkflowRequest(wsId, prjId));
+
+            // Kết quả đã được executor lưu thành công, như đầu vào của event job.state_changed.
             string imageJobId = Guid.NewGuid().ToString("D").ToLowerInvariant();
             long fencingToken = 1;
             using (var db = new TiToAIDbContext(dbOptions))
@@ -738,8 +743,8 @@ public static class PvRemediationRegressionTests
                     ProjectId = prjId,
                     SceneId = sceneId,
                     TaskType = JobTaskType.Image,
-                    State = JobState.AwaitingUser,
-                    ReasonCode = "automation_blocked",
+                    State = JobState.Succeeded,
+                    ResultReference = readyAssetId,
                     ProviderKey = ProviderKeys.ChatGPTWeb,
                     StorageRootId = "root-1",
                     PromptSnapshotText = "snapshot",
@@ -752,26 +757,17 @@ public static class PvRemediationRegressionTests
                 await db.SaveChangesAsync();
             }
 
-            // Người dùng import kết quả thủ công qua ManualHandoffService
-            var importResponse = await manualHandoffService.ImportResultAsync(new JobImportResultRequest(
-                WorkspaceId: wsId,
-                JobId: imageJobId,
-                ExpectedRevision: fencingToken,
-                ClientRequestId: "req-import-manual-1",
-                AssetId: readyAssetId
-            ));
-
-            Assert(importResponse.State == JobState.Succeeded, "Job sau khi import phải ở State=Succeeded.");
+            Assert(await workflowService.ApplyJobOutputAsync(imageJobId), "Kết quả tự động phải được áp dụng.");
 
             // Kiểm tra: Scene phải được gán ImageAssetId tự động qua hook Apply
             using (var db = new TiToAIDbContext(dbOptions))
             {
                 var scene = await db.Scenes.FirstAsync(s => s.Id == sceneId);
-                Assert(scene.ImageAssetId == readyAssetId, "Cảnh phải nhận ImageAssetId sau khi import thủ công.");
+                Assert(scene.ImageAssetId == readyAssetId, "Cảnh phải nhận ImageAssetId sau khi nhận kết quả tự động.");
 
                 // Kiểm tra: Successor VideoPrompt phải được tự động enqueue!
                 var promptJob = await db.Jobs.FirstOrDefaultAsync(j => j.SceneId == sceneId && j.TaskType == JobTaskType.VideoPrompt);
-                Assert(promptJob != null, "[PV-R2] Lỗi đứt chuỗi manual: Sau khi import ảnh thủ công, không có successor VideoPrompt nào được enqueue.");
+                Assert(promptJob != null, "Sau khi nhận ảnh tự động, phải enqueue successor VideoPrompt.");
             }
         }
         finally
@@ -781,9 +777,9 @@ public static class PvRemediationRegressionTests
     }
 
     /// <summary>
-    /// Ca 8: PV-R1 — ProductionJobExecutor chưa có browser automation phải chuyển sang AwaitingUser, KHÔNG fake URI
+    /// Ca 8: PV-R1 — ProductionJobExecutor chưa có browser automation phải báo Failed, KHÔNG fake URI
     /// </summary>
-    public static async Task Test_Repro8_ProductionJobExecutor_WithoutBrowser_MustTransitionToAwaitingUserAsync()
+    public static async Task Test_Repro8_ProductionJobExecutor_WithoutBrowser_MustFailAsync()
     {
         var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
         try
@@ -812,7 +808,7 @@ public static class PvRemediationRegressionTests
             Assert(string.Equals(result.ReasonCode, "adapter_not_available", StringComparison.OrdinalIgnoreCase),
                 $"ReasonCode phải là adapter_not_available, thực tế: {result.ReasonCode}");
 
-            // Đánh giá với Retry Policy: phải yêu cầu chuyển sang AwaitingUser
+            // Không retry hoặc chuyển giao thủ công khi thiếu adapter.
             var dummyJob = new Job
             {
                 Id = "job-exec-1",
@@ -826,8 +822,66 @@ public static class PvRemediationRegressionTests
             };
 
             var decision = JobRetryAndCancelPolicy.EvaluateFailure(dummyJob, result.ReasonCode, false);
-            Assert(decision.TargetState == JobState.AwaitingUser,
-                $"[PV-R1] Lỗi định tuyến: Job lỗi adapter phải sang AwaitingUser, thực tế: {decision.TargetState}");
+            Assert(decision.TargetState == JobState.Failed && !decision.CanRetry,
+                $"Job lỗi adapter phải Failed và không retry, thực tế: {decision.TargetState}");
+
+            foreach (var reason in new[] { "automation_blocked", "adapter_not_available", "missing_provider",
+                "CAPABILITY_UNSUPPORTED", "manual_input_required", "MANUAL_HANDOFF_REQUIRED" })
+            {
+                var blocked = JobRetryAndCancelPolicy.EvaluateFailure(dummyJob, reason, false);
+                Assert(blocked.TargetState == JobState.Failed && !blocked.CanRetry && blocked.FinalReasonCode == reason,
+                    $"{reason}: phải dừng và giữ lý do, không retry/handoff.");
+                Assert(!JobRetryAndCancelPolicy.CanRetry(dummyJob, reason, false), "Không retry lỗi automation cố định.");
+
+                var uncertain = JobRetryAndCancelPolicy.EvaluateFailure(dummyJob, reason, true);
+                Assert(uncertain.TargetState == JobState.AwaitingUser && uncertain.FinalReasonCode == JobReasonCode.ReconcileRequired,
+                    "Đã submit phải ưu tiên đối soát, không Failed rồi gửi lại.");
+            }
+
+            var (_, jobs, _) = await SetupServicesAsync(dbOptions, tempDir);
+            dummyJob.ProviderKey = ProviderKeys.MuseAI;
+            dummyJob.StorageRootId = "root-1";
+            dummyJob.TaskType = JobTaskType.Script;
+            dummyJob.PromptSnapshotText = "Legacy immutable prompt";
+            dummyJob.ConfigSnapshotJson = "{\"legacy\":true}";
+            dummyJob.State = JobState.AwaitingUser;
+            dummyJob.ReasonCode = "MANUAL_HANDOFF_REQUIRED";
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                db.Jobs.Add(dummyJob);
+                await db.SaveChangesAsync();
+            }
+
+            bool resumeBlocked = false;
+            try { await jobs.ResumeAsync(wsId, dummyJob.Id); }
+            catch (JobValidationException) { resumeBlocked = true; }
+            Assert(resumeBlocked, "Job chờ handoff cũ không được tự đưa lại vào queue.");
+
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                var legacyJob = await db.Jobs.SingleAsync(j => j.Id == dummyJob.Id);
+                legacyJob.State = JobState.Failed;
+                await db.SaveChangesAsync();
+            }
+            bool retryBlocked = false;
+            try { await jobs.RetryAsync(new JobRetryRequest(wsId, dummyJob.Id, dummyJob.Revision)); }
+            catch (JobValidationException) { retryBlocked = true; }
+            Assert(retryBlocked, "Backend không retry job thất bại do handoff/automation chưa sẵn sàng.");
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                var legacyJob = await db.Jobs.SingleAsync(j => j.Id == dummyJob.Id);
+                legacyJob.State = JobState.AwaitingUser;
+                await db.SaveChangesAsync();
+            }
+
+            await jobs.CancelAsync(wsId, dummyJob.Id);
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                var legacyJob = await db.Jobs.SingleAsync(j => j.Id == dummyJob.Id);
+                Assert(legacyJob.State == JobState.Canceled, "Vẫn hủy được job handoff lịch sử.");
+                Assert(legacyJob.PromptSnapshotText == dummyJob.PromptSnapshotText, "Hủy không mất snapshot lịch sử.");
+                Assert(legacyJob.ConfigSnapshotJson == dummyJob.ConfigSnapshotJson, "Hủy không mất cấu hình lịch sử.");
+            }
         }
         finally
         {
@@ -845,6 +899,12 @@ public static class PvRemediationRegressionTests
         {
             var (_, jobService, workflowService) = await SetupServicesAsync(dbOptions, tempDir);
             var readyAssetId = SeedAsset(dbOptions, wsId, "Image", "ready/r_crash.jpg");
+            await workflowService.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
+                WorkspaceId: wsId, ProjectId: prjId, WorkflowMode: WorkflowModes.ReadyImage,
+                GoalPrompt: "Kiểm tra phục hồi run tự động", ModelAssetId: null, ProductAssetId: null,
+                ReadyImageAssetId: readyAssetId, AudioOption: AudioOptions.None, AudioAssetId: null,
+                TargetSceneCount: 1, TargetDurationPerSceneSeconds: 15));
+            var run = await workflowService.StartWorkflowAsync(new StartProjectWorkflowRequest(wsId, prjId));
 
             string sceneId = Guid.NewGuid().ToString("D").ToLowerInvariant();
             var now = DateTimeOffset.UtcNow.ToString("o");
@@ -874,7 +934,7 @@ public static class PvRemediationRegressionTests
                     TaskType: JobTaskType.VideoRender,
                     CustomPromptText: "Prompt đã sẵn sàng",
                     MediaSnapshot: null,
-                    RunId: "run-crash-1",
+                    RunId: run.RunId,
                     CreatedAtUtc: now
                 );
 
@@ -980,6 +1040,72 @@ public static class PvRemediationRegressionTests
         }
     }
 
+    /// <summary>
+    /// PV-RenderedPromptText: Backend dùng nguyên văn prompt đã render từ frontend.
+    /// </summary>
+    private static async Task Test_Repro11_RenderedPromptTextAsync()
+    {
+        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        try
+        {
+            var workflowService = new ProjectWorkflowService(dbOptions);
+            var composer = new VideoWorkflowPromptComposer(dbOptions);
+            const string scriptPrompt = "Viết kịch bản về áo dài cho GenZ. Tag: TAG_DAC_BIET_2026.";
+            const string videoPrompt = "Camera motion cho Cảnh 1, 15s. Bối cảnh: Sân vườn mùa xuân.";
+
+            var savedConfig = await workflowService.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
+                WorkspaceId: wsId,
+                ProjectId: prjId,
+                WorkflowMode: WorkflowModes.ProductOnly,
+                GoalPrompt: "Bộ sưu tập áo dài lụa tơ tằm",
+                ModelAssetId: null,
+                ProductAssetId: null,
+                ReadyImageAssetId: null,
+                AudioOption: AudioOptions.None,
+                AudioAssetId: null,
+                TargetSceneCount: 2,
+                TargetDurationPerSceneSeconds: 15,
+                ScriptPromptText: scriptPrompt,
+                VideoPromptText: videoPrompt
+            ));
+
+            Assert(savedConfig.ScriptPromptText == scriptPrompt, "Text Script đã render phải được lưu nguyên vẹn.");
+            Assert(savedConfig.VideoPromptText == videoPrompt, "Text VideoPrompt đã render phải được lưu nguyên vẹn.");
+
+            var scriptResult = await composer.ComposeScriptPlanningAiRequestAsync(wsId, savedConfig);
+            Assert(scriptResult.ComposedPrompt.Contains(scriptPrompt), "Composer Script phải dùng nguyên văn text đã render.");
+
+            var scene = new Scene
+            {
+                Id = Guid.NewGuid().ToString("D").ToLowerInvariant(),
+                ProjectId = prjId,
+                WorkspaceId = wsId,
+                SequenceOrder = 1,
+                Name = "Cảnh 1",
+                TargetDurationSeconds = 15,
+                CreatedAtUtc = DateTimeOffset.UtcNow.ToString("o"),
+                UpdatedAtUtc = DateTimeOffset.UtcNow.ToString("o")
+            };
+            var videoResult = await composer.ComposeVideoPromptAiRequestAsync(wsId, savedConfig, scene);
+            Assert(videoResult.ComposedPrompt.Contains(videoPrompt), "Composer VideoPrompt phải dùng nguyên văn text đã render.");
+
+            var unresolvedConfig = savedConfig with { ScriptPromptText = "Kịch bản với biến {bien_chua_dien}." };
+            bool rejectedUnresolvedPlaceholder = false;
+            try
+            {
+                await composer.ComposeScriptPlanningAiRequestAsync(wsId, unresolvedConfig);
+            }
+            catch (ProjectWorkflowValidationException ex)
+            {
+                rejectedUnresolvedPlaceholder = ex.Message.Contains("bien_chua_dien");
+            }
+            Assert(rejectedUnresolvedPlaceholder, "Backend phải báo placeholder còn sót thay vì tự đoán giá trị.");
+        }
+        finally
+        {
+            CleanupTestEnvironment(tempDir);
+        }
+    }
     public static async Task<int> RunAllAsync()
     {
         Console.WriteLine("\n=================================================================");
@@ -994,10 +1120,11 @@ public static class PvRemediationRegressionTests
             ("PV-R4 Ca 4: Khi Paused, ApplyJobOutputAsync không được tự enqueue tiếp", Test_Repro4_PauseWorkflow_MustPreventEnqueuingNextStepsAsync),
             ("PV-R5 Ca 5: Image thành công với Script Motion Draft không được đứng im", Test_Repro5_ImageSuccess_WithScriptMotionDraft_MustProgressToNextStepAsync),
             ("PV-R11 Ca 6: Image -> VideoPrompt chuyển tiếp phải giữ USER_BRIEF", Test_Repro6_ImageToVideoPromptSuccessor_MustPreserveUserBriefAsync),
-            ("PV-R2 Ca 7: Manual Handoff import kết quả thủ công phải trigger Apply và successor", Test_Repro7_ManualHandoff_MustTriggerApplyAndSuccessorJobAsync),
-            ("PV-R1 Ca 8: ProductionJobExecutor chưa có browser automation phải sang AwaitingUser", Test_Repro8_ProductionJobExecutor_WithoutBrowser_MustTransitionToAwaitingUserAsync),
+            ("Ca 7: Kết quả tự động phải trigger Apply và successor", Test_Repro7_AutomaticResult_MustTriggerApplyAndSuccessorJobAsync),
+            ("PV-R1 Ca 8: ProductionJobExecutor chưa có browser automation phải Failed", Test_Repro8_ProductionJobExecutor_WithoutBrowser_MustFailAsync),
             ("PV-R7/10 Ca 9: Crash Recovery continuation sweep phải phục hồi intent bị treo", Test_Repro9_CrashRecovery_ContinuationSweep_MustResumePendingIntentsAsync),
             ("PV-R1 Ca 10: StartWorkflowAsync Idempotency với ClientRequestId", Test_Repro10_StartWorkflow_IdempotencyWithClientRequestIdAsync),
+            ("PV-RenderedPromptText Ca 11: Dùng text đã render cho Template Script/VideoPrompt", Test_Repro11_RenderedPromptTextAsync),
         };
 
         int pass = 0;

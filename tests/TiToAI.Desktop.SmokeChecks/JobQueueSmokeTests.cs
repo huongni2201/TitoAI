@@ -277,7 +277,7 @@ public static class JobQueueSmokeTests
 
         // --- Regression Tests for Findings R1 - R8 ---
         await RunCaseAsync(
-            "REGRESSION-R1: Production Executor (Unavailable Adapter -> AwaitingUser without fake success)",
+            "REGRESSION-R1: Production Executor (Unavailable Adapter -> Failed without handoff or fake success)",
             Test_Regression_R1_ProductionExecutor_UnavailableAdapter_NoFakeSuccess);
 
         await RunCaseAsync(
@@ -1414,6 +1414,18 @@ public static class JobQueueSmokeTests
             var handlers = new JobHandlers(jobService);
             handlers.Register(dispatcher);
 
+            foreach (var retiredCommand in new[] { "job.get_handoff", "job.import_result" })
+            {
+                if (dispatcher.IsCommandAllowed(retiredCommand))
+                    throw new InvalidOperationException("Không được mở lại RPC handoff.");
+                var retiredRequest = new RequestEnvelope(Guid.NewGuid(), "request", retiredCommand,
+                    JsonSerializer.SerializeToElement(new { workspaceId = wsId, jobId = "legacy-job" }),
+                    DateTimeOffset.UtcNow, "1.0.4");
+                var retiredResponse = await dispatcher.DispatchAsync(retiredRequest, CancellationToken.None);
+                if (retiredResponse.Success || retiredResponse.Error?.Code != "UNKNOWN_COMMAND")
+                    throw new InvalidOperationException("RPC handoff cũ phải bị chặn ở allow-list.");
+            }
+
             // 1. job.enqueue
             var enqueuePayload = JsonSerializer.SerializeToElement(new JobEnqueueRequest(
                 WorkspaceId: wsId,
@@ -1482,7 +1494,7 @@ public static class JobQueueSmokeTests
 
     /// <summary>
     /// R1: Kiểm chứng Production Executor (UnavailableAdapterJobExecutor) không ghi nhận thành công giả
-    /// khi adapter chưa sẵn sàng. Job chuyển sang AwaitingUser với reason adapter_not_available.
+    /// khi adapter chưa sẵn sàng. Job chuyển sang Failed với reason adapter_not_available, không handoff hoặc retry.
     /// </summary>
     public static async Task Test_Regression_R1_ProductionExecutor_UnavailableAdapter_NoFakeSuccess()
     {
@@ -1518,7 +1530,7 @@ public static class JobQueueSmokeTests
                 await Task.Delay(20);
                 await using var db = new TiToAIDbContext(dbOptions);
                 job = await db.Jobs.AsNoTracking().FirstOrDefaultAsync(j => j.Id == enqueueRes.JobId);
-                if (job != null && job.State == JobState.AwaitingUser) break;
+                if (job != null && job.State == JobState.Failed) break;
             }
 
             if (job == null) throw new InvalidOperationException("Không tìm thấy job trong DB.");
@@ -1526,9 +1538,9 @@ public static class JobQueueSmokeTests
             {
                 throw new InvalidOperationException("LỖI R1: Job thành Succeeded giả mạo khi adapter chưa sẵn sàng!");
             }
-            if (job.State != JobState.AwaitingUser || job.ReasonCode != "adapter_not_available")
+            if (job.State != JobState.Failed || job.ReasonCode != "adapter_not_available")
             {
-                throw new InvalidOperationException($"Kỳ vọng job ở AwaitingUser với lý do adapter_not_available, thực tế: {job.State} / {job.ReasonCode}");
+                throw new InvalidOperationException($"Kỳ vọng job ở Failed với lý do adapter_not_available, thực tế: {job.State} / {job.ReasonCode}");
             }
             if (!string.IsNullOrWhiteSpace(job.ResultReference))
             {
@@ -2085,7 +2097,6 @@ public static class JobQueueSmokeTests
 
             // 1. Tạo Prompt Template trong DB
             var tplId = Guid.NewGuid().ToString();
-            var verId = Guid.NewGuid().ToString();
             var nowIso = DateTimeOffset.UtcNow.ToString("o");
 
             await using (var db = new TiToAIDbContext(dbOptions))
@@ -2095,28 +2106,13 @@ public static class JobQueueSmokeTests
                     Id = tplId,
                     Purpose = "Script",
                     WorkspaceId = null, // Global
-                    CurrentVersionId = null,
+                    TemplateText = "Hãy viết kịch bản về chủ đề {topic} cho kênh TikTok.",
+                    VariableDefinitionsJson = "[{\"name\":\"topic\",\"required\":true}]",
                     CreatedAtUtc = nowIso,
                     UpdatedAtUtc = nowIso
                 };
 
-                var version = new PromptVersion
-                {
-                    Id = verId,
-                    TemplateId = tplId,
-                    VersionNumber = 1,
-                    TemplateText = "Hãy viết kịch bản về chủ đề {topic} cho kênh TikTok.",
-                    ChangeDescription = "Initial version",
-                    CreatedAtUtc = nowIso
-                };
-
                 db.PromptTemplates.Add(template);
-                await db.SaveChangesAsync();
-
-                db.PromptVersions.Add(version);
-                await db.SaveChangesAsync();
-
-                template.CurrentVersionId = verId;
                 await db.SaveChangesAsync();
             }
 
@@ -2162,18 +2158,9 @@ public static class JobQueueSmokeTests
             // 4. Thay đổi template trong DB và thay đổi Settings Root
             await using (var db = new TiToAIDbContext(dbOptions))
             {
-                var ver2 = new PromptVersion
-                {
-                    Id = Guid.NewGuid().ToString(),
-                    TemplateId = tplId,
-                    VersionNumber = 2,
-                    TemplateText = "Nội dung hoàn toàn mới phiên bản 2",
-                    ChangeDescription = "v2 update",
-                    CreatedAtUtc = DateTimeOffset.UtcNow.ToString("o")
-                };
-                db.PromptVersions.Add(ver2);
                 var tpl = await db.PromptTemplates.FirstAsync(t => t.Id == tplId);
-                tpl.CurrentVersionId = ver2.Id;
+                tpl.TemplateText = "Nội dung hoàn toàn mới phiên bản 2";
+                tpl.UpdatedAtUtc = DateTimeOffset.UtcNow.ToString("o");
                 await db.SaveChangesAsync();
             }
 

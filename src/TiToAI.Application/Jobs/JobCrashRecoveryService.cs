@@ -159,6 +159,7 @@ public sealed class JobCrashRecoveryService
                     job.ReasonCode = reasonCode;
                     job.LeaseExpiresAtUtc = null;
                     job.LeaseOwnerId = null;
+                    job.Revision += 1;
                     job.UpdatedAtUtc = nowIso;
 
                     preservedOccupancy = true;
@@ -175,6 +176,7 @@ public sealed class JobCrashRecoveryService
                     job.LeaseExpiresAtUtc = null;
                     job.LeaseOwnerId = null;
                     job.RetryAfterUtc = UtcNow.AddSeconds(retryDelaySeconds).ToString("o");
+                    job.Revision += 1;
                     job.UpdatedAtUtc = nowIso;
 
                     // Giải phóng slot occupancy
@@ -197,6 +199,7 @@ public sealed class JobCrashRecoveryService
                     job.ReasonCode = reasonCode;
                     job.LeaseExpiresAtUtc = null;
                     job.LeaseOwnerId = null;
+                    job.Revision += 1;
                     job.UpdatedAtUtc = nowIso;
 
                     // Giải phóng slot occupancy
@@ -228,7 +231,7 @@ public sealed class JobCrashRecoveryService
                 itemResults.Add(itemResult);
 
                 // CHỈ PHÁT EVENT VÀ NOTIFY SAU KHI TRANSACTION COMMIT THÀNH CÔNG!
-                NotifyStateChanged(job.Id, job.WorkspaceId, job.ProjectId, prevState, newState, reasonCode, job.ResultReference);
+                NotifyStateChanged(job.Id, job.WorkspaceId, job.ProjectId, prevState, newState, reasonCode, job.ResultReference, job.Revision);
 
                 if (newState == JobState.Queued)
                 {
@@ -263,7 +266,8 @@ public sealed class JobCrashRecoveryService
         string prevState,
         string newState,
         string? reasonCode,
-        string? resultRef)
+        string? resultRef,
+        long jobRevision = 0)
     {
         OnJobStateChanged?.Invoke(new JobStateChangedPayload(
             JobId: jobId,
@@ -273,7 +277,8 @@ public sealed class JobCrashRecoveryService
             NewState: newState,
             ReasonCode: reasonCode,
             ResultReference: resultRef,
-            TimestampUtc: UtcNow.ToString("o")
+            TimestampUtc: UtcNow.ToString("o"),
+            JobRevision: jobRevision
         ));
     }
 }

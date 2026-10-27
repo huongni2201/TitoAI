@@ -10,7 +10,6 @@ import {
   Info,
   ExternalLink,
   Settings,
-  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -319,21 +318,6 @@ export function JobItemCard({
               <span>{recommendedAction.label}</span>
             </Button>
           )}
-
-          {recommendedAction.type === "manual_handoff" && (
-            <Button
-              type="button"
-              variant="default"
-              size="sm"
-              disabled={isActionLoading}
-              onClick={() => onOpenDetails?.(job)}
-              className="h-7 gap-1 px-2.5 text-xs bg-primary text-primary-foreground hover:bg-primary/90 cursor-pointer shadow-xs"
-            >
-              <Sparkles className="h-3 w-3" />
-              <span>{recommendedAction.label}</span>
-            </Button>
-          )}
-
           {recommendedAction.type === "resume" && (
             <Button
               type="button"

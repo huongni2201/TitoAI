@@ -102,7 +102,7 @@ export function ProjectForm({
         onSuccess(newProjectId);
       } else if (mode === "edit" && project) {
         const updated = await projectApi.updateProject({
-          workspaceId,
+          workspaceId: project.workspaceId,
           projectId: project.projectId,
           name: trimmedName,
           description: trimmedDesc,
@@ -141,7 +141,7 @@ export function ProjectForm({
       >
         <DialogHeader>
           <DialogTitle id="project-form-title">
-            {mode === "create" ? "Tạo Dự Án Video Mới" : "Chỉnh Sửa Dự Án"}
+            {mode === "create" ? "Tạo video mới" : "Chỉnh sửa dự án video"}
           </DialogTitle>
           <DialogDescription>
             {mode === "create"
@@ -239,7 +239,7 @@ export function ProjectForm({
                     Đang lưu…
                   </>
                 ) : mode === "create" ? (
-                  "Tạo Dự án"
+                  "Tạo video"
                 ) : (
                   "Lưu thay đổi"
                 )}

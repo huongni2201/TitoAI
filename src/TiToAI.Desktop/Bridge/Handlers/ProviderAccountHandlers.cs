@@ -38,14 +38,14 @@ public sealed class ProviderAccountHandlers
         dispatcher.AllowCommand("provider_account.update");
         dispatcher.AllowCommand("provider_account.probe_session");
         dispatcher.AllowCommand("provider_account.enable");
-        dispatcher.AllowCommand("provider_account.archive");
+        dispatcher.AllowCommand("provider_account.delete");
 
         dispatcher.RegisterHandler("provider_account.list", HandleListAsync);
         dispatcher.RegisterHandler("provider_account.create", HandleCreateAsync);
         dispatcher.RegisterHandler("provider_account.update", HandleUpdateAsync);
         dispatcher.RegisterHandler("provider_account.probe_session", HandleProbeSessionAsync);
         dispatcher.RegisterHandler("provider_account.enable", HandleEnableAsync);
-        dispatcher.RegisterHandler("provider_account.archive", HandleArchiveAsync);
+        dispatcher.RegisterHandler("provider_account.delete", HandleDeleteAsync);
     }
 
     /// <summary>
@@ -60,7 +60,7 @@ public sealed class ProviderAccountHandlers
         dispatcher.UnregisterHandler("provider_account.update");
         dispatcher.UnregisterHandler("provider_account.probe_session");
         dispatcher.UnregisterHandler("provider_account.enable");
-        dispatcher.UnregisterHandler("provider_account.archive");
+        dispatcher.UnregisterHandler("provider_account.delete");
     }
 
     public async Task<ResponseEnvelope> HandleListAsync(RequestEnvelope request, CancellationToken cancellationToken)
@@ -243,24 +243,24 @@ public sealed class ProviderAccountHandlers
         }
     }
 
-    public async Task<ResponseEnvelope> HandleArchiveAsync(RequestEnvelope request, CancellationToken cancellationToken)
+    public async Task<ResponseEnvelope> HandleDeleteAsync(RequestEnvelope request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
 
         try
         {
-            var payload = ParsePayload<ArchiveProviderAccountRequest>(request);
+            var payload = ParsePayload<DeleteProviderAccountRequest>(request);
             if (payload is null || string.IsNullOrWhiteSpace(payload.Id))
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
                     "INVALID_ARGUMENT",
-                    "Thiếu tham số 'id' tài khoản cần lưu trữ.",
+                    "Thiếu tham số 'id' tài khoản cần xoá.",
                     retryable: false);
             }
 
-            var result = await _providerAccountService.ArchiveAccountAsync(payload.Id, payload.ExpectedRevision, cancellationToken);
-            return ResponseEnvelopeHelper.CreateSuccess(request.Id, new ArchiveProviderAccountResponseData(result));
+            var result = await _providerAccountService.DeleteAccountAsync(payload.Id, payload.ExpectedRevision, cancellationToken);
+            return ResponseEnvelopeHelper.CreateSuccess(request.Id, new DeleteProviderAccountResponseData(result));
         }
         catch (ProviderAccountConcurrencyException ex)
         {
@@ -279,7 +279,7 @@ public sealed class ProviderAccountHandlers
             return ResponseEnvelopeHelper.CreateError(
                 request.Id,
                 "INTERNAL_ERROR",
-                $"Lỗi lưu trữ tài khoản: {ex.Message}",
+                $"Lỗi xoá tài khoản: {ex.Message}",
                 retryable: false);
         }
     }

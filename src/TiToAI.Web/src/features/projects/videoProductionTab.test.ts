@@ -56,6 +56,7 @@ let mockConfig: Record<string, any> = {
 };
 
 let mockScenes: Array<Record<string, unknown>> = [];
+let mockPromptTemplate: Record<string, any> | null = null;
 
 window.chrome = {
   webview: {
@@ -77,6 +78,29 @@ window.chrome = {
         let success = true;
 
         switch (req.command) {
+          case "prompt.get_template":
+            responseData = mockPromptTemplate ?? {
+              template: {
+                templateId: "tpl_script_custom",
+                purpose: "Script",
+                workspaceId: req.payload?.workspaceId || "ws_test_01",
+                isOverride: true,
+                currentVersionId: "ver_01",
+                currentVersionNumber: 1,
+                createdAtUtc: "2026-10-27T00:00:00Z",
+                updatedAtUtc: "2026-10-27T00:00:00Z",
+              },
+              currentVersion: {
+                versionId: "ver_01",
+                templateId: "tpl_script_custom",
+                versionNumber: 1,
+                templateText: "Kịch bản video TikTok về {chu_de}.",
+                variableDefinitionsJson: "[]",
+                changeDescription: null,
+                createdAtUtc: "2026-10-27T00:00:00Z",
+              },
+            };
+            break;
           case "workflow.get_config":
             responseData = mockConfig;
             break;
@@ -437,6 +461,157 @@ test("VideoProductionTab: CD11 & CD13 - Xem trước yêu cầu gửi AI writer 
   assert(bodyText.includes("Xem yêu cầu gửi AI viết prompt chuyển động"), "Dialog tiêu đề xem trước phải xuất hiện.");
   assert(bodyText.includes("Mẫu Prompt Video Chuẩn"), "Dialog phải hiển thị tên template.");
   assert(bodyText.includes("UNIQUE_BRIEF_TOKEN_9988"), "Dialog phải hiển thị đúng user brief của người dùng.");
+
+  root.unmount();
+  container.remove();
+});
+
+test("VideoProductionTab: Render biến ở frontend và chỉ lưu prompt text", async () => {
+  executedCommands = [];
+  localStorage.removeItem("titoai_workflow_prompt_values_ws_test_01_prj_test_dyn_vars");
+  mockPromptTemplate = {
+    template: {
+      templateId: "tpl_script_fashion",
+      purpose: "Script",
+      workspaceId: "ws_test_01",
+      isOverride: true,
+      currentVersionId: "ver_01",
+      currentVersionNumber: 1,
+      createdAtUtc: "2026-10-27T00:00:00Z",
+      updatedAtUtc: "2026-10-27T00:00:00Z",
+    },
+    currentVersion: {
+      versionId: "ver_01",
+      templateId: "tpl_script_fashion",
+      versionNumber: 1,
+      templateText: "Tạo kịch bản video TikTok về chủ đề {chu_de} cho sản phẩm {san_pham}.",
+      variableDefinitionsJson: "[]",
+      changeDescription: null,
+      createdAtUtc: "2026-10-27T00:00:00Z",
+    },
+  };
+  mockConfig = {
+    projectId: "prj_test_dyn_vars",
+    workspaceId: "ws_test_01",
+    workflowMode: "ModelAndProduct",
+    goalPrompt: "",
+    modelAssetId: "ast_model_01",
+    productAssetId: "ast_product_01",
+    readyImageAssetId: null,
+    foundationImageAssetId: null,
+    audioOption: "None",
+    audioAssetId: null,
+    targetSceneCount: 1,
+    targetDurationPerSceneSeconds: 15,
+    runState: "Idle",
+    currentRunId: null,
+    updatedAtUtc: "2026-10-27T01:00:00Z",
+    scriptPromptText: null,
+    videoPromptText: null,
+  };
+  mockScenes = [];
+
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = ReactDOMClient.createRoot(container);
+
+  await React.act(async () => {
+    root.render(
+      React.createElement(VideoProductionTab, {
+        workspaceId: "ws_test_01",
+        projectId: "prj_test_dyn_vars",
+      })
+    );
+  });
+
+  await React.act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 60));
+  });
+
+  // 1. Kiểm tra badge/thông báo mẫu prompt áp dụng
+  const badgeArea = container.textContent || "";
+  assert(badgeArea.includes("Mẫu prompt áp dụng"), "Phải có thông báo mẫu prompt áp dụng.");
+  assert(badgeArea.includes("Có mẫu kênh tùy chỉnh"), "Phải hiển thị badge có mẫu kênh tùy chỉnh.");
+
+  // 2. Kiểm tra ô nhập dynamic variable {chu_de} có id 'var-input-chu_de'
+  const chuDeInput = container.querySelector("#var-input-chu_de") as HTMLInputElement;
+  assert(chuDeInput, "Phải hiển thị ô nhập liệu id='var-input-chu_de' cho biến {chu_de}.");
+
+  // Kiểm tra ô nhập {san_pham}
+  const sanPhamInput = container.querySelector("#var-input-san_pham") as HTMLInputElement;
+  assert(sanPhamInput, "Phải hiển thị ô nhập liệu id='var-input-san_pham' cho biến {san_pham}.");
+
+  await React.act(async () => {
+    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype,
+      "value"
+    )?.set;
+    nativeInputValueSetter?.call(sanPhamInput, "Áo lụa cao cấp");
+    sanPhamInput.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+
+  // 3. Nhập giá trị cho {chu_de}
+  await React.act(async () => {
+    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype,
+      "value"
+    )?.set;
+    nativeInputValueSetter?.call(chuDeInput, "Thời trang dạo phố mùa hè");
+    chuDeInput.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+
+  await React.act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  });
+
+  // 4. Bấm nút "Lưu cấu hình"
+  const saveButton = Array.from(container.querySelectorAll("button")).find((b) =>
+    b.textContent?.includes("Lưu cấu hình")
+  );
+  assert(saveButton, "Phải có nút 'Lưu cấu hình'.");
+  assert(!saveButton.disabled, "Nút Lưu cấu hình phải enabled khi có thay đổi.");
+
+  await React.act(async () => {
+    saveButton.click();
+  });
+
+  await React.act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  });
+
+  // Kiểm tra lệnh workflow.save_config chỉ gửi prompt text đã render
+  assert(executedCommands.includes("workflow.save_config"), "Bấm lưu phải gọi 'workflow.save_config'.");
+  assert(lastBridgePayload, "Phải có payload gửi sang bridge.");
+  assert.strictEqual((lastBridgePayload as any)?.scriptPromptText,
+    "Tạo kịch bản video TikTok về chủ đề Thời trang dạo phố mùa hè cho sản phẩm Áo lụa cao cấp.",
+    "Payload phải chứa prompt Script đã render.");
+  assert.strictEqual((lastBridgePayload as any)?.videoPromptText, (lastBridgePayload as any)?.scriptPromptText,
+    "Mỗi tác vụ lưu text đã render thay vì gửi dictionary biến.");
+  assert.strictEqual("promptVariables" in (lastBridgePayload as any), false,
+    "Payload workflow không còn trường promptVariables.");
+
+  // 5. Bấm bắt đầu dùng prompt text đã lưu và khởi chạy workflow
+  const startButton = Array.from(container.querySelectorAll("button")).find((b) =>
+    b.textContent?.includes("Bắt đầu tạo video")
+  );
+  assert(startButton, "Phải có nút 'Bắt đầu tạo video'.");
+
+  await React.act(async () => {
+    startButton.click();
+  });
+
+  await React.act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  });
+
+  assert(executedCommands.includes("workflow.start"), "Bấm bắt đầu phải kích hoạt 'workflow.start'.");
+  assert.strictEqual(mockConfig.scriptPromptText,
+    "Tạo kịch bản video TikTok về chủ đề Thời trang dạo phố mùa hè cho sản phẩm Áo lụa cao cấp.",
+    "Config phải giữ prompt Script đã render sau khi workflow bắt đầu.");
+
+  root.unmount();
+  container.remove();
+  mockPromptTemplate = null;
 
   root.unmount();
   container.remove();

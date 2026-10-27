@@ -212,4 +212,122 @@ public static class ContentCandidateParser
             return new ContentCandidateResult<GenerateVideoPromptsOutputDto>(rawText, null, errors, false);
         }
     }
+
+    /// <summary>
+    /// Parse và thẩm định nội dung kịch bản theo schema { idea, hook, video_script, video_prompt, tiktok_content }.
+    /// </summary>
+    public static ContentCandidateResult<VideoContentItemDto> ParseVideoContent(
+        string rawText,
+        string projectId = "",
+        string workspaceId = "",
+        string? sceneId = null,
+        int sequenceOrder = 1,
+        string? imageAssetId = null)
+    {
+        var errors = new List<string>();
+        string nowIso = DateTimeOffset.UtcNow.ToString("o");
+
+        if (string.IsNullOrWhiteSpace(rawText))
+        {
+            errors.Add("Phản hồi từ AI trống rỗng.");
+            return new ContentCandidateResult<VideoContentItemDto>(
+                rawText ?? string.Empty,
+                null,
+                errors,
+                false);
+        }
+
+        string jsonPayload = ExtractJsonPayload(rawText);
+        try
+        {
+            using var doc = JsonDocument.Parse(jsonPayload);
+            var root = doc.RootElement;
+
+            string GetString(params string[] propertyNames)
+            {
+                foreach (var name in propertyNames)
+                {
+                    if (root.TryGetProperty(name, out var prop) && prop.ValueKind == JsonValueKind.String)
+                    {
+                        var val = prop.GetString();
+                        if (!string.IsNullOrWhiteSpace(val)) return val.Trim();
+                    }
+                }
+                return string.Empty;
+            }
+
+            string idea = GetString("idea", "title", "concept", "y_tuong");
+            string hook = GetString("hook", "cau_mo_dau", "intro");
+            string videoScript = GetString("video_script", "script", "kich_ban", "videoScript");
+            string videoPrompt = GetString("video_prompt", "prompt", "promptEn", "videoPrompt");
+            string tiktokContent = GetString("tiktok_content", "caption", "tiktok_post", "tiktokPost", "tiktokContent");
+
+            if (string.IsNullOrWhiteSpace(idea))
+            {
+                idea = !string.IsNullOrWhiteSpace(hook) ? hook : "Ý tưởng video sản phẩm";
+            }
+            if (string.IsNullOrWhiteSpace(hook))
+            {
+                hook = "Bí quyết thời trang giúp bạn nổi bật mỗi ngày!";
+            }
+            if (string.IsNullOrWhiteSpace(videoScript))
+            {
+                videoScript = rawText.Length > 200 ? rawText[..200] : rawText;
+            }
+            if (string.IsNullOrWhiteSpace(videoPrompt))
+            {
+                videoPrompt = "Cinematic 4K shot of model showcasing the product with natural movement, soft golden hour lighting, photorealistic details, high frame rate.";
+            }
+            if (string.IsNullOrWhiteSpace(tiktokContent))
+            {
+                tiktokContent = $"{idea} 🔥 Xem ngay! #fashion #trending #lifestyle #titoai";
+            }
+
+            var item = new VideoContentItemDto(
+                Id: Guid.NewGuid().ToString("D").ToLowerInvariant(),
+                ProjectId: projectId,
+                WorkspaceId: workspaceId,
+                SceneId: sceneId,
+                SequenceOrder: sequenceOrder,
+                Idea: idea,
+                Hook: hook,
+                VideoScript: videoScript,
+                VideoPrompt: videoPrompt,
+                TikTokContent: tiktokContent,
+                ImageAssetId: imageAssetId,
+                VideoAssetId: null,
+                AudioAssetId: null,
+                Status: "Draft",
+                CreatedAtUtc: nowIso,
+                UpdatedAtUtc: nowIso
+            );
+
+            return new ContentCandidateResult<VideoContentItemDto>(rawText, item, errors, true);
+        }
+        catch (JsonException ex)
+        {
+            // Trích xuất fallback từ văn bản thường nếu AI không trả JSON hoàn hảo
+            var fallbackPrompt = !string.IsNullOrWhiteSpace(rawText) ? rawText.Trim() : "Cinematic shot of model presenting the product, natural lighting, smooth camera movement, 4K quality.";
+            var item = new VideoContentItemDto(
+                Id: Guid.NewGuid().ToString("D").ToLowerInvariant(),
+                ProjectId: projectId,
+                WorkspaceId: workspaceId,
+                SceneId: sceneId,
+                SequenceOrder: sequenceOrder,
+                Idea: "Kịch bản sản phẩm ngắn",
+                Hook: "Khám phá ngay phong cách ấn tượng hôm nay!",
+                VideoScript: rawText.Trim(),
+                VideoPrompt: fallbackPrompt,
+                TikTokContent: "Trải nghiệm phong cách mới cực cuốn! #titoai #trending #shorts",
+                ImageAssetId: imageAssetId,
+                VideoAssetId: null,
+                AudioAssetId: null,
+                Status: "Draft",
+                CreatedAtUtc: nowIso,
+                UpdatedAtUtc: nowIso
+            );
+            errors.Add($"Cảnh báo phân giải JSON (fallback văn bản): {ex.Message}");
+            return new ContentCandidateResult<VideoContentItemDto>(rawText, item, errors, true);
+        }
+    }
 }

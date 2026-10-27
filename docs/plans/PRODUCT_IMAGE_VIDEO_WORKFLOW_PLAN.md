@@ -1,6 +1,10 @@
 # TiToAI — sản xuất video từ ảnh mẫu và sản phẩm
 
+> **Delta kiến trúc 2026-10-27:** [VIDEO_FIRST_ARCHITECTURE_PLAN.md](VIDEO_FIRST_ARCHITECTURE_PLAN.md) thay Project/Workspace ownership và chốt mỗi Project có một video đích. Workflow ảnh bên dưới còn dùng làm pipeline generation khi tương thích; Scene/clip là chi tiết nội bộ và chỉ video đầu ra hoàn chỉnh mới sẵn sàng đăng.
+
 Ngày 2026-10-27 (UTC+07). **Plan bàn giao, chưa triển khai hoặc nghiệm thu code.**
+
+> **Delta mới nhất — chỉ chạy tự động:** [Luồng tạo video tự động](AUTOMATIC_VIDEO_WORKFLOW_PLAN.md) bỏ manual handoff cho toàn bộ các bước tạo video. Các yêu cầu manual import/fallback bên dưới là baseline cũ đã được thay trong phạm vi này. Đăng nhập và đối soát tác vụ đã submit vẫn giữ policy an toàn.
 
 > **Delta clip/phân cảnh 2026-10-27:** [Plan thời lượng clip và phân cảnh trong prompt](CLIP_DURATION_STORYBOARD_PLAN.md) thay cách nhập số cảnh/thời lượng và lập nội dung bên dưới khi có khác biệt: Scene là một clip, shot nằm trong prompt; số clip do người dùng chọn, thời lượng theo capability provider. Ghép clip nằm ngoài phạm vi. [Prompt bàn giao triển khai](CLIP_DURATION_STORYBOARD_PROMPT.md).
 
@@ -70,7 +74,7 @@ Chỉ enqueue bước con sau khi output tiền nhiệm được lưu và apply 
 
 Lưu quan hệ phụ thuộc theo revision/hash để xác định phạm vi, không đánh dấu lại cả dự án một cách mặc định. Thay đổi khi run đang chạy không sửa snapshot cũ: tạm dừng dispatch nhánh liên quan, xử lý job active/uncertain an toàn, tạo revision mới và hiển thị phạm vi trước khi người dùng chủ động tiếp tục/tạo lại. Không tự gửi yêu cầu mới chỉ vì người dùng đang gõ. Tạo lại chủ động khác retry kỹ thuật; cả hai đều có giới hạn và lịch sử riêng.
 
-Run bị chặn do thiếu input, capability, lỗi, login hoặc xung đột mới yêu cầu can thiệp. Manual import vẫn có validator/provenance. Một lần bắt đầu cho phép các bước và các scene trong run đó, không cho phép tạo lại vô hạn: chốt số cảnh tối đa, tổng thời lượng mục tiêu và retry budget từ cấu hình hiển thị trước khi chạy. AI trả vượt giới hạn thì dừng báo lý do, không âm thầm cắt hoặc mở rộng. Không tự đăng TikTok/ghép clip. Không gửi audio không có nghĩa provider bảo đảm video im lặng; capability phải mô tả rõ âm thanh do provider tự sinh nếu có, không thêm xử lý audio cục bộ.
+Run bị chặn do thiếu input, capability, lỗi, login hoặc xung đột mới yêu cầu can thiệp. Không nhập kết quả thủ công để hoàn tất job; sửa điều kiện đầu vào/đăng nhập rồi tiếp tục automation khi đủ điều kiện. Một lần bắt đầu cho phép các bước và các scene trong run đó, không cho phép tạo lại vô hạn: chốt số cảnh tối đa, tổng thời lượng mục tiêu và retry budget từ cấu hình hiển thị trước khi chạy. AI trả vượt giới hạn thì dừng báo lý do, không âm thầm cắt hoặc mở rộng. Không tự đăng TikTok/ghép clip. Không gửi audio không có nghĩa provider bảo đảm video im lặng; capability phải mô tả rõ âm thanh do provider tự sinh nếu có, không thêm xử lý audio cục bộ.
 
 ```mermaid
 flowchart TD
@@ -129,9 +133,9 @@ Các gói PV dưới chưa dispatch, không đổi STATUS/TASKS hoặc nghiệm 
 
 | Gói | Phạm vi và owner | Điều kiện hoàn tất |
 |---|---|---|
-| PV0 — chốt contract | Coordinator sở hữu docs/decisions, Contracts, bridge allow-list; một persistence owner | Kiểm input/media/job hiện có, chốt roles/revisions/stale/capability/manual import và mapping file cụ thể trước chia việc. Kiểm TASKS/STATUS; không vượt gate T16/T17/T18 đang mở. |
+| PV0 — chốt contract | Coordinator sở hữu docs/decisions, Contracts, bridge allow-list; một persistence owner | Kiểm input/media/job hiện có, chốt roles/revisions/stale/capability và mapping file cụ thể trước chia việc; loại đường hoàn tất job bằng handoff theo delta chỉ chạy tự động. Kiểm TASKS/STATUS; không vượt gate T16/T17/T18 đang mở. |
 | PV1 — chuẩn bị ảnh thủ công | UI owner: Web/features/projects và thư viện hiện có; backend asset/scene qua owner tương ứng | Ba chế độ, gán đúng vai trò, dùng ảnh có sẵn/import ảnh hoàn thiện, form chung và override, mặc định Workspace, selection bền sau restart, ownership và không xóa file. |
-| PV2 — tự tạo ảnh AI | Adapter/workflow owner phối hợp image provider và UI review | Sau contract/capability và dependencies T18–T20/T22 tương ứng: gửi hai ảnh đúng vai trò, ảnh nền tảng dùng chung, biến thể theo cảnh, tái sử dụng theo input fingerprint, tự apply có revision guard, manual fallback. |
+| PV2 — tự tạo ảnh AI | Adapter/workflow owner phối hợp image provider và UI review | Sau contract/capability và dependencies T18–T20/T22 tương ứng: gửi hai ảnh đúng vai trò, ảnh nền tảng dùng chung, biến thể theo cảnh, tái sử dụng theo input fingerprint, tự apply có revision guard; automation không sẵn sàng thì báo lỗi, không manual fallback. |
 | PV3 — prompt từ ảnh | Content/prompt owner dùng luồng AI web hiện hành, UI scene | Ảnh hợp lệ tự chọn vào request thật, tự áp prompt hợp lệ, invalidation và snapshot; không gọi nhầm tác vụ script. |
 | PV4 — video và tích hợp | Workflow T22, UI T23, video adapter T21; coordinator file chung | Gate phụ thuộc hoàn tất; enqueue từ input đã lưu, readiness audio tùy chọn, điều phối cảnh ngay khi đủ điều kiện qua queue chung, phục hồi giữa commit/enqueue, chạy lại theo bảng phụ thuộc, pause/resume/recovery/cancel, màn kết quả và regression. |
 | PV5 — nghiệm thu/bàn giao | Reviewer/release owner | Kiểm ma trận dưới, cập nhật spec/links bị thay và evidence; thiếu môi trường ghi NOT_RUN. |
@@ -147,7 +151,7 @@ Không scaffold lại module đã có. File code cụ thể được chốt tạ
 5. Đổi input đánh dấu stale đúng; job đã enqueue vẫn dùng snapshot cũ. Apply lặp/conflict không tạo trùng hoặc mất bản sửa.
 6. Upload/thư viện/thay/gỡ làm đúng scope; backend từ chối asset Workspace khác và báo file thiếu/hỏng rõ ràng.
 7. Không audio vẫn tạo video khi provider hỗ trợ; có audio gửi đúng file/hash. Provider bắt buộc audio phải báo không tương thích, không tự thêm file. Duration/capability không đáp ứng phải báo rõ.
-8. Provider không nhận đa ảnh/không đọc ảnh có manual handoff dùng cùng validator; không giả kết quả hoặc fallback ngầm.
+8. Provider không nhận đa ảnh/không đọc ảnh thì chặn và báo không tương thích; không có manual handoff, không giả kết quả hoặc fallback ngầm.
 9. Pool đầy hiển thị Chờ slot; submit rồi crash/cancel/retry xử lý uncertainty theo contract, không submit trùng mù.
 10. Project cũ vẫn mở được, giữ legacy prompt provenance và media; không tự suy vai trò ảnh hay tự gửi AI sau migration.
 11. Caption/hashtags vẫn một bản cấp project theo plan AI web; dùng luồng ảnh không tự sinh bài đăng hoặc đăng TikTok.

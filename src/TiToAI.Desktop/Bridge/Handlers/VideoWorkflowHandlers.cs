@@ -38,6 +38,9 @@ public sealed class VideoWorkflowHandlers
         dispatcher.AllowCommand("workflow.pause");
         dispatcher.AllowCommand("workflow.resume");
         dispatcher.AllowCommand("workflow.preview_ai_prompt");
+        dispatcher.AllowCommand("workflow.list_content_items");
+        dispatcher.AllowCommand("workflow.update_content_item");
+        dispatcher.AllowCommand("workflow.create_scene_video");
 
         dispatcher.RegisterHandler("workflow.get_config", HandleGetConfigAsync);
         dispatcher.RegisterHandler("workflow.save_config", HandleSaveConfigAsync);
@@ -47,6 +50,9 @@ public sealed class VideoWorkflowHandlers
         dispatcher.RegisterHandler("workflow.pause", HandlePauseWorkflowAsync);
         dispatcher.RegisterHandler("workflow.resume", HandleResumeWorkflowAsync);
         dispatcher.RegisterHandler("workflow.preview_ai_prompt", HandlePreviewAiPromptAsync);
+        dispatcher.RegisterHandler("workflow.list_content_items", HandleListContentItemsAsync);
+        dispatcher.RegisterHandler("workflow.update_content_item", HandleUpdateContentItemAsync);
+        dispatcher.RegisterHandler("workflow.create_scene_video", HandleCreateSceneVideoAsync);
     }
 
     public async Task<ResponseEnvelope> HandleGetConfigAsync(RequestEnvelope request, CancellationToken cancellationToken)
@@ -242,6 +248,78 @@ public sealed class VideoWorkflowHandlers
 
             var result = await _workflowService.PreviewAiPromptAsync(payload, cancellationToken);
             return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
+        }
+        catch (Exception ex)
+        {
+            return MapExceptionToError(request.Id, ex);
+        }
+    }
+
+    public async Task<ResponseEnvelope> HandleListContentItemsAsync(RequestEnvelope request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        try
+        {
+            var payload = ParsePayload<GetProjectWorkflowConfigRequest>(request);
+            if (payload == null || string.IsNullOrWhiteSpace(payload.WorkspaceId) || string.IsNullOrWhiteSpace(payload.ProjectId))
+            {
+                return ResponseEnvelopeHelper.CreateError(
+                    request.Id,
+                    "INVALID_ARGUMENT",
+                    "Thiếu tham số bắt buộc 'workspaceId' hoặc 'projectId'.",
+                    retryable: false);
+            }
+
+            var items = await _workflowService.ListVideoContentItemsAsync(payload.WorkspaceId, payload.ProjectId, cancellationToken);
+            return ResponseEnvelopeHelper.CreateSuccess(request.Id, items);
+        }
+        catch (Exception ex)
+        {
+            return MapExceptionToError(request.Id, ex);
+        }
+    }
+
+    public async Task<ResponseEnvelope> HandleUpdateContentItemAsync(RequestEnvelope request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        try
+        {
+            var payload = ParsePayload<UpdateVideoContentItemRequest>(request);
+            if (payload == null || string.IsNullOrWhiteSpace(payload.WorkspaceId) || string.IsNullOrWhiteSpace(payload.ProjectId) || string.IsNullOrWhiteSpace(payload.Id))
+            {
+                return ResponseEnvelopeHelper.CreateError(
+                    request.Id,
+                    "INVALID_ARGUMENT",
+                    "Thiếu tham số bắt buộc 'workspaceId', 'projectId' hoặc 'id'.",
+                    retryable: false);
+            }
+
+            var updated = await _workflowService.UpdateVideoContentItemAsync(payload, cancellationToken);
+            return ResponseEnvelopeHelper.CreateSuccess(request.Id, updated);
+        }
+        catch (Exception ex)
+        {
+            return MapExceptionToError(request.Id, ex);
+        }
+    }
+
+    public async Task<ResponseEnvelope> HandleCreateSceneVideoAsync(RequestEnvelope request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        try
+        {
+            var payload = ParsePayload<CreateSceneVideoRequest>(request);
+            if (payload == null || string.IsNullOrWhiteSpace(payload.WorkspaceId) || string.IsNullOrWhiteSpace(payload.ProjectId))
+            {
+                return ResponseEnvelopeHelper.CreateError(
+                    request.Id,
+                    "INVALID_ARGUMENT",
+                    "Thiếu tham số bắt buộc 'workspaceId' hoặc 'projectId'.",
+                    retryable: false);
+            }
+
+            int count = await _workflowService.CreateSceneVideoAsync(payload, cancellationToken);
+            return ResponseEnvelopeHelper.CreateSuccess(request.Id, new { Enqueued = count > 0, Count = count, Message = "Đã đưa tác vụ tạo video vào hàng đợi." });
         }
         catch (Exception ex)
         {

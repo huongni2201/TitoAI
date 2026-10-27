@@ -309,11 +309,11 @@ export function AccountSettingsPanel() {
     }
   };
 
-  // Lưu trữ (Archive) tài khoản AI
-  const handleArchiveAccount = async (acc: ProviderAccountDto) => {
+  // Xoá tài khoản AI: đóng trình duyệt, xoá dữ liệu đăng nhập và gỡ tài khoản khỏi hệ thống
+  const handleDeleteAccount = async (acc: ProviderAccountDto) => {
     if (
       !window.confirm(
-        `Bạn có chắc chắn muốn lưu trữ tài khoản "${acc.displayName}"? Tài khoản sẽ được ngắt khỏi pool nhận tác vụ.`
+        `Xoá tài khoản "${acc.displayName}"? Trình duyệt và toàn bộ dữ liệu đăng nhập của tài khoản này sẽ bị xoá vĩnh viễn, không thể khôi phục.`
       )
     ) {
       return;
@@ -322,14 +322,14 @@ export function AccountSettingsPanel() {
     setError(null);
     setSuccessNotice(null);
     try {
-      await accountSettingsApi.archiveAccount(acc.id);
+      await accountSettingsApi.deleteAccount(acc.id);
       setAccounts((prev) => prev.filter((a) => a.id !== acc.id));
-      setSuccessNotice(`Đã lưu trữ tài khoản "${acc.displayName}".`);
+      setSuccessNotice(`Đã xoá tài khoản "${acc.displayName}" và trình duyệt của tài khoản.`);
     } catch (err: unknown) {
       const msg =
         err && typeof err === "object" && "message" in err
           ? String((err as { message: string }).message)
-          : "Không thể lưu trữ tài khoản.";
+          : "Không thể xoá tài khoản.";
       setError(msg);
     } finally {
       setTogglingAccountId(null);
@@ -685,122 +685,124 @@ export function AccountSettingsPanel() {
             return (
               <div
                 key={acc.id}
-                className="rounded-xl border border-border bg-card p-4 flex flex-wrap items-center justify-between gap-4 transition-all hover:border-border/80 shadow-xs"
+                className="min-w-0 rounded-xl border border-border bg-card p-4 flex flex-col gap-3 transition-all hover:border-border/80 shadow-xs"
               >
-                {/* Thông tin tài khoản */}
-                <div className="flex flex-col gap-1.5 min-w-[240px]">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-bold text-base text-foreground">
-                      {acc.displayName}
-                    </span>
-                    <Badge variant="secondary" className="text-[11px] gap-1">
-                      {acc.providerKey?.toLowerCase().includes("tiktok") && (
-                        <IconTikTok size={12} className="shrink-0" />
-                      )}
-                      {PROVIDER_NAMES[acc.providerKey] || acc.providerKey}
-                    </Badge>
-                    {acc.enabled ? (
-                      <Badge variant="success" className="text-[11px] gap-1">
-                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                        Đang hoạt động
-                      </Badge>
-                    ) : (
-                      <Badge variant="outline" className="text-[11px] text-muted-foreground">
-                        Đang tắt
-                      </Badge>
+                {/* Tên tài khoản và nhãn: tên dài được cắt bằng "..." */}
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="min-w-0 truncate font-bold text-base text-foreground" title={acc.displayName}>
+                    {acc.displayName}
+                  </span>
+                  <Badge variant="secondary" className="shrink-0 whitespace-nowrap text-[11px] gap-1">
+                    {acc.providerKey?.toLowerCase().includes("tiktok") && (
+                      <IconTikTok size={12} className="shrink-0" />
                     )}
-                  </div>
-
-                  <div className="text-xs text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-1">
-                    <span className="flex items-center gap-1">
-                      {acc.verifiedIdentity ? (
-                        <>
-                          <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" />
-                          <span>Danh tính:</span>
-                          <strong className="text-emerald-600 dark:text-emerald-400 font-semibold">{acc.verifiedIdentity}</strong>
-                        </>
-                      ) : (
-                        <>
-                          <ShieldAlert className="h-3.5 w-3.5 text-amber-500" />
-                          <span>Danh tính:</span>
-                          <span className="text-amber-600 dark:text-amber-400 italic">Chưa xác minh</span>
-                        </>
-                      )}
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <Laptop className="h-3.5 w-3.5 text-muted-foreground" />
-                      <span>Đồng thời:</span>
-                      <strong className="text-foreground">tối đa {acc.maxTabs} tác vụ</strong>
-                    </span>
-                  </div>
+                    {PROVIDER_NAMES[acc.providerKey] || acc.providerKey}
+                  </Badge>
+                  {acc.enabled ? (
+                    <Badge variant="success" className="shrink-0 whitespace-nowrap text-[11px] gap-1">
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                      Đang hoạt động
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground">
+                      Đang tắt
+                    </Badge>
+                  )}
                 </div>
 
-                {/* Các hành động */}
-                <div className="flex items-center gap-2 flex-wrap">
-                  {/* Nút sửa tài khoản */}
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handleStartEdit(acc)}
-                    disabled={isProbing || isToggling || editingAccountId === acc.id}
-                    title="Chỉnh sửa tên gợi nhớ và giới hạn tác vụ đồng thời"
-                    className="gap-1.5"
-                  >
-                    <Pencil className="h-3.5 w-3.5" />
-                    Sửa
-                  </Button>
+                {/* Danh tính và số tác vụ đồng thời */}
+                <div className="flex items-center gap-x-4 min-w-0 text-xs text-muted-foreground">
+                  <span className="flex min-w-0 items-center gap-1">
+                    {acc.verifiedIdentity ? (
+                      <>
+                        <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                        <span className="shrink-0">Danh tính:</span>
+                        <strong
+                          className="min-w-0 truncate font-semibold text-emerald-600 dark:text-emerald-400"
+                          title={acc.verifiedIdentity}
+                        >
+                          {acc.verifiedIdentity}
+                        </strong>
+                      </>
+                    ) : (
+                      <>
+                        <ShieldAlert className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+                        <span className="shrink-0">Danh tính:</span>
+                        <span className="italic text-amber-600 dark:text-amber-400">Chưa xác minh</span>
+                      </>
+                    )}
+                  </span>
+                  <span className="flex shrink-0 items-center gap-1 whitespace-nowrap">
+                    <Laptop className="h-3.5 w-3.5 text-muted-foreground" />
+                    <span>Đồng thời:</span>
+                    <strong className="text-foreground">tối đa {acc.maxTabs} tác vụ</strong>
+                  </span>
+                </div>
 
-                  {/* Nút kiểm tra phiên */}
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => void handleProbeSession(acc)}
-                    disabled={isProbing || isToggling || editingAccountId === acc.id}
-                    title="Kiểm tra trạng thái đăng nhập của tài khoản này"
-                  >
-                    <RefreshCw className={cn("h-3.5 w-3.5", isProbing && "animate-spin")} />
-                    {isProbing ? "Đang kiểm tra..." : "Kiểm tra phiên"}
-                  </Button>
+                {/* Hành động: nhóm thao tác chính bên trái, sửa/xoá bên phải; cùng một vị trí ở mọi thẻ */}
+                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void handleProbeSession(acc)}
+                      disabled={isProbing || isToggling || editingAccountId === acc.id}
+                      title="Kiểm tra trạng thái đăng nhập của tài khoản này"
+                    >
+                      <RefreshCw className={cn("h-3.5 w-3.5", isProbing && "animate-spin")} />
+                      {isProbing ? "Đang kiểm tra..." : "Kiểm tra phiên"}
+                    </Button>
 
-                  {/* Nút mở trình duyệt đăng nhập thủ công */}
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => void handleLaunchLogin(acc)}
-                    disabled={isProbing || isToggling || editingAccountId === acc.id}
-                    title="Mở cửa sổ trình duyệt để đăng nhập tài khoản này"
-                  >
-                    Đăng nhập trình duyệt
-                  </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void handleLaunchLogin(acc)}
+                      disabled={isProbing || isToggling || editingAccountId === acc.id}
+                      title="Mở cửa sổ trình duyệt để đăng nhập tài khoản này"
+                    >
+                      Đăng nhập trình duyệt
+                    </Button>
 
-                  {/* Toggle Kích hoạt / Vô hiệu hóa */}
-                  <Button
-                    type="button"
-                    variant={acc.enabled ? "secondary" : "default"}
-                    size="sm"
-                    onClick={() => void handleToggleEnable(acc)}
-                    disabled={isProbing || isToggling || editingAccountId === acc.id}
-                    title={acc.enabled ? "Tạm ngắt tài khoản này khỏi hàng đợi" : "Bật tài khoản để nhận tác vụ từ hàng đợi"}
-                  >
-                    {isToggling ? "Đang xử lý..." : acc.enabled ? "Tắt nhận việc" : "Bật hoạt động"}
-                  </Button>
+                    <Button
+                      type="button"
+                      variant={acc.enabled ? "secondary" : "default"}
+                      size="sm"
+                      onClick={() => void handleToggleEnable(acc)}
+                      disabled={isProbing || isToggling || editingAccountId === acc.id}
+                      title={acc.enabled ? "Tạm ngắt tài khoản này khỏi hàng đợi" : "Bật tài khoản để nhận tác vụ từ hàng đợi"}
+                    >
+                      {isToggling ? "Đang xử lý..." : acc.enabled ? "Tắt nhận việc" : "Bật hoạt động"}
+                    </Button>
+                  </div>
 
-                  {/* Nút lưu trữ / hủy tài khoản */}
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => void handleArchiveAccount(acc)}
-                    disabled={isProbing || isToggling || editingAccountId === acc.id}
-                    title="Lưu trữ tài khoản này (không nhận việc mới)"
-                    className="text-muted-foreground hover:text-destructive gap-1"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                    Lưu trữ
-                  </Button>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleStartEdit(acc)}
+                      disabled={isProbing || isToggling || editingAccountId === acc.id}
+                      title="Chỉnh sửa tên gợi nhớ và giới hạn tác vụ đồng thời"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                      Sửa
+                    </Button>
+
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => void handleDeleteAccount(acc)}
+                      disabled={isProbing || isToggling || editingAccountId === acc.id}
+                      title="Xoá tài khoản và toàn bộ trình duyệt, dữ liệu đăng nhập của tài khoản"
+                      className="text-muted-foreground hover:text-destructive gap-1"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Xoá
+                    </Button>
+                  </div>
                 </div>
 
                 {/* Form chỉnh sửa inline khi được chọn */}

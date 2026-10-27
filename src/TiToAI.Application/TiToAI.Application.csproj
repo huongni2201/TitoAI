@@ -10,6 +10,7 @@
   <ItemGroup>
     <ProjectReference Include="..\TiToAI.Contracts\TiToAI.Contracts.csproj" />
     <ProjectReference Include="..\TiToAI.Infrastructure\TiToAI.Infrastructure.csproj" />
+    <ProjectReference Include="..\TiToAI.Browser\TiToAI.Browser.csproj" />
   </ItemGroup>
 
 </Project>

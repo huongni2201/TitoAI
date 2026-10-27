@@ -7,7 +7,6 @@ public sealed class BridgeDispatcher : IBridgeDispatcher
 {
     private static readonly HashSet<string> G1AllowedCommands = new(StringComparer.Ordinal)
     {
-        "workspace.list",
         "settings.get",
         "settings.save",
         "settings.browse_folder",

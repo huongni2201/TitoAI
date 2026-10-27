@@ -168,6 +168,7 @@ public sealed class JobReconciliationService
                 job.LeaseExpiresAtUtc = null;
                 job.LeaseOwnerId = null;
                 job.RetryAfterUtc = null;
+                job.Revision += 1;
                 job.UpdatedAtUtc = nowIso;
 
                 _wakeupNotifier?.NotifyWakeup(new JobWakeupSignal("job.reconcile.retry", job.WorkspaceId, job.Id));
@@ -208,6 +209,7 @@ public sealed class JobReconciliationService
                     job.ReasonCode = JobReasonCode.UserCanceled;
                     job.LeaseExpiresAtUtc = null;
                     job.LeaseOwnerId = null;
+                    job.Revision += 1;
                     job.UpdatedAtUtc = nowIso;
 
                     currentState = JobState.Canceled;
@@ -242,6 +244,7 @@ public sealed class JobReconciliationService
                     job.ReasonCode = null;
                     job.LeaseExpiresAtUtc = null;
                     job.LeaseOwnerId = null;
+                    job.Revision += 1;
                     job.UpdatedAtUtc = nowIso;
 
                     currentState = JobState.Succeeded;
@@ -269,6 +272,7 @@ public sealed class JobReconciliationService
                 job.ReasonCode = reasonCode;
                 job.LeaseExpiresAtUtc = null;
                 job.LeaseOwnerId = null;
+                job.Revision += 1;
                 job.UpdatedAtUtc = nowIso;
 
                 currentState = JobState.Failed;
@@ -308,6 +312,7 @@ public sealed class JobReconciliationService
                 job.ReasonCode = reasonCode;
                 job.LeaseExpiresAtUtc = null;
                 job.LeaseOwnerId = null;
+                job.Revision += 1;
                 job.UpdatedAtUtc = nowIso;
 
                 currentState = JobState.Canceled;
@@ -384,7 +389,8 @@ public sealed class JobReconciliationService
             NewState: currentState,
             ReasonCode: reasonCode,
             ResultReference: job.ResultReference,
-            TimestampUtc: nowIso
+            TimestampUtc: nowIso,
+            JobRevision: job.Revision
         ));
 
         return new JobReconcileResponseData(
@@ -392,7 +398,8 @@ public sealed class JobReconciliationService
             PreviousState: prevState,
             CurrentState: currentState,
             ReconcileResult: reconcileResult,
-            ResultReference: job.ResultReference
+            ResultReference: job.ResultReference,
+            Revision: job.Revision
         );
     }
 }

@@ -137,6 +137,12 @@ public class JobConfiguration : IEntityTypeConfiguration<Job>
             .HasColumnType("TEXT")
             .IsRequired();
 
+        builder.Property(j => j.Revision)
+            .HasColumnName("revision")
+            .HasColumnType("INTEGER")
+            .HasDefaultValue(1L)
+            .IsRequired();
+
         builder.HasOne(j => j.Project)
             .WithMany()
             .HasForeignKey(j => new { j.ProjectId, j.WorkspaceId })

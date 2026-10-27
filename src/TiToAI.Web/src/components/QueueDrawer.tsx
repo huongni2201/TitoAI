@@ -118,7 +118,7 @@ export function QueueDrawer({
       document.removeEventListener("focusin", handleFocusIn);
       // Trả lại focus cho trigger button khi đóng
       requestAnimationFrame(() => {
-        triggerRef.current?.focus();
+        triggerRef?.current?.focus();
       });
     };
   }, [isOpen, onClose, triggerRef]);
@@ -244,7 +244,9 @@ export function QueueDrawer({
         {/* Thân danh sách tác vụ */}
         <div className="flex-1 min-h-0 flex flex-col">
           <JobList
-            jobs={queueState.jobs}
+            jobs={queueState.activeTab === "completed" ? queueState.filteredJobs : queueState.jobs}
+            activeTab={queueState.activeTab}
+            onTabChange={queueState.setActiveTab}
             isLoading={queueState.isLoading}
             error={queueState.error ? queueState.error.message : null}
             onRefresh={queueState.refresh}

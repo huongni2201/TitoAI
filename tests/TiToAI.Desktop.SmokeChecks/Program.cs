@@ -8,6 +8,38 @@ public static class Program
 {
     public static async Task<int> Main(string[] args)
     {
+        if (args.Length > 0 && string.Equals(args[0], "project-first", StringComparison.OrdinalIgnoreCase))
+        {
+            return await ProjectFirstSmokeTests.RunAllAsync();
+        }
+
+        if (args.Length > 0 && string.Equals(args[0], "analytics", StringComparison.OrdinalIgnoreCase))
+        {
+            return await AnalyticsSmokeTests.RunAllAsync();
+        }
+
+        if (args.Length > 0 && (string.Equals(args[0], "c1c3", StringComparison.OrdinalIgnoreCase) ||
+                                string.Equals(args[0], "history", StringComparison.OrdinalIgnoreCase) ||
+                                string.Equals(args[0], "t17backend", StringComparison.OrdinalIgnoreCase)))
+        {
+            return await JobRevisionAndHistorySmokeTests.RunAllAsync();
+        }
+
+        if (args.Length > 0 && (string.Equals(args[0], "q1", StringComparison.OrdinalIgnoreCase) || string.Equals(args[0], "capacity", StringComparison.OrdinalIgnoreCase)))
+        {
+            return await ProviderAccountAndCapacitySmokeTests.RunAllAsync();
+        }
+
+        if (args.Length > 0 && string.Equals(args[0], "t15", StringComparison.OrdinalIgnoreCase))
+        {
+            return await JobQueueSmokeTests.RunAllAsync();
+        }
+
+        if (args.Length > 0 && string.Equals(args[0], "prompt", StringComparison.OrdinalIgnoreCase))
+        {
+            return await PromptEngineSmokeTests.RunAllTestsAsync();
+        }
+
         if (args.Length > 0 && (string.Equals(args[0], "content", StringComparison.OrdinalIgnoreCase) || string.Equals(args[0], "ai-web", StringComparison.OrdinalIgnoreCase)))
         {
             AiWebContentCreationSmokeTests.RunTests();
@@ -29,17 +61,9 @@ public static class Program
             return await ProviderRegistryAndWorkflowSmokeTests.RunAllAsync();
         }
 
-        if (args.Length > 0 && (string.Equals(args[0], "handoff", StringComparison.OrdinalIgnoreCase) || string.Equals(args[0], "manual-handoff", StringComparison.OrdinalIgnoreCase) || string.Equals(args[0], "t18c", StringComparison.OrdinalIgnoreCase)))
-        {
-            return await ManualHandoffSmokeTests.RunAllAsync();
-        }
-
         if (args.Length > 0 && string.Equals(args[0], "t18", StringComparison.OrdinalIgnoreCase))
         {
-            Console.WriteLine("Executing All Task T18 Smoke Suites (Provider Registry, Workflow & Manual Handoff)...");
-            var res1 = await ProviderRegistryAndWorkflowSmokeTests.RunAllAsync();
-            var res2 = await ManualHandoffSmokeTests.RunAllAsync();
-            return (res1 == 0 && res2 == 0) ? 0 : 1;
+            return await ProviderRegistryAndWorkflowSmokeTests.RunAllAsync();
         }
 
         if (args.Length > 0 && (string.Equals(args[0], "concurrency", StringComparison.OrdinalIgnoreCase) || string.Equals(args[0], "browser-lifecycle", StringComparison.OrdinalIgnoreCase)))
@@ -55,6 +79,11 @@ public static class Program
         if (args.Length > 0 && (string.Equals(args[0], "chatgpt", StringComparison.OrdinalIgnoreCase) || string.Equals(args[0], "openai", StringComparison.OrdinalIgnoreCase)))
         {
             return await ChatGptSessionProbeSmokeTests.RunAllAsync();
+        }
+
+        if (args.Length > 0 && string.Equals(args[0], "tiktok", StringComparison.OrdinalIgnoreCase))
+        {
+            return await TikTokSessionProbeSmokeTests.RunAllAsync();
         }
 
         if (args.Length > 0 && string.Equals(args[0], "benchmark", StringComparison.OrdinalIgnoreCase))
@@ -456,18 +485,6 @@ public static class Program
                 }
             });
 
-        Console.WriteLine("\n[22] Task T18c: Manual Handoff & Idempotent Result Import Smoke Checks:");
-        await RunCheckAsync(
-            "Manual Handoff: Snapshot Extraction, Schema Validation (Script/VideoPrompt/Media), Canceled Unlinked & Concurrency Guards",
-            async () =>
-            {
-                int exitCode = await ManualHandoffSmokeTests.RunAllAsync();
-                if (exitCode != 0)
-                {
-                    throw new InvalidOperationException($"ManualHandoffSmokeTests failed with exit code {exitCode}");
-                }
-            });
-
         Console.WriteLine("\n[23] ChatGPT Session & Identity Probe Smoke Checks:");
         await RunCheckAsync(
             "ChatGPT: Real Profile Probe, Close & Restart App, Unauthenticated Guard, Timeout/Network, 2 Profiles Isolation, Stale Event Guard",
@@ -477,6 +494,18 @@ public static class Program
                 if (exitCode != 0)
                 {
                     throw new InvalidOperationException($"ChatGptSessionProbeSmokeTests failed with exit code {exitCode}");
+                }
+            });
+
+        Console.WriteLine("\n[24] TikTok Session & Identity Probe Smoke Checks:");
+        await RunCheckAsync(
+            "TikTok: Real Profile Probe, Close & Restart App, Unauthenticated Guard, Timeout/Network, 2 Profiles Isolation, Stale Event Guard",
+            async () =>
+            {
+                int exitCode = await TikTokSessionProbeSmokeTests.RunAllAsync();
+                if (exitCode != 0)
+                {
+                    throw new InvalidOperationException($"TikTokSessionProbeSmokeTests failed with exit code {exitCode}");
                 }
             });
 

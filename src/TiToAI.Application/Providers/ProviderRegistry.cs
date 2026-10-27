@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using TiToAI.Application.Accounts;
 using TiToAI.Contracts.Accounts;
+using TiToAI.Contracts.Jobs;
 using TiToAI.Contracts.Providers;
 
 namespace TiToAI.Application.Providers;
@@ -189,6 +190,67 @@ public sealed class ProviderRegistry
 
         return string.Equals(capability.VerificationStatus, ProviderVerificationStatus.Verified, StringComparison.OrdinalIgnoreCase)
             && capability.AutomationSupported;
+    }
+
+    /// <summary>
+    /// Kiểm tra loại tác vụ có trong năng lực provider; readiness automation được kiểm tra riêng.
+    /// Hỏi trực tiếp adapter capabilities trước (nếu có), fallback về ProviderCapabilities.IsSupportedTask.
+    /// </summary>
+    public bool IsSupportedTask(string providerKey, string taskType)
+    {
+        if (string.IsNullOrWhiteSpace(providerKey) || string.IsNullOrWhiteSpace(taskType))
+        {
+            return false;
+        }
+
+        var key = providerKey.Trim();
+        var tType = taskType.Trim();
+
+        if (_adapters.TryGetValue(key, out var adapter))
+        {
+            var cap = adapter.GetCapabilities().FirstOrDefault(c => string.Equals(c.TaskType, tType, StringComparison.OrdinalIgnoreCase));
+            if (cap != null)
+            {
+                return !string.Equals(cap.VerificationStatus, ProviderVerificationStatus.Unsupported, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        return ProviderCapabilities.IsSupportedTask(key, tType);
+    }
+
+    /// <summary>
+    /// Lấy danh sách thời lượng clip (giây) được hỗ trợ bởi provider theo CLIP_DURATION_STORYBOARD_PLAN.
+    /// Hỏi trực tiếp adapter capabilities trước (nếu có), fallback về ProviderCapabilities.GetSupportedDurations.
+    /// </summary>
+    public IReadOnlyList<int> GetSupportedDurations(string providerKey, string taskType = JobTaskType.VideoRender)
+    {
+        if (string.IsNullOrWhiteSpace(providerKey))
+        {
+            return Array.Empty<int>();
+        }
+
+        var key = providerKey.Trim();
+        var tType = string.IsNullOrWhiteSpace(taskType) ? JobTaskType.VideoRender : taskType.Trim();
+
+        if (_adapters.TryGetValue(key, out var adapter))
+        {
+            var cap = adapter.GetCapabilities().FirstOrDefault(c => string.Equals(c.TaskType, tType, StringComparison.OrdinalIgnoreCase));
+            if (cap?.SupportedDurations != null && cap.SupportedDurations.Count > 0)
+            {
+                return cap.SupportedDurations;
+            }
+        }
+
+        return ProviderCapabilities.GetSupportedDurations(key, tType);
+    }
+
+    /// <summary>
+    /// Kiểm tra xem một thời lượng cụ thể có được hỗ trợ bởi provider hay không.
+    /// </summary>
+    public bool IsDurationSupported(string providerKey, int durationSeconds, string taskType = JobTaskType.VideoRender)
+    {
+        var supported = GetSupportedDurations(providerKey, taskType);
+        return supported.Contains(durationSeconds);
     }
 
     /// <summary>

@@ -50,7 +50,7 @@ public static class ProviderUrlResolver
                 return DefaultMuseAiUrl;
             }
 
-            if (normalizedKey is "tiktok")
+            if (normalizedKey is "tiktok" or "tiktok-channel" or "tiktok_channel")
             {
                 return DefaultTikTokUrl;
             }
@@ -65,7 +65,7 @@ public static class ProviderUrlResolver
                 return DefaultMuseAiUrl;
             }
 
-            if (normalizedKind == "tiktok")
+            if (normalizedKind is "tiktok" or "tiktok-channel" or "tiktok_channel")
             {
                 return DefaultTikTokUrl;
             }

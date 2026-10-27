@@ -38,15 +38,19 @@ export function PromptVariableEditor({
         <div className="leading-relaxed">
           Template hiện không chứa biến số nào. Thêm biến vào nội dung theo định dạng{" "}
           <code className="inline-flex items-center rounded-md border border-border bg-background px-1.5 py-0.5 font-mono text-[11px] font-medium text-foreground shadow-2xs">
-            &#123;tên_biến&#125;
+            &#123;ten_bien&#125;
           </code>{" "}
           (ví dụ:{" "}
           <code className="inline-flex items-center rounded-md border border-border bg-background px-1.5 py-0.5 font-mono text-[11px] font-medium text-foreground shadow-2xs">
-            &#123;chủ_đề&#125;
+            &#123;chu_de&#125;
           </code>
           ,{" "}
           <code className="inline-flex items-center rounded-md border border-border bg-background px-1.5 py-0.5 font-mono text-[11px] font-medium text-foreground shadow-2xs">
-            &#123;phong_cách&#125;
+            &#123;san_pham&#125;
+          </code>
+          ,{" "}
+          <code className="inline-flex items-center rounded-md border border-border bg-background px-1.5 py-0.5 font-mono text-[11px] font-medium text-foreground shadow-2xs">
+            &#123;phong_cach&#125;
           </code>
           ).
         </div>

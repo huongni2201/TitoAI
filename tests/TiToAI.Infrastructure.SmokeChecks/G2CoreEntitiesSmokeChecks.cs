@@ -152,111 +152,15 @@ public static class G2CoreEntitiesSmokeChecks
             Console.WriteLine("    -> Duplicate Workspace Override PromptTemplate constraint rejection: PASS");
         }
 
-        // 4. PromptVersion Unique (template_id, version_number)
-        string v1Id = "pv-" + Guid.NewGuid().ToString("N");
-        string v2Id = "pv-" + Guid.NewGuid().ToString("N");
-        string vDuplicateVersionId = "pv-" + Guid.NewGuid().ToString("N");
-
-        await using (var db = new TiToAIDbContext(dbOptions))
-        {
-            db.PromptVersions.Add(new PromptVersion
-            {
-                Id = v1Id,
-                TemplateId = globalTmpl1Id,
-                VersionNumber = 1,
-                TemplateText = "Template text version 1 with {topic}",
-                VariableDefinitionsJson = "[{\"name\":\"topic\",\"required\":true}]",
-                ChangeDescription = "Initial version",
-                CreatedAtUtc = nowUtc
-            });
-
-            db.PromptVersions.Add(new PromptVersion
-            {
-                Id = v2Id,
-                TemplateId = globalTmpl1Id,
-                VersionNumber = 2,
-                TemplateText = "Template text version 2 with {topic} and {style}",
-                VariableDefinitionsJson = "[{\"name\":\"topic\",\"required\":true},{\"name\":\"style\",\"required\":false}]",
-                ChangeDescription = "Added style variable",
-                CreatedAtUtc = nowUtc
-            });
-
-            await db.SaveChangesAsync();
-            Console.WriteLine("    -> PromptVersions created: PASS");
-        }
-
-        // Attempt duplicate version number 1 for globalTmpl1 -> Must FAIL
-        await using (var db = new TiToAIDbContext(dbOptions))
-        {
-            db.PromptVersions.Add(new PromptVersion
-            {
-                Id = vDuplicateVersionId,
-                TemplateId = globalTmpl1Id,
-                VersionNumber = 1, // Duplicate version number!
-                TemplateText = "Conflicting version 1 text",
-                VariableDefinitionsJson = "[]",
-                CreatedAtUtc = nowUtc
-            });
-
-            bool rejected = false;
-            try
-            {
-                await db.SaveChangesAsync();
-            }
-            catch (DbUpdateException ex) when (ex.InnerException is SqliteException sqlEx && sqlEx.SqliteErrorCode == 19)
-            {
-                rejected = true;
-            }
-
-            Assert(rejected, "Duplicate version number for same template must be rejected by uq_prompt_version_template_version!");
-            Console.WriteLine("    -> Duplicate PromptVersion constraint rejection: PASS");
-        }
-
-        // 5. Composite Foreign Key Constraint: CurrentVersionId must belong to this template
-        // Valid pointer: globalTmpl1Id.CurrentVersionId -> v1Id (belongs to globalTmpl1Id) -> PASS
+        // 4. PromptTemplate Text and Variable Definitions Verification (Without Version History)
         await using (var db = new TiToAIDbContext(dbOptions))
         {
             var tmpl = await db.PromptTemplates.FindAsync(globalTmpl1Id);
-            tmpl!.CurrentVersionId = v1Id;
+            Assert(tmpl != null, "Template must exist");
+            tmpl!.TemplateText = "Template text with {topic}";
+            tmpl.VariableDefinitionsJson = "[{\"name\":\"topic\",\"required\":true}]";
             await db.SaveChangesAsync();
-            Console.WriteLine("    -> Setting CurrentVersionId to valid version of same template: PASS");
-        }
-
-        // Create a version for ws1OverrideId
-        string ws1V1Id = "pv-" + Guid.NewGuid().ToString("N");
-        await using (var db = new TiToAIDbContext(dbOptions))
-        {
-            db.PromptVersions.Add(new PromptVersion
-            {
-                Id = ws1V1Id,
-                TemplateId = ws1OverrideId,
-                VersionNumber = 1,
-                TemplateText = "Workspace override text version 1",
-                VariableDefinitionsJson = "[]",
-                CreatedAtUtc = nowUtc
-            });
-            await db.SaveChangesAsync();
-        }
-
-        // Invalid pointer attempt: Set globalTmpl1Id.CurrentVersionId to ws1V1Id (which belongs to ws1OverrideId, not globalTmpl1Id)
-        // With SQLite foreign_keys = ON, composite FK (current_version_id, id) -> PromptVersion(id, template_id) MUST REJECT!
-        await using (var db = new TiToAIDbContext(dbOptions))
-        {
-            var tmpl = await db.PromptTemplates.FindAsync(globalTmpl1Id);
-            tmpl!.CurrentVersionId = ws1V1Id; // Version belonging to a different template!
-
-            bool rejected = false;
-            try
-            {
-                await db.SaveChangesAsync();
-            }
-            catch (DbUpdateException ex) when (ex.InnerException is SqliteException sqlEx && sqlEx.SqliteErrorCode == 19)
-            {
-                rejected = true;
-            }
-
-            Assert(rejected, "CurrentVersionId pointing to a version of a DIFFERENT template must be rejected by composite FK!");
-            Console.WriteLine("    -> Composite Ownership Constraint (CurrentVersionId must belong to same template): PASS");
+            Console.WriteLine("    -> PromptTemplate text and variables update: PASS");
         }
 
         // 6. BrowserProfile and BrowserHandoffCheckpoint

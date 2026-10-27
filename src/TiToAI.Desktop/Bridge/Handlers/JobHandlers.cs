@@ -4,7 +4,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using TiToAI.Application.Jobs;
 using TiToAI.Application.Providers;
-using TiToAI.Contracts.Providers;
 using TiToAI.Contracts.Bridge;
 using TiToAI.Contracts.Jobs;
 
@@ -22,18 +21,15 @@ public sealed class JobHandlers
     };
 
     private readonly JobService _jobService;
-    private readonly ManualHandoffService? _manualHandoffService;
     private readonly Func<EventEnvelope, Task>? _eventSink;
     private long _eventSequenceCounter;
 
     public JobHandlers(
         JobService jobService,
-        Func<EventEnvelope, Task>? eventSink = null,
-        ManualHandoffService? manualHandoffService = null)
+        Func<EventEnvelope, Task>? eventSink = null)
     {
         _jobService = jobService ?? throw new ArgumentNullException(nameof(jobService));
         _eventSink = eventSink;
-        _manualHandoffService = manualHandoffService;
     }
 
     private static T? ParsePayload<T>(RequestEnvelope request) where T : class
@@ -57,20 +53,20 @@ public sealed class JobHandlers
         dispatcher.AllowCommand("job.enqueue");
         dispatcher.AllowCommand("job.get_status");
         dispatcher.AllowCommand("job.list_active");
+        dispatcher.AllowCommand("job.list_history");
         dispatcher.AllowCommand("job.cancel");
         dispatcher.AllowCommand("job.reconcile");
         dispatcher.AllowCommand("job.resume");
-        dispatcher.AllowCommand("job.get_handoff");
-        dispatcher.AllowCommand("job.import_result");
+        dispatcher.AllowCommand("job.retry");
 
         dispatcher.RegisterHandler("job.enqueue", HandleEnqueueAsync);
         dispatcher.RegisterHandler("job.get_status", HandleGetStatusAsync);
         dispatcher.RegisterHandler("job.list_active", HandleListActiveAsync);
+        dispatcher.RegisterHandler("job.list_history", HandleListHistoryAsync);
         dispatcher.RegisterHandler("job.cancel", HandleCancelAsync);
         dispatcher.RegisterHandler("job.reconcile", HandleReconcileAsync);
         dispatcher.RegisterHandler("job.resume", HandleResumeAsync);
-        dispatcher.RegisterHandler("job.get_handoff", HandleGetHandoffAsync);
-        dispatcher.RegisterHandler("job.import_result", HandleImportResultAsync);
+        dispatcher.RegisterHandler("job.retry", HandleRetryAsync);
     }
 
     /// <summary>
@@ -83,11 +79,11 @@ public sealed class JobHandlers
         dispatcher.UnregisterHandler("job.enqueue");
         dispatcher.UnregisterHandler("job.get_status");
         dispatcher.UnregisterHandler("job.list_active");
+        dispatcher.UnregisterHandler("job.list_history");
         dispatcher.UnregisterHandler("job.cancel");
         dispatcher.UnregisterHandler("job.reconcile");
         dispatcher.UnregisterHandler("job.resume");
-        dispatcher.UnregisterHandler("job.get_handoff");
-        dispatcher.UnregisterHandler("job.import_result");
+        dispatcher.UnregisterHandler("job.retry");
     }
 
     public async Task<ResponseEnvelope> HandleEnqueueAsync(RequestEnvelope request, CancellationToken cancellationToken)
@@ -117,7 +113,8 @@ public sealed class JobHandlers
                 NewState: JobState.Queued,
                 ReasonCode: null,
                 ResultReference: null,
-                TimestampUtc: result.CreatedAtUtc
+                TimestampUtc: result.CreatedAtUtc,
+                JobRevision: result.Revision
             )).ConfigureAwait(false);
 
             return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
@@ -209,7 +206,8 @@ public sealed class JobHandlers
                     NewState: JobState.Canceled,
                     ReasonCode: JobReasonCode.UserCanceled,
                     ResultReference: null,
-                    TimestampUtc: DateTimeOffset.UtcNow.ToString("o")
+                    TimestampUtc: DateTimeOffset.UtcNow.ToString("o"),
+                    JobRevision: result.Revision
                 )).ConfigureAwait(false);
             }
 
@@ -251,7 +249,8 @@ public sealed class JobHandlers
                 NewState: result.CurrentState,
                 ReasonCode: null,
                 ResultReference: result.ResultReference,
-                TimestampUtc: DateTimeOffset.UtcNow.ToString("o")
+                TimestampUtc: DateTimeOffset.UtcNow.ToString("o"),
+                JobRevision: result.Revision
             )).ConfigureAwait(false);
 
             return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
@@ -292,7 +291,8 @@ public sealed class JobHandlers
                 NewState: result.State,
                 ReasonCode: null,
                 ResultReference: null,
-                TimestampUtc: DateTimeOffset.UtcNow.ToString("o")
+                TimestampUtc: DateTimeOffset.UtcNow.ToString("o"),
+                JobRevision: result.Revision
             )).ConfigureAwait(false);
 
             return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
@@ -307,33 +307,37 @@ public sealed class JobHandlers
         }
     }
 
-    public async Task<ResponseEnvelope> HandleGetHandoffAsync(RequestEnvelope request, CancellationToken cancellationToken)
+    public async Task<ResponseEnvelope> HandleRetryAsync(RequestEnvelope request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        if (_manualHandoffService is null)
-        {
-            return ResponseEnvelopeHelper.CreateError(
-                request.Id,
-                "NOT_IMPLEMENTED",
-                "Dịch vụ Manual Handoff chưa được cấu hình.",
-                retryable: false);
-        }
-
         try
         {
-            var payload = ParsePayload<JobGetHandoffRequest>(request);
-            if (payload is null || string.IsNullOrWhiteSpace(payload.JobId))
+            var payload = ParsePayload<JobRetryRequest>(request);
+            if (payload is null || string.IsNullOrWhiteSpace(payload.JobId) || string.IsNullOrWhiteSpace(payload.WorkspaceId))
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
                     "INVALID_ARGUMENT",
-                    "Payload thiếu thông tin 'jobId'.",
+                    "Payload yêu cầu thử lại tác vụ thiếu 'workspaceId' hoặc 'jobId'.",
                     retryable: false);
             }
 
-            var handoff = await _manualHandoffService.GetHandoffAsync(payload, cancellationToken).ConfigureAwait(false);
-            return ResponseEnvelopeHelper.CreateSuccess(request.Id, handoff);
+            var result = await _jobService.RetryAsync(payload, cancellationToken).ConfigureAwait(false);
+
+            await EmitEventAsync(payload.WorkspaceId, "job.state_changed", new JobStateChangedPayload(
+                JobId: result.JobId,
+                WorkspaceId: payload.WorkspaceId,
+                ProjectId: null,
+                PreviousState: JobState.Failed,
+                NewState: result.State,
+                ReasonCode: null,
+                ResultReference: null,
+                TimestampUtc: DateTimeOffset.UtcNow.ToString("o"),
+                JobRevision: result.Revision
+            )).ConfigureAwait(false);
+
+            return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
         }
         catch (OperationCanceledException)
         {
@@ -345,32 +349,14 @@ public sealed class JobHandlers
         }
     }
 
-    public async Task<ResponseEnvelope> HandleImportResultAsync(RequestEnvelope request, CancellationToken cancellationToken)
+    public async Task<ResponseEnvelope> HandleListHistoryAsync(RequestEnvelope request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        if (_manualHandoffService is null)
-        {
-            return ResponseEnvelopeHelper.CreateError(
-                request.Id,
-                "NOT_IMPLEMENTED",
-                "Dịch vụ Manual Handoff chưa được cấu hình.",
-                retryable: false);
-        }
-
         try
         {
-            var payload = ParsePayload<JobImportResultRequest>(request);
-            if (payload is null || string.IsNullOrWhiteSpace(payload.JobId))
-            {
-                return ResponseEnvelopeHelper.CreateError(
-                    request.Id,
-                    "INVALID_ARGUMENT",
-                    "Payload thiếu thông tin 'jobId'.",
-                    retryable: false);
-            }
-
-            var result = await _manualHandoffService.ImportResultAsync(payload, cancellationToken).ConfigureAwait(false);
+            var payload = ParsePayload<JobListHistoryRequest>(request) ?? new JobListHistoryRequest();
+            var result = await _jobService.ListHistoryAsync(payload, cancellationToken).ConfigureAwait(false);
             return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
         }
         catch (OperationCanceledException)

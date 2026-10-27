@@ -10,9 +10,9 @@ namespace TiToAI.Application.Jobs;
 /// Bộ thực thi tác vụ Production định tuyến theo Job Snapshot (context.ProviderKey).
 /// Tích hợp ProviderRegistry:
 /// - Nếu adapter cho ProviderKey đã được đăng ký và sẵn sàng: gọi ExecuteAsync của adapter đó.
-/// - Nếu adapter chưa có browser automation hoặc đang ở chế độ ManualOnly / Unavailable:
+/// - Nếu adapter chưa có browser automation hoặc chưa sẵn sàng:
 ///   Trả về Success = false, ReasonCode = "automation_blocked" (hoặc "adapter_not_available"),
-///   chuyển tác vụ sang AwaitingUser một cách an toàn và trung thực,
+///   dừng tác vụ với lỗi rõ ràng, không chuyển giao thủ công,
 ///   TUYỆT ĐỐI KHÔNG sinh kết quả giả mạo hoặc báo URI ảo (PV-R1).
 /// </summary>
 public sealed class ProductionJobExecutor : IJobExecutor
@@ -48,14 +48,23 @@ public sealed class ProductionJobExecutor : IJobExecutor
         if (_providerRegistry.TryGetAdapter(providerKey, out var adapter) && adapter != null)
         {
             var capability = await adapter.GetCapabilityForTaskAsync(context.TaskType, cancellationToken).ConfigureAwait(false);
-            if (capability != null && (!capability.AutomationSupported || capability.VerificationStatus != ProviderVerificationStatus.Verified))
+            if (capability is null || capability.VerificationStatus == ProviderVerificationStatus.Unsupported)
+            {
+                return new JobExecutionResult(
+                    Success: false,
+                    ReasonCode: "CAPABILITY_UNSUPPORTED",
+                    ErrorMessage: $"Nhà cung cấp '{providerKey}' không hỗ trợ tác vụ '{context.TaskType}'."
+                );
+            }
+
+            if (!capability.AutomationSupported || capability.VerificationStatus != ProviderVerificationStatus.Verified)
             {
                 return new JobExecutionResult(
                     Success: false,
                     ResultReference: null,
                     ResultText: null,
                     ReasonCode: "automation_blocked",
-                    ErrorMessage: $"Nhà cung cấp '{providerKey}' cho tác vụ '{context.TaskType}' chưa được xác minh tự động hóa (VerificationStatus: {capability.VerificationStatus}, AutomationSupported: {capability.AutomationSupported}). Vui lòng xử lý thủ công.",
+                    ErrorMessage: $"Nhà cung cấp '{providerKey}' cho tác vụ '{context.TaskType}' chưa sẵn sàng tự động hóa (VerificationStatus: {capability.VerificationStatus}, AutomationSupported: {capability.AutomationSupported}).",
                     SideEffectSubmitted: false
                 );
             }
@@ -68,7 +77,7 @@ public sealed class ProductionJobExecutor : IJobExecutor
             ResultReference: null,
             ResultText: null,
             ReasonCode: "adapter_not_available",
-            ErrorMessage: $"Bộ điều hợp tự động hóa cho nhà cung cấp '{providerKey}' chưa sẵn sàng trong phiên bản này. Vui lòng sử dụng tính năng Xử lý thủ công (Manual Handoff).",
+            ErrorMessage: $"Bộ điều hợp tự động hóa cho nhà cung cấp '{providerKey}' chưa sẵn sàng trong phiên bản này.",
             SideEffectSubmitted: false
         );
     }

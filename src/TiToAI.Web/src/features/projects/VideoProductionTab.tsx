@@ -10,10 +10,25 @@ import {
   type ProjectWorkflowConfigDto,
   type SceneWorkflowDetailDto,
   type PreviewAiPromptResponseData,
+  type VideoContentItemDto,
   DEFAULT_SUPPORTED_DURATIONS,
 } from "./videoWorkflowApi";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from "@/components/ui/table";
 import { AssetPicker } from "../library/AssetPicker";
-import { uploadAsset, type AssetItem } from "../library/libraryApi";
+import { promptApi, extractTemplateVariables, renderPromptTemplateClient } from "../prompts/promptApi";
+import {
+  getActivePromptId,
+  getStoredPrompts,
+  DEFAULT_PRESET_PROMPTS,
+} from "../prompts/promptStorage";
+import { openAssetFolder, uploadAsset, type AssetItem } from "../library/libraryApi";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -48,7 +63,103 @@ import {
   Loader2,
   RefreshCw,
   Eye,
+  Edit3,
+  Video,
+  FileText,
 } from "lucide-react";
+
+const SYSTEM_VARIABLES = new Set([
+  "duration",
+  "thoi_luong",
+]);
+
+function promptValuesStorageKey(workspaceId: string, projectId: string): string {
+  return `titoai_workflow_prompt_values_${workspaceId}_${projectId}`;
+}
+
+function readPromptValues(workspaceId: string, projectId: string): Record<string, string> {
+  try {
+    const stored = localStorage.getItem(promptValuesStorageKey(workspaceId, projectId));
+    const values = stored ? JSON.parse(stored) : null;
+    return values && typeof values === "object" && !Array.isArray(values) ? values : {};
+  } catch {
+    return {};
+  }
+}
+
+async function loadActiveTemplateInfo(
+  purpose: "Script" | "VideoPrompt",
+  workspaceId: string
+): Promise<ActiveTemplateInfo | null> {
+  try {
+    const backendTemplate = await promptApi.getTemplate(undefined, purpose, workspaceId);
+    const templateText = backendTemplate?.currentVersion?.templateText;
+    if (templateText) {
+      return {
+        name: backendTemplate.template?.isOverride ? `Mẫu ${purpose} kênh tùy chỉnh` : `Mẫu ${purpose} toàn cục`,
+        isOverride: Boolean(backendTemplate.template?.isOverride),
+        templateText,
+        variables: extractTemplateVariables(templateText).filter((name) => !SYSTEM_VARIABLES.has(name.trim().toLowerCase())),
+      };
+    }
+  } catch {
+    // Fallback sang prompt local nếu chưa đọc được template từ backend.
+  }
+
+  const activePromptId = getActivePromptId(purpose, workspaceId);
+  const storedPrompt = activePromptId
+    ? getStoredPrompts(workspaceId).find((prompt) => prompt.id === activePromptId) ||
+      DEFAULT_PRESET_PROMPTS[purpose].find((prompt) => prompt.id === activePromptId)
+    : null;
+  const fallbackPrompt = storedPrompt || DEFAULT_PRESET_PROMPTS[purpose][0];
+  if (!fallbackPrompt) return null;
+
+  return {
+    name: fallbackPrompt.name,
+    isOverride: !fallbackPrompt.isPreset,
+    templateText: fallbackPrompt.templateText,
+    variables: extractTemplateVariables(fallbackPrompt.templateText).filter(
+      (name) => !SYSTEM_VARIABLES.has(name.trim().toLowerCase())
+    ),
+  };
+}
+
+export interface ActiveTemplateInfo {
+  name: string;
+  isOverride: boolean;
+  templateText: string;
+  variables: string[];
+}
+
+function getVariableLabel(varName: string): string {
+  const knownLabels: Record<string, string> = {
+    chu_de: "Chủ đề video",
+    san_pham: "Sản phẩm",
+    phong_cach: "Phong cách",
+    hanh_dong: "Hành động",
+    doi_tuong_khach_hang: "Đối tượng khách hàng",
+    thoi_luong: "Thời lượng",
+    loi_ich: "Lợi ích chính",
+    diem_nhan: "Điểm nhấn",
+    boi_canh: "Bối cảnh",
+  };
+  const friendly = knownLabels[varName.toLowerCase()] || `Biến ${varName}`;
+  return `${friendly} ({${varName}})`;
+}
+
+function getVariablePlaceholder(varName: string): string {
+  const knownPlaceholders: Record<string, string> = {
+    chu_de: "Ví dụ: Thời trang công sở thanh lịch, Đồ gia dụng thông minh...",
+    san_pham: "Ví dụ: Áo lụa cao cấp, Nồi chiên không dầu Lock&Lock...",
+    phong_cach: "Ví dụ: Năng động thanh lịch, Review chân thực, Hài hước viral...",
+    hanh_dong: "Ví dụ: Người mẫu bước đi tự nhiên, mở hộp sản phẩm...",
+    doi_tuong_khach_hang: "Ví dụ: Nữ giới 22-35 tuổi, dân văn phòng...",
+    thoi_luong: "Ví dụ: 15 giây, 30 giây...",
+    loi_ich: "Ví dụ: Vải lụa mát, tôn dáng và chống nhăn...",
+    boi_canh: "Ví dụ: Đường phố Paris ngập nắng, quán cafe hiện đại...",
+  };
+  return knownPlaceholders[varName.toLowerCase()] || `Nhập giá trị cho {${varName}}...`;
+}
 
 export interface VideoProductionTabProps {
   workspaceId: string;
@@ -92,18 +203,108 @@ export function VideoProductionTab({
   // Dirty state tracking
   const [isDirty, setIsDirty] = useState(false);
 
-  // Fetch initial config & scene list
+  // Active Prompt Template Info & Dynamic Variables
+  const [activeTemplateInfo, setActiveTemplateInfo] = useState<ActiveTemplateInfo | null>(null);
+  const [videoPromptTemplateInfo, setVideoPromptTemplateInfo] = useState<ActiveTemplateInfo | null>(null);
+  const [promptValues, setPromptValues] = useState<Record<string, string>>({});
+
+  const templateValues = useMemo(() => {
+    const duration = `${config?.targetDurationPerSceneSeconds ?? 15}s`;
+    return {
+      ...promptValues,
+      duration,
+      DURATION: duration,
+      thoi_luong: duration,
+      THOI_LUONG: duration,
+    };
+  }, [config?.targetDurationPerSceneSeconds, promptValues]);
+
+  const scriptPromptRender = useMemo(
+    () => activeTemplateInfo
+      ? renderPromptTemplateClient(activeTemplateInfo.templateText, templateValues)
+      : { renderedText: config?.scriptPromptText ?? "", missingVariables: [] as string[] },
+    [activeTemplateInfo, config?.scriptPromptText, templateValues]
+  );
+
+  const videoPromptRender = useMemo(
+    () => videoPromptTemplateInfo
+      ? renderPromptTemplateClient(videoPromptTemplateInfo.templateText, templateValues)
+      : { renderedText: config?.videoPromptText ?? "", missingVariables: [] as string[] },
+    [videoPromptTemplateInfo, config?.videoPromptText, templateValues]
+  );
+
+  const promptVariableNames = useMemo(
+    () => [...new Set([...(activeTemplateInfo?.variables ?? []), ...(videoPromptTemplateInfo?.variables ?? [])])],
+    [activeTemplateInfo?.variables, videoPromptTemplateInfo?.variables]
+  );
+
+  const missingPromptVariables = useMemo(
+    () => [...new Set([...scriptPromptRender.missingVariables, ...videoPromptRender.missingVariables])],
+    [scriptPromptRender.missingVariables, videoPromptRender.missingVariables]
+  );
+
+  const saveConfigRequest = () => {
+    if (!config) throw new Error("Cấu hình chưa sẵn sàng.");
+    if (missingPromptVariables.length > 0) {
+      throw new Error(`Vui lòng điền các biến trong mẫu prompt: ${missingPromptVariables.map((name) => `{${name}}`).join(", ")}.`);
+    }
+    return {
+      workspaceId,
+      projectId,
+      workflowMode: config.workflowMode,
+      goalPrompt: "",
+      modelAssetId: config.modelAssetId,
+      productAssetId: config.productAssetId,
+      readyImageAssetId: config.readyImageAssetId,
+      audioOption: config.audioOption,
+      audioAssetId: config.audioAssetId,
+      targetSceneCount: 1,
+      targetDurationPerSceneSeconds: config.targetDurationPerSceneSeconds,
+      scriptPromptText: scriptPromptRender.renderedText,
+      videoPromptText: videoPromptRender.renderedText,
+    };
+  };
+
+  // Video Content & Script Items (Table view for AI content generated)
+  const [contentItems, setContentItems] = useState<VideoContentItemDto[]>([]);
+  const [editingContentItem, setEditingContentItem] = useState<VideoContentItemDto | null>(null);
+  const [editIdea, setEditIdea] = useState("");
+  const [editHook, setEditHook] = useState("");
+  const [editVideoScript, setEditVideoScript] = useState("");
+  const [editVideoPrompt, setEditVideoPrompt] = useState("");
+  const [editTikTokContent, setEditTikTokContent] = useState("");
+  const [isUpdatingContent, setIsUpdatingContent] = useState(false);
+  const [submittingVideoItemId, setSubmittingVideoItemId] = useState<string | null>(null);
+  const [isPreparingTikTokExport, setIsPreparingTikTokExport] = useState(false);
+
+  // Fetch initial config & scene list & content items & prompt template
   const loadData = useCallback(async () => {
     if (!workspaceId || !projectId) return;
     try {
       setIsLoading(true);
       setErrorMessage(null);
-      const [cfg, scns] = await Promise.all([
+      const [cfg, scns, cItems] = await Promise.all([
         videoWorkflowApi.getConfig(workspaceId, projectId),
         videoWorkflowApi.listScenes(workspaceId, projectId),
+        videoWorkflowApi.listContentItems(workspaceId, projectId),
       ]);
-      setConfig(cfg);
+
+      const initialVars = readPromptValues(workspaceId, projectId);
+      if (cfg.goalPrompt && !initialVars["chu_de"]) {
+        initialVars["chu_de"] = cfg.goalPrompt;
+      }
+      setPromptValues(initialVars);
+      setConfig({ ...cfg, goalPrompt: "" });
+
       setScenes(scns);
+      setContentItems(cItems);
+
+      const [scriptTemplate, videoPromptTemplate] = await Promise.all([
+        loadActiveTemplateInfo("Script", workspaceId),
+        loadActiveTemplateInfo("VideoPrompt", workspaceId),
+      ]);
+      setActiveTemplateInfo(scriptTemplate);
+      setVideoPromptTemplateInfo(videoPromptTemplate);
     } catch (err: unknown) {
       console.error("[VideoProductionTab] Lỗi tải dữ liệu quy trình:", err);
       setErrorMessage((err as Error)?.message || "Không thể tải cấu hình quy trình sản xuất video.");
@@ -111,6 +312,104 @@ export function VideoProductionTab({
       setIsLoading(false);
     }
   }, [workspaceId, projectId]);
+
+  // Open Edit Content Modal
+  const handleOpenEditContent = (item: VideoContentItemDto) => {
+    setEditingContentItem(item);
+    setEditIdea(item.idea || "");
+    setEditHook(item.hook || "");
+    setEditVideoScript(item.videoScript || "");
+    setEditVideoPrompt(item.videoPrompt || "");
+    setEditTikTokContent(item.tiktokContent || "");
+  };
+
+  // Save Content Edit
+  const handleSaveContentEdit = async () => {
+    if (!editingContentItem) return;
+    try {
+      setIsUpdatingContent(true);
+      await videoWorkflowApi.updateContentItem({
+        workspaceId,
+        projectId,
+        itemId: editingContentItem.id,
+        idea: editIdea,
+        hook: editHook,
+        videoScript: editVideoScript,
+        videoPrompt: editVideoPrompt,
+        tiktokContent: editTikTokContent,
+      });
+      setEditingContentItem(null);
+      setSuccessMessage("Đã cập nhật nội dung kịch bản & prompt AI thành công!");
+      await loadData();
+    } catch (err: unknown) {
+      setErrorMessage((err as Error)?.message || "Không thể cập nhật kịch bản.");
+    } finally {
+      setIsUpdatingContent(false);
+    }
+  };
+
+  // Trigger Video Generation for a specific content item
+  const handleCreateSceneVideo = async (item: VideoContentItemDto) => {
+    try {
+      setSubmittingVideoItemId(item.id);
+      setErrorMessage(null);
+      await videoWorkflowApi.createSceneVideo({
+        workspaceId,
+        projectId,
+        itemId: item.id,
+      });
+      setSuccessMessage(`Đã đưa yêu cầu tạo video cho Cảnh ${item.sequenceOrder} vào hàng đợi xử lý!`);
+      await loadData();
+      onRefreshProject?.();
+    } catch (err: unknown) {
+      setErrorMessage((err as Error)?.message || "Không thể tạo video cho cảnh.");
+    } finally {
+      setSubmittingVideoItemId(null);
+    }
+  };
+
+  const handlePrepareTikTokExport = async () => {
+    const outputScene = scenes.length === 1 ? scenes[0] : null;
+    if (!outputScene?.videoAssetId || outputScene.isStale) {
+      setErrorMessage("Cần đúng một video đầu ra hoàn chỉnh, không bị đánh dấu cần xem lại, trước khi chuẩn bị đăng TikTok.");
+      return;
+    }
+
+    setIsPreparingTikTokExport(true);
+    setErrorMessage(null);
+    try {
+      const caption = contentItems.find((item) => item.tiktokContent.trim())?.tiktokContent.trim();
+      let captionCopied = false;
+      if (caption) {
+        try {
+          await navigator.clipboard.writeText(caption);
+          captionCopied = true;
+        } catch {
+          // File export remains useful if clipboard permission is unavailable.
+        }
+      }
+
+      const result = await openAssetFolder({
+        assetId: outputScene.videoAssetId,
+        workspaceId,
+      });
+      if (!result.success) {
+        throw new Error("Không mở được thư mục chứa video. Hãy mở thư viện để kiểm tra tệp.");
+      }
+
+      setSuccessMessage(
+        captionCopied
+          ? "Đã mở thư mục video và sao chép caption. Hãy tự tải video lên TikTok; TiToAI chưa xác nhận bài đăng."
+          : caption
+            ? "Đã mở thư mục video. Không sao chép được caption; hãy sao chép thủ công rồi tự đăng TikTok."
+            : "Đã mở thư mục video. Chưa có caption để sao chép; hãy thêm nội dung rồi tự đăng TikTok.",
+      );
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Không thể chuẩn bị tệp đăng TikTok.");
+    } finally {
+      setIsPreparingTikTokExport(false);
+    }
+  };
 
   useEffect(() => {
     loadData();
@@ -127,9 +426,16 @@ export function VideoProductionTab({
   };
 
   // Handle Input Changes
-  const handleGoalPromptChange = (val: string) => {
-    if (!config) return;
-    setConfig({ ...config, goalPrompt: val });
+  const handlePromptVariableChange = (varName: string, value: string) => {
+    setPromptValues((prev) => {
+      const next = { ...prev, [varName]: value };
+      try {
+        localStorage.setItem(promptValuesStorageKey(workspaceId, projectId), JSON.stringify(next));
+      } catch {
+        // Keep the current form usable when local storage is unavailable.
+      }
+      return next;
+    });
     setIsDirty(true);
   };
 
@@ -140,12 +446,6 @@ export function VideoProductionTab({
       audioOption: option,
       audioAssetId: option === AudioOptions.None ? null : config.audioAssetId,
     });
-    setIsDirty(true);
-  };
-
-  const handleTargetSceneCountChange = (val: number) => {
-    if (!config) return;
-    setConfig({ ...config, targetSceneCount: Math.max(1, Math.min(10, val)) });
     setIsDirty(true);
   };
 
@@ -220,17 +520,7 @@ export function VideoProductionTab({
     try {
       setErrorMessage(null);
       const saved = await videoWorkflowApi.saveConfig({
-        workspaceId,
-        projectId,
-        workflowMode: config.workflowMode,
-        goalPrompt: config.goalPrompt,
-        modelAssetId: config.modelAssetId,
-        productAssetId: config.productAssetId,
-        readyImageAssetId: config.readyImageAssetId,
-        audioOption: config.audioOption,
-        audioAssetId: config.audioAssetId,
-        targetSceneCount: config.targetSceneCount,
-        targetDurationPerSceneSeconds: config.targetDurationPerSceneSeconds,
+        ...saveConfigRequest(),
       });
       setConfig(saved);
       setIsDirty(false);
@@ -251,17 +541,7 @@ export function VideoProductionTab({
       // Lưu config nếu có thay đổi để preview khớp dữ liệu hiện hành
       if (isDirty) {
         await videoWorkflowApi.saveConfig({
-          workspaceId,
-          projectId,
-          workflowMode: config.workflowMode,
-          goalPrompt: config.goalPrompt,
-          modelAssetId: config.modelAssetId,
-          productAssetId: config.productAssetId,
-          readyImageAssetId: config.readyImageAssetId,
-          audioOption: config.audioOption,
-          audioAssetId: config.audioAssetId,
-          targetSceneCount: config.targetSceneCount,
-          targetDurationPerSceneSeconds: config.targetDurationPerSceneSeconds,
+          ...saveConfigRequest(),
         });
         setIsDirty(false);
       }
@@ -286,13 +566,6 @@ export function VideoProductionTab({
       setIsStarting(true);
       setErrorMessage(null);
 
-      const trimmedGoal = (config.goalPrompt || "").trim();
-      if (!trimmedGoal) {
-        setErrorMessage("Vui lòng nhập yêu cầu nội dung / phong cách chuyển động trước khi bắt đầu tạo video.");
-        setIsStarting(false);
-        return;
-      }
-
       const isSupportedDuration = DEFAULT_SUPPORTED_DURATIONS.includes(config.targetDurationPerSceneSeconds as 10 | 15);
       if (!isSupportedDuration) {
         setErrorMessage(`Thời lượng ${config.targetDurationPerSceneSeconds}s không được nhà cung cấp video hỗ trợ. Vui lòng chọn lại thời lượng hợp lệ (${DEFAULT_SUPPORTED_DURATIONS.join("s hoặc ")}s) trước khi bắt đầu.`);
@@ -302,17 +575,7 @@ export function VideoProductionTab({
 
       // Lưu config trước khi start
       await videoWorkflowApi.saveConfig({
-        workspaceId,
-        projectId,
-        workflowMode: config.workflowMode,
-        goalPrompt: config.goalPrompt,
-        modelAssetId: config.modelAssetId,
-        productAssetId: config.productAssetId,
-        readyImageAssetId: config.readyImageAssetId,
-        audioOption: config.audioOption,
-        audioAssetId: config.audioAssetId,
-        targetSceneCount: config.targetSceneCount,
-        targetDurationPerSceneSeconds: config.targetDurationPerSceneSeconds,
+        ...saveConfigRequest(),
       });
 
       const res = await videoWorkflowApi.startWorkflow(workspaceId, projectId);
@@ -490,6 +753,139 @@ export function VideoProductionTab({
           </Button>
         </div>
       </div>
+
+
+      {/* ============================================================== */}
+      {/* BẢNG KỊCH BẢN & PROMPT VIDEO AI (DẠNG BẢNG - REVIEW & ACTIONS) */}
+      {/* ============================================================== */}
+      {contentItems.length > 0 && (
+        <Card className="border-primary/30 shadow-xs">
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-base flex items-center gap-2 text-foreground">
+                  <FileText className="h-5 w-5 text-primary" />
+                  Bảng Kịch bản & Prompt Video AI ({contentItems.length} cảnh đã lưu CSDL)
+                </CardTitle>
+                <p className="text-xs text-muted-foreground mt-1">
+                  AI đã tạo nội dung đầy đủ theo 5 trường chuẩn: Ý tưởng, Hook 3s đầu, Kịch bản, Prompt sinh video và Nội dung TikTok. Bạn có thể xem kỹ, sửa trực tiếp và bấm "Tạo video" để đưa vào hàng đợi sản xuất.
+                </p>
+              </div>
+              <Badge variant="outline" className="border-primary/40 text-primary bg-primary/5">
+                {contentItems.filter((i) => i.status === "Completed" || !!i.videoAssetId).length}/{contentItems.length} video đã render
+              </Badge>
+            </div>
+          </CardHeader>
+
+          <CardContent className="p-0">
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader className="bg-muted/40">
+                  <TableRow>
+                    <TableHead className="w-[60px] text-center font-semibold">Cảnh</TableHead>
+                    <TableHead className="min-w-[140px] font-semibold">Ý tưởng (Idea)</TableHead>
+                    <TableHead className="min-w-[160px] font-semibold">Hook (3s đầu)</TableHead>
+                    <TableHead className="min-w-[200px] font-semibold">Kịch bản (Script)</TableHead>
+                    <TableHead className="min-w-[240px] font-semibold">Prompt Video AI</TableHead>
+                    <TableHead className="min-w-[160px] font-semibold">Nội dung TikTok</TableHead>
+                    <TableHead className="min-w-[120px] font-semibold text-center">Ảnh tham chiếu</TableHead>
+                    <TableHead className="min-w-[110px] font-semibold text-center">Trạng thái</TableHead>
+                    <TableHead className="min-w-[160px] text-right font-semibold pr-4">Thao tác</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {contentItems.map((item, index) => {
+                    const isRendering = submittingVideoItemId === item.id || item.status === "Queued" || item.status === "InProgress";
+                    const isDone = item.status === "Completed" || !!item.videoAssetId;
+                    const isPrimaryOutput = index === 0;
+                    return (
+                      <TableRow key={item.id} className="hover:bg-muted/20">
+                        <TableCell className="text-center font-bold text-foreground">
+                          #{item.sequenceOrder}
+                        </TableCell>
+                        <TableCell className="text-xs text-foreground font-medium align-top">
+                          <p className="line-clamp-3 leading-relaxed" title={item.idea}>
+                            {item.idea || "—"}
+                          </p>
+                        </TableCell>
+                        <TableCell className="text-xs text-foreground align-top">
+                          <div className="p-1.5 rounded bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-300">
+                            <p className="line-clamp-3 font-medium leading-relaxed" title={item.hook}>
+                              {item.hook || "—"}
+                            </p>
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground align-top">
+                          <p className="line-clamp-4 leading-relaxed" title={item.videoScript}>
+                            {item.videoScript || "—"}
+                          </p>
+                        </TableCell>
+                        <TableCell className="text-xs align-top">
+                          <div className="p-2 rounded bg-muted/60 border border-border font-mono text-[11px] leading-relaxed max-h-24 overflow-y-auto">
+                            {item.videoPrompt || "Chưa có prompt video"}
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground align-top">
+                          <p className="line-clamp-3 leading-relaxed" title={item.tiktokContent}>
+                            {item.tiktokContent || "—"}
+                          </p>
+                        </TableCell>
+                        <TableCell className="text-center text-xs align-top">
+                          {item.imageAssetId ? (
+                            <Badge variant="secondary" className="text-[10px] truncate max-w-[100px]" title={item.imageAssetId}>
+                              {item.imageAssetId.slice(0, 8)}…
+                            </Badge>
+                          ) : (
+                            <span className="text-[11px] text-muted-foreground">Theo cảnh</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-center align-top">
+                          <Badge
+                            variant={isDone ? "success" : isRendering ? "info" : "secondary"}
+                            className="text-[10px] px-2 py-0.5"
+                          >
+                            {isDone ? "Đã xong" : isRendering ? "Đang xử lý" : item.status === "Failed" ? "Lỗi" : "Bản nháp"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right align-top pr-4">
+                          <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-7 text-xs px-2 gap-1"
+                              onClick={() => handleOpenEditContent(item)}
+                              title="Chỉnh sửa nội dung & prompt"
+                            >
+                              <Edit3 className="h-3 w-3" /> Sửa
+                            </Button>
+
+                            <Button
+                              type="button"
+                              size="sm"
+                              className="h-7 text-xs px-2.5 gap-1 bg-primary text-primary-foreground font-medium"
+                              disabled={isRendering || !isPrimaryOutput}
+                              onClick={() => handleCreateSceneVideo(item)}
+                              title={isPrimaryOutput ? "Tạo hoặc tạo lại video duy nhất của dự án" : "Một dự án chỉ tạo một video đầu ra"}
+                            >
+                              {isRendering ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <Video className="h-3 w-3" />
+                              )}
+                              <span>{!isPrimaryOutput ? "Video đã chọn" : isDone ? "Tạo lại" : "Tạo video"}</span>
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* ============================================================== */}
       {/* 1. MÀN HÌNH CHÍNH: CHUẨN BỊ (PREPARING)                         */}
@@ -820,12 +1216,25 @@ export function VideoProductionTab({
 
               <Separator />
 
-              {/* Ô Prompt / Brief mục tiêu */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="goal-prompt" className="text-sm font-medium">
-                    Yêu cầu nội dung / Phong cách chuyển động:
-                  </Label>
+              {/* Ô Prompt / Brief mục tiêu & Biến số theo mẫu Prompt */}
+              <div className="space-y-4">
+                {/* Thông báo mẫu prompt áp dụng */}
+                <div className="flex items-center justify-between flex-wrap gap-2 p-2.5 rounded-md bg-muted/40 border border-border text-xs">
+                  <div className="flex items-center gap-2">
+                    <FileText className="h-4 w-4 text-primary shrink-0" />
+                    <span>
+                      Mẫu prompt áp dụng:{" "}
+                      <strong className="text-foreground">
+                        {activeTemplateInfo?.name || "Mẫu Script chuẩn"} · {videoPromptTemplateInfo?.name || "Mẫu VideoPrompt chuẩn"}
+                      </strong>
+                    </span>
+                    <Badge
+                      variant={activeTemplateInfo?.isOverride ? "default" : "secondary"}
+                      className="text-[10px] h-5"
+                    >
+                      {activeTemplateInfo?.isOverride || videoPromptTemplateInfo?.isOverride ? "Có mẫu kênh tùy chỉnh" : "Toàn cục"}
+                    </Badge>
+                  </div>
                   <Button
                     type="button"
                     variant="ghost"
@@ -839,17 +1248,38 @@ export function VideoProductionTab({
                     <span>{isLoadingAiPreview ? "Đang tải…" : "Xem yêu cầu gửi AI"}</span>
                   </Button>
                 </div>
-                <Textarea
-                  id="goal-prompt"
-                  value={config.goalPrompt}
-                  onChange={(e) => handleGoalPromptChange(e.target.value)}
-                  placeholder="Ví dụ: Trang phục dạo phố năng động thanh lịch. Thể hiện rõ chất vải lụa mềm rủ và form dáng khi người mẫu bước đi tự nhiên..."
-                  rows={3}
-                  className="resize-none"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Yêu cầu này được gửi cùng mẫu Prompt video để AI viết nội dung cho từng clip.
-                </p>
+
+                {/* Khối form các ô nhập liệu động theo mẫu Prompt (Dynamic Variable Inputs) */}
+                {promptVariableNames.length > 0 && (
+                  <div className="space-y-3 p-3.5 rounded-lg border border-primary/20 bg-primary/5">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="h-4 w-4 text-primary shrink-0" />
+                      <span className="text-xs font-semibold text-foreground">
+                        Biến số theo Mẫu Prompt ({promptVariableNames.length} biến cần nhập)
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {promptVariableNames.map((varName) => (
+                        <div key={varName} className="space-y-1.5">
+                          <Label htmlFor={`var-input-${varName}`} className="text-xs font-medium text-foreground">
+                            {getVariableLabel(varName)}:
+                          </Label>
+                          <Input
+                            id={`var-input-${varName}`}
+                            value={promptValues[varName] ?? ""}
+                            onChange={(e) => handlePromptVariableChange(varName, e.target.value)}
+                            placeholder={getVariablePlaceholder(varName)}
+                            className="h-9 text-xs bg-background"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      Giao diện điền biến vào từng mẫu rồi lưu nội dung đã render thành văn bản cho backend.
+                    </p>
+                  </div>
+                )}
+
               </div>
 
               {/* Tùy chọn Audio (§3.3 - Audio không bắt buộc) */}
@@ -927,22 +1357,17 @@ export function VideoProductionTab({
                 )}
               </div>
 
-              {/* Giới hạn Run: Số clip và thời lượng mục tiêu theo capability (§2, CD01–CD05) */}
+              {/* Một Project tạo đúng một video; scene là cấu trúc nội bộ của video. */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-lg pt-2">
                 <div className="space-y-1.5">
-                  <Label htmlFor="target-scenes" className="text-xs font-medium">
-                    Số clip cần tạo:
+                  <Label className="text-xs font-medium">
+                    Video đầu ra:
                   </Label>
-                  <Input
-                    id="target-scenes"
-                    type="number"
-                    min={1}
-                    max={10}
-                    value={config.targetSceneCount}
-                    onChange={(e) => handleTargetSceneCountChange(parseInt(e.target.value) || 1)}
-                  />
+                  <div className="h-9 flex items-center rounded-md border border-input bg-muted/30 px-3 text-xs font-medium">
+                    1 video cho mỗi dự án
+                  </div>
                   <p className="text-[11px] text-muted-foreground">
-                    Số clip độc lập muốn tạo (mặc định 1 clip).
+                    AI có thể chia storyboard nội bộ; đầu ra đăng là một video.
                   </p>
                 </div>
 
@@ -986,10 +1411,10 @@ export function VideoProductionTab({
                 <div className="col-span-1 sm:col-span-2 p-3 rounded-lg bg-muted/40 border border-border text-xs text-foreground space-y-1">
                   <div className="font-semibold flex items-center gap-1.5 text-primary">
                     <Sparkles className="h-3.5 w-3.5" />
-                    <span>Tóm tắt: Tạo {config.targetSceneCount} clip riêng × {config.targetDurationPerSceneSeconds} giây</span>
+                    <span>Tóm tắt: Tạo 1 video, mục tiêu {config.targetDurationPerSceneSeconds} giây</span>
                   </div>
                   <p className="text-muted-foreground text-[11px]">
-                    Hệ thống sẽ sản xuất {config.targetSceneCount} clip độc lập. Phân cảnh bên trong do AI tự điều phối theo nội dung; không ghép thành một video dài.
+                    Mỗi Project tạo một video đầu ra. Nếu provider chỉ trả các clip rời, TiToAI sẽ không ghép chúng thành video.
                   </p>
                 </div>
               </div>
@@ -1128,6 +1553,39 @@ export function VideoProductionTab({
       {/* ============================================================== */}
       {mainView === "completed" && (
         <div className="space-y-6">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Chuẩn bị đăng TikTok</CardTitle>
+              <p className="text-xs text-muted-foreground">
+                TiToAI mở thư mục video và sao chép caption để bạn tự xem lại và đăng trên TikTok. Ứng dụng không tải video lên hoặc xác nhận bài đăng.
+              </p>
+            </CardHeader>
+            <CardFooter className="border-t pt-3 flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
+              {scenes.length === 1 && scenes[0]?.videoAssetId && !scenes[0].isStale ? (
+                <span className="text-xs text-muted-foreground">
+                  Một video đầu ra đã sẵn sàng.
+                </span>
+              ) : (
+                <span className="text-xs text-muted-foreground">
+                  Cần đúng một video đầu ra hoàn chỉnh, chưa stale. Các clip rời không thể đăng như một video duy nhất.
+                </span>
+              )}
+              <Button
+                type="button"
+                onClick={handlePrepareTikTokExport}
+                disabled={isPreparingTikTokExport || scenes.length !== 1 || !scenes[0]?.videoAssetId || Boolean(scenes[0]?.isStale)}
+                className="gap-2"
+              >
+                {isPreparingTikTokExport ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <FolderOpen className="h-4 w-4" />
+                )}
+                Mở video và sao chép caption
+              </Button>
+            </CardFooter>
+          </Card>
+
           <Card>
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
@@ -1418,6 +1876,109 @@ export function VideoProductionTab({
             </span>
             <Button variant="outline" size="sm" onClick={() => setIsAiPreviewOpen(false)}>
               Đóng
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+
+      {/* ============================================================== */}
+      {/* DIALOG CHỈNH SỬA KỊCH BẢN & PROMPT VIDEO AI (5 TRƯỜNG SCHEMA)    */}
+      {/* ============================================================== */}
+      <Dialog
+        open={!!editingContentItem}
+        onOpenChange={(open) => !open && setEditingContentItem(null)}
+      >
+        <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Edit3 className="h-4 w-4 text-primary" />
+              Chỉnh sửa kịch bản & Prompt — Cảnh #{editingContentItem?.sequenceOrder}
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Điều chỉnh các trường nội dung AI đã sinh. Khi lưu, các trường này sẽ được cập nhật trong CSDL và dùng để đưa vào queue tạo video.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3 py-2 overflow-y-auto flex-1 pr-1 text-xs">
+            <div className="space-y-1">
+              <Label className="font-semibold text-foreground">1. Ý tưởng video (Idea):</Label>
+              <Input
+                value={editIdea}
+                onChange={(e) => setEditIdea(e.target.value)}
+                placeholder="Ý tưởng chủ đạo của cảnh..."
+                className="text-xs"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <Label className="font-semibold text-foreground">2. Hook (3 giây đầu thu hút):</Label>
+              <Input
+                value={editHook}
+                onChange={(e) => setEditHook(e.target.value)}
+                placeholder="Câu hook gây tò mò, kích thích người xem dừng lại..."
+                className="text-xs font-medium"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <Label className="font-semibold text-foreground">3. Kịch bản chi tiết (Video Script):</Label>
+              <Textarea
+                value={editVideoScript}
+                onChange={(e) => setEditVideoScript(e.target.value)}
+                rows={3}
+                placeholder="Lời bình, diễn biến, hành động của người mẫu trong cảnh..."
+                className="resize-none text-xs"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <Label className="font-semibold text-foreground">
+                4. Prompt tạo video AI (Video Prompt cho MuseAI / Sora):
+              </Label>
+              <Textarea
+                value={editVideoPrompt}
+                onChange={(e) => setEditVideoPrompt(e.target.value)}
+                rows={4}
+                placeholder="Prompt tiếng Anh mô tả chuyển động camera, ánh sáng, góc quay..."
+                className="resize-none text-xs font-mono bg-muted/30"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <Label className="font-semibold text-foreground">5. Nội dung đăng TikTok (TikTok Content / Caption & Hashtags):</Label>
+              <Textarea
+                value={editTikTokContent}
+                onChange={(e) => setEditTikTokContent(e.target.value)}
+                rows={2}
+                placeholder="Caption kèm hashtag TikTok..."
+                className="resize-none text-xs"
+              />
+            </div>
+          </div>
+
+          <DialogFooter className="border-t pt-3 flex items-center justify-between sm:justify-between">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setEditingContentItem(null)}
+            >
+              Hủy
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={handleSaveContentEdit}
+              disabled={isUpdatingContent}
+              className="gap-1.5"
+            >
+              {isUpdatingContent ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <CheckCircle2 className="h-3.5 w-3.5" />
+              )}
+              Lưu thay đổi kịch bản
             </Button>
           </DialogFooter>
         </DialogContent>

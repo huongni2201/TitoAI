@@ -496,6 +496,12 @@ namespace TiToAI.Infrastructure.Persistence.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("updated_at_utc");
 
+                    b.Property<long>("Revision")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(1L)
+                        .HasColumnName("revision");
+
                     b.Property<string>("WorkspaceId")
                         .IsRequired()
                         .HasColumnType("TEXT")
@@ -791,6 +797,69 @@ namespace TiToAI.Infrastructure.Persistence.Migrations
                     b.ToTable("Scene", (string)null);
                 });
 
+            modelBuilder.Entity("TiToAI.Infrastructure.Persistence.Entities.AnalyticsSnapshot", b =>
+                {
+                    b.Property<string>("Id").IsRequired().HasColumnType("TEXT").HasColumnName("id");
+                    b.Property<string>("WorkspaceId").IsRequired().HasColumnType("TEXT").HasColumnName("workspace_id");
+                    b.Property<string>("AccountId").HasColumnType("TEXT").HasColumnName("account_id");
+                    b.Property<string>("Source").IsRequired().HasColumnType("TEXT").HasColumnName("source");
+                    b.Property<DateTime?>("PeriodStart").HasColumnType("TEXT").HasColumnName("period_start");
+                    b.Property<DateTime?>("PeriodEnd").HasColumnType("TEXT").HasColumnName("period_end");
+                    b.Property<int>("RecordCount").IsRequired().HasColumnType("INTEGER").HasColumnName("record_count");
+                    b.Property<string>("RawManifest").HasColumnType("TEXT").HasColumnName("raw_manifest");
+                    b.Property<DateTime>("CreatedAtUtc").IsRequired().HasColumnType("TEXT").HasColumnName("created_at_utc");
+                    b.HasKey("Id");
+                    b.HasIndex("WorkspaceId", "CreatedAtUtc").HasDatabaseName("ix_analytics_snapshot_workspace_created");
+                    b.ToTable("AnalyticsSnapshot", (string)null);
+                });
+
+            modelBuilder.Entity("TiToAI.Infrastructure.Persistence.Entities.VideoAnalyticsRecord", b =>
+                {
+                    b.Property<string>("Id").IsRequired().HasColumnType("TEXT").HasColumnName("id");
+                    b.Property<string>("SnapshotId").IsRequired().HasColumnType("TEXT").HasColumnName("snapshot_id");
+                    b.Property<string>("WorkspaceId").IsRequired().HasColumnType("TEXT").HasColumnName("workspace_id");
+                    b.Property<string>("AccountId").HasColumnType("TEXT").HasColumnName("account_id");
+                    b.Property<string>("VideoKey").IsRequired().HasColumnType("TEXT").HasColumnName("video_key");
+                    b.Property<string>("Title").IsRequired().HasColumnType("TEXT").HasColumnName("title");
+                    b.Property<long?>("Views").HasColumnType("INTEGER").HasColumnName("views");
+                    b.Property<long?>("Likes").HasColumnType("INTEGER").HasColumnName("likes");
+                    b.Property<long?>("Comments").HasColumnType("INTEGER").HasColumnName("comments");
+                    b.Property<long?>("Shares").HasColumnType("INTEGER").HasColumnName("shares");
+                    b.Property<double?>("WatchTimeAvgSec").HasColumnType("REAL").HasColumnName("watch_time_avg_sec");
+                    b.Property<decimal?>("GmvAmount").HasColumnType("TEXT").HasColumnName("gmv_amount");
+                    b.Property<long?>("AffiliateClicks").HasColumnType("INTEGER").HasColumnName("affiliate_clicks");
+                    b.Property<DateTime?>("PublishedAtUtc").HasColumnType("TEXT").HasColumnName("published_at_utc");
+                    b.Property<DateTime>("CapturedAtUtc").IsRequired().HasColumnType("TEXT").HasColumnName("captured_at_utc");
+                    b.HasKey("Id");
+                    b.HasIndex("SnapshotId").HasDatabaseName("ix_video_analytics_snapshot_id");
+                    b.HasIndex("WorkspaceId", "CapturedAtUtc").HasDatabaseName("ix_video_analytics_workspace_captured");
+                    b.HasIndex("WorkspaceId", "VideoKey").HasDatabaseName("ix_video_analytics_workspace_video");
+                    b.ToTable("VideoAnalyticsRecord", (string)null);
+                });
+
+            modelBuilder.Entity("TiToAI.Infrastructure.Persistence.Entities.TikTokAnalyticsDailyRecord", b =>
+                {
+                    b.Property<string>("Id").IsRequired().HasColumnType("TEXT").HasColumnName("id");
+                    b.Property<string>("SnapshotId").IsRequired().HasColumnType("TEXT").HasColumnName("snapshot_id");
+                    b.Property<string>("WorkspaceId").IsRequired().HasColumnType("TEXT").HasColumnName("workspace_id");
+                    b.Property<string>("AccountId").HasColumnType("TEXT").HasColumnName("account_id");
+                    b.Property<string>("DataType").IsRequired().HasColumnType("TEXT").HasColumnName("data_type");
+                    b.Property<DateTime>("PeriodDateUtc").IsRequired().HasColumnType("TEXT").HasColumnName("period_date_utc");
+                    b.Property<long?>("VideoViews").HasColumnType("INTEGER").HasColumnName("video_views");
+                    b.Property<long?>("ProfileViews").HasColumnType("INTEGER").HasColumnName("profile_views");
+                    b.Property<long?>("Likes").HasColumnType("INTEGER").HasColumnName("likes");
+                    b.Property<long?>("Comments").HasColumnType("INTEGER").HasColumnName("comments");
+                    b.Property<long?>("Shares").HasColumnType("INTEGER").HasColumnName("shares");
+                    b.Property<long?>("TotalViewers").HasColumnType("INTEGER").HasColumnName("total_viewers");
+                    b.Property<long?>("NewViewers").HasColumnType("INTEGER").HasColumnName("new_viewers");
+                    b.Property<long?>("ReturningViewers").HasColumnType("INTEGER").HasColumnName("returning_viewers");
+                    b.Property<DateTime>("CapturedAtUtc").IsRequired().HasColumnType("TEXT").HasColumnName("captured_at_utc");
+                    b.HasKey("Id");
+                    b.HasIndex("SnapshotId").HasDatabaseName("ix_tiktok_analytics_daily_snapshot_id");
+                    b.HasIndex("WorkspaceId", "DataType", "PeriodDateUtc").HasDatabaseName("ix_tiktok_analytics_daily_workspace_type_date");
+                    b.ToTable("TikTokAnalyticsDailyRecord", (string)null);
+                });
+
             modelBuilder.Entity("TiToAI.Infrastructure.Persistence.Entities.Workspace", b =>
                 {
                     b.Property<string>("Id")
@@ -832,6 +901,32 @@ namespace TiToAI.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("Workspace", (string)null);
+                });
+
+            modelBuilder.Entity("TiToAI.Infrastructure.Persistence.Entities.AnalyticsSnapshot", b =>
+                {
+                    b.Navigation("DailyRecords");
+                    b.Navigation("Records");
+                });
+
+            modelBuilder.Entity("TiToAI.Infrastructure.Persistence.Entities.VideoAnalyticsRecord", b =>
+                {
+                    b.HasOne("TiToAI.Infrastructure.Persistence.Entities.AnalyticsSnapshot", "Snapshot")
+                        .WithMany("Records")
+                        .HasForeignKey("SnapshotId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                    b.Navigation("Snapshot");
+                });
+
+            modelBuilder.Entity("TiToAI.Infrastructure.Persistence.Entities.TikTokAnalyticsDailyRecord", b =>
+                {
+                    b.HasOne("TiToAI.Infrastructure.Persistence.Entities.AnalyticsSnapshot", "Snapshot")
+                        .WithMany("DailyRecords")
+                        .HasForeignKey("SnapshotId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                    b.Navigation("Snapshot");
                 });
 
             modelBuilder.Entity("TiToAI.Infrastructure.Persistence.Entities.Account", b =>

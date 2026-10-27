@@ -62,6 +62,9 @@ public static class ProviderAccountAndCapacitySmokeTests
             Console.WriteLine("\n    --- [Q1-1] ProviderAccount Bridge Commands & Full Lifecycle (A13) ---");
             await Test_ProviderAccountBridge_FullLifecycle(dbOptions);
 
+            Console.WriteLine("\n    --- [Q1-0b] Delete Account Releases Profile & Hides Account ---");
+            await Test_DeleteAccount_ReleasesProfileAndHidesAccount(dbOptions);
+
             Console.WriteLine("\n    --- [Q1-2] Slot Occupancy No Duplicates & Fast Reuse (H2, A04, A06) ---");
             await Test_SlotOccupancy_NoDuplicateSlots_AndFastReuse(dbOptions);
 
@@ -117,6 +120,30 @@ public static class ProviderAccountAndCapacitySmokeTests
             ClientTimestampUtc: DateTimeOffset.UtcNow,
             ContractVersion: "1.1.0"
         );
+    }
+
+    private static async Task Test_DeleteAccount_ReleasesProfileAndHidesAccount(DbContextOptions<TiToAIDbContext> dbOptions)
+    {
+        var released = new List<string>();
+        var service = new ProviderAccountService(dbOptions, new TestIdentityResolver(), (pid, _) =>
+        {
+            released.Add(pid);
+            return Task.CompletedTask;
+        });
+
+        var created = await service.CreateAccountAsync(new CreateProviderAccountRequest(
+            ProviderKey: "gemini-web",
+            DisplayName: "Delete Me",
+            MaxConcurrentJobs: 1,
+            MaxTabs: 1));
+
+        var deleted = await service.DeleteAccountAsync(created.Id);
+
+        AssertTrue(deleted.Lifecycle == "Deleted" && !deleted.Enabled, "Xoá đặt Lifecycle=Deleted và tắt nhận việc.");
+        AssertTrue(released.Count == 1 && released[0] == created.ProfileId, "Xoá giải phóng đúng profile của tài khoản.");
+        var active = await service.ListAccountsAsync(new ProviderAccountListRequest(Lifecycle: "Active"));
+        AssertTrue(active.All(a => a.Id != created.Id), "Tài khoản đã xoá không còn trong danh sách Active.");
+        Console.WriteLine("      PASS: xoá tài khoản giải phóng profile và ẩn khỏi danh sách.");
     }
 
     private static async Task Test_ProviderAccountBridge_FullLifecycle(DbContextOptions<TiToAIDbContext> dbOptions)
@@ -637,9 +664,13 @@ public static class ProviderAccountAndCapacitySmokeTests
                 await migrator.MigrateAsync("20261026093648_T13a_GlobalProviderAccountsAndExecutionBindings");
                 Console.WriteLine("        [DEBUG] Xong MigrateAsync sang T13a!");
 
-                // Xác minh Script legacy đã được chuyển scene_id = NULL
-                var scriptJob = await db.Jobs.AsNoTracking().FirstAsync(j => j.Id == "job_script_with_scene");
-                AssertTrue(scriptJob.SceneId == null, "Job Script legacy phải được chuyển scene_id = NULL trước constraint.");
+                // Xác minh Script legacy đã được chuyển scene_id = NULL (dùng raw SQL vì cột revision chỉ xuất hiện ở migration C1 sau đó)
+                var conn = db.Database.GetDbConnection();
+                if (conn.State != System.Data.ConnectionState.Open) await conn.OpenAsync();
+                using var scriptCheckCmd = conn.CreateCommand();
+                scriptCheckCmd.CommandText = "SELECT scene_id FROM Job WHERE id = 'job_script_with_scene';";
+                var scriptSceneId = await scriptCheckCmd.ExecuteScalarAsync();
+                AssertTrue(scriptSceneId == null || scriptSceneId == DBNull.Value, "Job Script legacy phải được chuyển scene_id = NULL trước constraint.");
 
                 // Xác minh duplicate identity: 1 profile giữ Active, 1 profile chuyển QuarantinedDuplicate
                 var accounts = await db.ProviderAccounts.AsNoTracking().Where(a => a.VerifiedIdentity == "dup_artist@muse.ai").ToListAsync();
@@ -706,9 +737,14 @@ public static class ProviderAccountAndCapacitySmokeTests
                 AssertTrue(job1Occ!.TabSlotId == "slot-1", "Job 1 được giữ slot-1 gốc.");
                 AssertTrue(job2Occ!.TabSlotId.Contains("-conflict-"), $"Job 2 trùng slot phải được remap với slot conflict riêng, có: {job2Occ.TabSlotId}");
 
-                var job2Db = await db.Jobs.AsNoTracking().FirstAsync(j => j.Id == "job_active_2");
-                AssertTrue(job2Db.State == JobState.AwaitingUser, "Job 2 phải ở trạng thái AwaitingUser.");
-                AssertTrue(job2Db.ReasonCode == "slot_conflict_quarantined", $"Job 2 phải có reason_code là slot_conflict_quarantined, có: {job2Db.ReasonCode}");
+                using var job2Cmd = conn.CreateCommand();
+                job2Cmd.CommandText = "SELECT state, reason_code FROM Job WHERE id = 'job_active_2';";
+                using var job2Reader = await job2Cmd.ExecuteReaderAsync();
+                AssertTrue(await job2Reader.ReadAsync(), "Job 2 phải tồn tại.");
+                string job2State = job2Reader.GetString(0);
+                string job2Reason = job2Reader.IsDBNull(1) ? "" : job2Reader.GetString(1);
+                AssertTrue(job2State == JobState.AwaitingUser, "Job 2 phải ở trạng thái AwaitingUser.");
+                AssertTrue(job2Reason == "slot_conflict_quarantined", $"Job 2 phải có reason_code là slot_conflict_quarantined, có: {job2Reason}");
 
                 Console.WriteLine("      -> [PASS] Upgrade fixture từ DB trước T13a: Xử lý Script có SceneId, duplicate identity và conflict slot cách ly an toàn 100%.");
             }

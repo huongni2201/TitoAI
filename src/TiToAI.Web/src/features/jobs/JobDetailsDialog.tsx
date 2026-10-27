@@ -17,7 +17,6 @@ import {
   ShieldCheck,
   ShieldAlert,
   Settings,
-  Sparkles,
 } from "lucide-react";
 import {
   Dialog,
@@ -41,7 +40,6 @@ import {
   getRecommendedAction,
 } from "./jobTypes";
 import { jobApi } from "./jobApi";
-import { ManualHandoffPanel } from "./ManualHandoffPanel";
 
 export interface JobDetailsDialogProps {
   job: (JobSummaryDto | JobDetailDto) | null;
@@ -88,20 +86,6 @@ export function JobDetailsDialog({
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [showManualHandoff, setShowManualHandoff] = useState(false);
-
-  useEffect(() => {
-    if (
-      job &&
-      (job.reasonCode === "automation_blocked" ||
-        job.reasonCode === "adapter_not_available" ||
-        job.reasonCode === "manual_input_required")
-    ) {
-      setShowManualHandoff(true);
-    } else {
-      setShowManualHandoff(false);
-    }
-  }, [job]);
 
   // Fetch dữ liệu chi tiết khi modal mở
   useEffect(() => {
@@ -173,6 +157,7 @@ export function JobDetailsDialog({
     resultReference: detailData?.resultReference ?? ("resultReference" in job ? (job as JobDetailDto).resultReference : null),
     resultText: detailData?.resultText ?? ("resultText" in job ? (job as JobDetailDto).resultText : null),
     cancelRequested: detailData?.cancelRequested ?? ("cancelRequested" in job ? Boolean((job as JobDetailDto).cancelRequested) : false),
+    revision: detailData?.revision ?? job.revision ?? 1,
     createdAtUtc: detailData?.createdAtUtc ?? job.createdAtUtc,
     updatedAtUtc: detailData?.updatedAtUtc ?? ("updatedAtUtc" in job ? (job as JobDetailDto).updatedAtUtc : job.createdAtUtc),
   };
@@ -229,37 +214,7 @@ export function JobDetailsDialog({
           </div>
         </DialogHeader>
 
-        {/* Nội dung chi tiết hoặc Manual Handoff Panel */}
-        {showManualHandoff ? (
-          <ScrollArea className="flex-1 p-5 overflow-y-auto">
-            <div className="flex flex-col gap-4">
-              <div className="flex items-center justify-between border-b pb-3">
-                <div className="flex items-center gap-2">
-                  <Sparkles className="h-4 w-4 text-primary" />
-                  <span className="font-semibold text-sm">Bảng Xử lý thủ công (Manual Handoff)</span>
-                </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setShowManualHandoff(false)}
-                  className="text-xs h-7"
-                >
-                  Xem chi tiết tác vụ
-                </Button>
-              </div>
-              <ManualHandoffPanel
-                workspaceId={currentJob.workspaceId}
-                jobId={currentJob.id}
-                onSuccess={() => {
-                  onOpenChange(false);
-                }}
-                onCancel={() => setShowManualHandoff(false)}
-              />
-            </div>
-          </ScrollArea>
-        ) : (
-          <ScrollArea className="flex-1 p-5 overflow-y-auto">
+        <ScrollArea className="flex-1 p-5 overflow-y-auto">
           <div className="flex flex-col gap-5">
             {/* Cảnh báo trạng thái đặc biệt */}
             {currentJob.cancelRequested && currentJob.state !== "Canceled" && (
@@ -509,7 +464,6 @@ export function JobDetailsDialog({
             </div>
           </div>
         </ScrollArea>
-        )}
 
         {/* Footer Modal: Các nút hành động */}
         <DialogFooter className="p-4 border-t border-border bg-muted/20 flex flex-row items-center justify-between sm:justify-between gap-2">
@@ -584,19 +538,6 @@ export function JobDetailsDialog({
               </Button>
             )}
 
-            {recommendedAction.type === "manual_handoff" && (
-              <Button
-                type="button"
-                variant="default"
-                size="sm"
-                disabled={isActionLoading}
-                onClick={() => setShowManualHandoff((prev) => !prev)}
-                className="gap-1.5 text-xs bg-primary text-primary-foreground cursor-pointer shadow-xs"
-              >
-                <Sparkles className="h-3.5 w-3.5" />
-                <span>{showManualHandoff ? "Xem chi tiết tác vụ" : "Xử lý thủ công"}</span>
-              </Button>
-            )}
 
             {recommendedAction.type === "resume" && (
               <Button

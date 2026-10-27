@@ -114,7 +114,7 @@ public static class Program
                 var expectedTables = new[]
                 {
                     "Workspace", "Account", "Project", "Scene", "Asset", "Job", "AppSettings",
-                    "PromptTemplate", "PromptVersion", "BrowserProfile", "BrowserHandoffCheckpoint"
+                    "PromptTemplate", "BrowserProfile", "BrowserHandoffCheckpoint"
                 };
                 foreach (var table in expectedTables)
                 {
@@ -137,8 +137,6 @@ public static class Program
                     "ix_job_workspace",
                     "uq_prompt_template_global_purpose",
                     "uq_prompt_template_workspace_purpose",
-                    "uq_prompt_version_id_template",
-                    "uq_prompt_version_template_version",
                     "ix_browser_profile_workspace",
                     "ix_browser_handoff_checkpoint_profile"
                 };

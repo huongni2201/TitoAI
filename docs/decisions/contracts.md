@@ -1,5 +1,9 @@
 # TiToAI — Đặc tả Ranh giới & Hợp đồng Kỹ thuật (T02)
 
+> **Delta domain 2026-10-27:** [Kiến trúc video-first](../plans/VIDEO_FIRST_ARCHITECTURE_PLAN.md) thay Workspace ownership; chốt Project/video/export flow. Bridge contract đang dùng **1.1.0**, thêm `project.list` toàn cục và bỏ đăng ký Workspace CRUD/list khỏi host. DTO/schema còn `WorkspaceId` làm compatibility scope; đây chưa phải schema đích và migration chưa hoàn tất.
+
+> **Delta 2026-10-27:** [Luồng tạo video chỉ chạy tự động](../plans/AUTOMATIC_VIDEO_WORKFLOW_PLAN.md) loại bỏ `job.get_handoff`/`job.import_result` và Manual Mode. Trường wire `manualSupported` luôn `false`; login và đối soát side effect vẫn giữ. Các ví dụ handoff kết quả bên dưới là baseline cũ đã được thay trong phạm vi video.
+
 > Baseline v1.0.4 đã được review. Yêu cầu browser tách provider và phần job/pipeline mới được cụ thể hóa tại [contract bổ sung v1.1](execution-contract-v1.1.md); phải review T02a và tích hợp DTO/schema trước triển khai phụ thuộc. Các ví dụ `shared_ai`, MuseAI riêng Workspace, account chốt lúc enqueue, Script bắt buộc scene và media-only success bên dưới là baseline cũ, không áp dụng cho thiết kế đích v1.1. PASS lịch sử không chứng minh phần mở rộng đã đạt.
 
 - **Mã tài liệu:** CONTRACT-G0-T02
@@ -158,7 +162,7 @@ Mọi bản tin giữa Host (.NET) và Web UI (React) đều được đóng gó
 | `VALIDATION_FAILED` | Dữ liệu vi phạm nghiệp vụ hoặc path không ghi được | Giữ bản nháp, highlight ô lỗi theo `fieldErrors` |
 | `STORAGE_ROOT_UNAVAILABLE`| Thư mục đích mất kết nối / không ghi được | Không resend AI; giữ job và cho chọn thử lại |
 | `PROVIDER_SESSION_REQUIRED`| Hết hạn session; cần đăng nhập | Chuyển job sang `awaiting_user`, hiện CTA "Đăng nhập" |
-| `AUTOMATION_BLOCKED` | CAPTCHA / bot detection chặn chạy ẩn | Hiện hướng dẫn nhập liệu manual trong app |
+| `AUTOMATION_BLOCKED` | CAPTCHA / bot detection chặn chạy ẩn | Báo tự động hóa chưa sẵn sàng; không chuyển sang nhập kết quả thủ công |
 | `JOB_ALREADY_SUBMITTED` | Tác vụ đã gửi lên web; không được submit lại | Yêu cầu Reconcile hoặc chờ kết quả từ provider |
 | `CONCURRENCY_CONFLICT` | Profile browser hoặc DB record đang bị khóa (hoặc xóa entity có job active) | Thử lại tự động sau backoff / chặn xóa entity |
 | `INTERNAL_ERROR` | Lỗi ngoại lệ chưa xử lý ở host | Báo lỗi hệ thống kèm `correlationId` |
@@ -362,7 +366,7 @@ TiToAI phân định rạch ròi giữa việc hủy một yêu cầu RPC ngắn
     "supportedTasks": ["Script", "Image", "VideoPrompt"],
     "verificationStatus": "VERIFIED",
     "sessionStatus": "Connected",
-    "manualHandoffMode": "InAppManual"
+    "manualSupported": false
   }
   ```
   *(Lưu ý: Tác vụ Video Render trong MVP cố định qua `museai` theo tài khoản liên kết của Workspace, không thuộc 3 dropdown lựa chọn provider toàn app).*
@@ -1195,7 +1199,7 @@ Shared AI quản lý tối đa 3 tab (Script, Image, VideoPrompt). Khi 1 tab g�
 - `login_required`: Chưa từng đăng nhập hoặc session rỗng.
 - `session_expired`: Cookie hết hạn hoặc bị đăng xuất từ xa.
 - `wrong_account`: Tài khoản vừa đăng nhập không khớp `account_identity` của kênh.
-- `automation_blocked`: Website chặn tự động hóa / xuất hiện CAPTCHA ngoài màn hình login. Chuyển manual in-app mode, không mở browser.
+- `automation_blocked`: Website chặn tự động hóa / xuất hiện CAPTCHA ngoài màn hình login. Dừng và báo lỗi; không có manual fallback, không mở browser.
 - `network_error`: Mất kết nối Internet khi tải trang.
 - `auth_closed`: Người dùng đóng cửa sổ đăng nhập trước khi xác minh thành công; giải phóng Semaphore, giữ Job ở `AwaitingUser`, phát Event `browser.profile_state_changed` và không tự mở lại cửa sổ.
 

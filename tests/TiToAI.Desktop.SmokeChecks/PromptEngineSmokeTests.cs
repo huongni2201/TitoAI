@@ -178,12 +178,10 @@ public static class PromptEngineSmokeTests
 
         var res1 = await service.CreateVersionAsync(req1);
         Assert(res1.Template.TemplateId != null, "TemplateId phải được sinh");
-        Assert(res1.Template.CurrentVersionNumber == 1, "Version đầu tiên phải là 1");
         Assert(res1.Template.IsOverride == false, "Template global phải có isOverride = false");
-        Assert(res1.Version.VersionNumber == 1, "VersionNumber phải là 1");
-        Assert(res1.Template.CurrentVersionId == res1.Version.VersionId, "CurrentVersionId phải trỏ v1");
+        Assert(res1.Version.TemplateText == "Kịch bản v1: {topic}", "TemplateText phải khớp");
 
-        // Tạo version 2 (template đã có -> tạo version 2 và update CurrentVersionId)
+        // Cập nhật template (lưu nội dung mới và cập nhật template)
         var req2 = new PromptCreateVersionRequest(
             Purpose: "Script",
             WorkspaceId: null,
@@ -193,15 +191,11 @@ public static class PromptEngineSmokeTests
 
         var res2 = await service.CreateVersionAsync(req2);
         Assert(res2.Template.TemplateId == res1.Template.TemplateId, "Phải giữ nguyên TemplateId");
-        Assert(res2.Template.CurrentVersionNumber == 2, "CurrentVersionNumber phải là 2");
-        Assert(res2.Version.VersionNumber == 2, "VersionNumber mới phải là 2");
-        Assert(res2.Template.CurrentVersionId == res2.Version.VersionId, "CurrentVersionId phải trỏ v2");
+        Assert(res2.Version.TemplateText == "Kịch bản v2 cập nhật: {topic} phong cách {style}", "TemplateText cập nhật phải khớp");
 
-        // Lấy danh sách versions kiểm tra đủ 2 phiên bản
+        // Lấy danh sách versions tương thích ngược
         var listVerRes = await service.ListVersionsAsync(res1.Template.TemplateId);
-        Assert(listVerRes.Versions.Count == 2, $"Phải có 2 versions, thực tế: {listVerRes.Versions.Count}");
-        Assert(listVerRes.Versions[0].VersionNumber == 2, "Version mới nhất phải ở đầu danh sách");
-        Assert(listVerRes.Versions[1].VersionNumber == 1, "Version cũ phải ở sau");
+        Assert(listVerRes != null, "ListVersionsResponseData không được null");
     }
 
     /// <summary>
@@ -364,19 +358,19 @@ public static class PromptEngineSmokeTests
         string v1Id = v1Res.Version.VersionId;
         string v2Id = v2Res.Version.VersionId;
 
-        // Rollback về v1
-        var rollbackRes = await service.RollbackVersionAsync(
-            new PromptRollbackVersionRequest(templateId, v1Id));
+        // Rollback về v1: Prompt không lưu lịch sử phiên bản nên ném PromptRollbackException
+        bool rollbackBlocked = false;
+        try
+        {
+            await service.RollbackVersionAsync(
+                new PromptRollbackVersionRequest(templateId, v1Id));
+        }
+        catch (PromptRollbackException)
+        {
+            rollbackBlocked = true;
+        }
 
-        Assert(rollbackRes.Template.CurrentVersionId == v1Id, "CurrentVersionId phải quay lại v1");
-        Assert(rollbackRes.Template.CurrentVersionNumber == 1, "CurrentVersionNumber phải là 1");
-
-        // Kiểm tra tính bất biến trong database
-        var v1InDb = await db.PromptVersions.AsNoTracking().FirstOrDefaultAsync(v => v.Id == v1Id);
-        var v2InDb = await db.PromptVersions.AsNoTracking().FirstOrDefaultAsync(v => v.Id == v2Id);
-
-        Assert(v1InDb != null && v1InDb.TemplateText == "Nội dung gốc v1: {topic}", "Nội dung body v1 phải bất biến");
-        Assert(v2InDb != null && v2InDb.TemplateText == "Nội dung nâng cấp v2: {topic}", "Nội dung body v2 phải bất biến");
+        Assert(rollbackBlocked, "Prompt không lưu lịch sử phiên bản, rollback phải ném PromptRollbackException");
     }
 
     /// <summary>
@@ -639,7 +633,7 @@ public static class PromptEngineSmokeTests
             ContractVersion: "1.0.4");
         await dispatcher.DispatchAsync(createV2Req, CancellationToken.None);
 
-        // 6. prompt.rollback_version về v1
+        // 6. prompt.rollback_version về v1 (từ chối do không lưu lịch sử phiên bản)
         var rollbackReq = new RequestEnvelope(
             Id: Guid.NewGuid(),
             Type: "request",
@@ -649,7 +643,23 @@ public static class PromptEngineSmokeTests
             ContractVersion: "1.0.4");
 
         var rollbackRes = await dispatcher.DispatchAsync(rollbackReq, CancellationToken.None);
-        Assert(rollbackRes.Success, "prompt.rollback_version phải thành công qua bridge");
+        Assert(!rollbackRes.Success && rollbackRes.Error?.Code == "VALIDATION_FAILED", "prompt.rollback_version phải trả về VALIDATION_FAILED vì không lưu lịch sử");
+
+        // 6b. prompt.save_template
+        var saveReq = new RequestEnvelope(
+            Id: Guid.NewGuid(),
+            Type: "request",
+            Command: "prompt.save_template",
+            Payload: JsonSerializer.SerializeToElement(new PromptCreateVersionRequest(
+                Purpose: "Script",
+                WorkspaceId: null,
+                TemplateText: "Prompt Save Template: {topic}",
+                VariableDefinitionsJson: null,
+                ChangeDescription: "save_template test")),
+            ClientTimestampUtc: DateTimeOffset.UtcNow,
+            ContractVersion: "1.0.4");
+        var saveRes = await dispatcher.DispatchAsync(saveReq, CancellationToken.None);
+        Assert(saveRes.Success, "prompt.save_template phải thành công qua bridge");
 
         // 7. prompt.delete_override
         // Thử delete_override trên global template -> phải trả về lỗi VALIDATION_FAILED

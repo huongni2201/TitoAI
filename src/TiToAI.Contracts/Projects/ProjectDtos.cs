@@ -12,6 +12,7 @@ public sealed record ProjectSummaryDto(
     [property: JsonPropertyName("description")] string? Description,
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("sceneCount")] int SceneCount,
+    [property: JsonPropertyName("hasVideo")] bool HasVideo,
     [property: JsonPropertyName("createdAtUtc")] string CreatedAtUtc,
     [property: JsonPropertyName("updatedAtUtc")] string UpdatedAtUtc);
 
@@ -31,7 +32,7 @@ public sealed record ProjectDetailDto(
 /// Yêu cầu tạo mới Dự án.
 /// </summary>
 public sealed record ProjectCreateRequest(
-    [property: JsonPropertyName("workspaceId")] string WorkspaceId,
+    [property: JsonPropertyName("workspaceId")] string? WorkspaceId,
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("description")] string? Description);
 
@@ -69,6 +70,9 @@ public sealed record ProjectListByWorkspaceRequest(
     [property: JsonPropertyName("workspaceId")] string WorkspaceId);
 
 public sealed record ProjectListByWorkspaceResponseData(
+    [property: JsonPropertyName("projects")] IReadOnlyList<ProjectSummaryDto> Projects);
+
+public sealed record ProjectListResponseData(
     [property: JsonPropertyName("projects")] IReadOnlyList<ProjectSummaryDto> Projects);
 
 /// <summary>

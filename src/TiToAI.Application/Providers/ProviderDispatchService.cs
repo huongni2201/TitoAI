@@ -182,30 +182,19 @@ public sealed class ProviderDispatchService
     }
 
     /// <summary>
-    /// Kiểm tra tương thích chặt chẽ giữa loại task và provider:
-    /// - Script / Image / VideoPrompt chỉ hỗ trợ ChatGPT hoặc Gemini; từ chối MuseAI.
-    /// - VideoRender chỉ hỗ trợ MuseAI; từ chối ChatGPT và Gemini.
+    /// Kiểm tra tính tương thích giữa loại task và provider dựa trên năng lực (capabilities) đăng ký trong ProviderRegistry.
+    /// Tra cứu capability động thay vì hardcode switch-case / if-else:
+    /// Nếu capability == null hoặc VerificationStatus == Unsupported -> ném ProviderValidationException
+    /// với ErrorCode = "PROVIDER_CAPABILITY_UNAVAILABLE".
     /// </summary>
-    private static void ValidateTaskAndProviderCompatibility(string providerKey, string taskType)
+    private void ValidateTaskAndProviderCompatibility(string providerKey, string taskType)
     {
-        if (string.Equals(taskType, JobTaskType.VideoRender, StringComparison.OrdinalIgnoreCase))
+        var capability = _registry.GetCapability(providerKey, taskType);
+        if (capability == null || string.Equals(capability.VerificationStatus, ProviderVerificationStatus.Unsupported, StringComparison.OrdinalIgnoreCase))
         {
-            if (string.Equals(providerKey, ProviderKeys.ChatGPTWeb, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(providerKey, ProviderKeys.GeminiWeb, StringComparison.OrdinalIgnoreCase))
-            {
-                throw new ProviderValidationException(
-                    $"Tác vụ kết xuất video VideoRender chỉ hỗ trợ 'museai', không hỗ trợ '{providerKey}'. Tuyệt đối không fallback ngầm.",
-                    "PROVIDER_CAPABILITY_UNAVAILABLE");
-            }
-        }
-        else
-        {
-            if (string.Equals(providerKey, ProviderKeys.MuseAI, StringComparison.OrdinalIgnoreCase))
-            {
-                throw new ProviderValidationException(
-                    $"Nhà cung cấp 'museai' không hỗ trợ tác vụ '{taskType}'. Chỉ 'chatgpt-web' hoặc 'gemini-web' được hỗ trợ.",
-                    "PROVIDER_CAPABILITY_UNAVAILABLE");
-            }
+            throw new ProviderValidationException(
+                $"Tác vụ '{taskType}' không được hỗ trợ bởi nhà cung cấp '{providerKey}'.",
+                "PROVIDER_CAPABILITY_UNAVAILABLE");
         }
     }
 }

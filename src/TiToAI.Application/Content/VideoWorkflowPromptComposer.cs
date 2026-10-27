@@ -30,7 +30,7 @@ public sealed record VideoPromptCompositionResult(
 
 /// <summary>
 /// Bộ tổng hợp Prompt chuyên dụng cho quy trình sản xuất video từ ảnh.
-/// Thực hiện quy tắc composition §3.1: Resolve template hiệu lực -> Nhiệm vụ -> Dữ liệu lần tạo (USER_BRIEF canonical) -> OUTPUT_CONTRACT.
+/// Thực hiện quy tắc composition §3.1: Dùng template đã render -> Nhiệm vụ và ngữ cảnh cảnh -> OUTPUT_CONTRACT.
 /// Bảo đảm tương thích template tùy chỉnh, không lặp render nội dung người dùng, báo lỗi rõ ràng nếu thiếu biến bắt buộc.
 /// </summary>
 public sealed class VideoWorkflowPromptComposer
@@ -82,41 +82,8 @@ public sealed class VideoWorkflowPromptComposer
         bool isOverride = template?.WorkspaceId != null;
         string templateText = template?.TemplateText ?? PromptTemplateService.DefaultVideoPromptInstruction;
 
-        // 2. Phân tích placeholder và render biến nếu template khai báo
-        var (detectedVars, malformed) = PromptRenderer.ParseTemplate(templateText);
-        if (malformed.Count > 0)
-        {
-            throw new ProjectWorkflowValidationException(
-                $"Template '{templateName}' chứa placeholder lỗi cú pháp: {string.Join(", ", malformed)}");
-        }
-
-        // Tự động bind USER_BRIEF nếu template có placeholder {USER_BRIEF} hoặc {user_brief}
-        var varValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var v in detectedVars)
-        {
-            if (string.Equals(v, "USER_BRIEF", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(v, "user_brief", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(v, "goalPrompt", StringComparison.OrdinalIgnoreCase))
-            {
-                varValues[v] = brief;
-            }
-            else if (string.Equals(v, "clip_name", StringComparison.OrdinalIgnoreCase) || string.Equals(v, "scene_name", StringComparison.OrdinalIgnoreCase))
-            {
-                varValues[v] = scene.Name;
-            }
-            else if (string.Equals(v, "duration", StringComparison.OrdinalIgnoreCase))
-            {
-                varValues[v] = $"{scene.TargetDurationSeconds}s";
-            }
-            else
-            {
-                // Template có biến chưa được hỗ trợ mapping -> báo lỗi rõ ràng theo §3.2
-                throw new ProjectWorkflowValidationException(
-                    $"Template '{templateName}' yêu cầu biến '{v}' chưa có trong ánh xạ của quy trình sản xuất video. Vui lòng kiểm tra lại cấu hình template.");
-            }
-        }
-
-        string renderedTemplate = PromptRenderer.Render(templateText, varValues);
+        // Frontend renders dynamic fields before saving. Backend uses the resulting text.
+        string renderedTemplate = ResolveRenderedTemplate(config.VideoPromptText, templateText, templateName);
 
         // 3. Ghép 4 phần canonical theo §3.1:
         // [HƯỚNG DẪN TỪ TEMPLATE VIDEO PROMPT ĐÃ CHỌN]
@@ -132,7 +99,10 @@ public sealed class VideoWorkflowPromptComposer
         sb.AppendLine($"Viết prompt chuyển động bằng tiếng Anh (motion prompt) cho clip_{scene.SequenceOrder} (tên cảnh: '{scene.Name}'), không tạo thêm clip. Mô tả các nhịp phân cảnh/shot bên trong thời lượng {durationSec} giây của clip.");
         sb.AppendLine();
         sb.AppendLine("[DỮ LIỆU LẦN TẠO — do app serialize]");
-        sb.AppendLine($"USER_BRIEF: \"{EscapeForPromptData(brief)}\"");
+        if (!string.IsNullOrWhiteSpace(brief))
+        {
+            sb.AppendLine($"USER_BRIEF: \"{EscapeForPromptData(brief)}\"");
+        }
         sb.AppendLine($"CLIP_CONTEXT: clip_{scene.SequenceOrder}, tên: \"{scene.Name}\", thời lượng: {durationSec}s.");
         sb.AppendLine($"REFERENCE_IMAGES: SelectedImage={scene.ImageAssetId ?? "None"}.");
         sb.AppendLine($"PROVIDER_CAPABILITIES: thời lượng clip = {durationSec}s, hỗ trợ multi-shot = Không (chuyển động liên tục).");
@@ -189,30 +159,7 @@ public sealed class VideoWorkflowPromptComposer
         bool isOverride = template?.WorkspaceId != null;
         string templateText = template?.TemplateText ?? PromptTemplateService.DefaultScriptInstruction;
 
-        var (detectedVars, malformed) = PromptRenderer.ParseTemplate(templateText);
-        if (malformed.Count > 0)
-        {
-            throw new ProjectWorkflowValidationException(
-                $"Template '{templateName}' chứa placeholder lỗi cú pháp: {string.Join(", ", malformed)}");
-        }
-
-        var varValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var v in detectedVars)
-        {
-            if (string.Equals(v, "USER_BRIEF", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(v, "user_brief", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(v, "goalPrompt", StringComparison.OrdinalIgnoreCase))
-            {
-                varValues[v] = brief;
-            }
-            else
-            {
-                throw new ProjectWorkflowValidationException(
-                    $"Template '{templateName}' yêu cầu biến '{v}' chưa có trong ánh xạ của quy trình. Vui lòng kiểm tra lại cấu hình template.");
-            }
-        }
-
-        string renderedTemplate = PromptRenderer.Render(templateText, varValues);
+        string renderedTemplate = ResolveRenderedTemplate(config.ScriptPromptText, templateText, templateName);
 
         var sb = new StringBuilder();
         sb.AppendLine("[HƯỚNG DẪN TỪ TEMPLATE KỊCH BẢN ĐÃ CHỌN]");
@@ -222,7 +169,10 @@ public sealed class VideoWorkflowPromptComposer
         sb.AppendLine($"Lập kế hoạch nội dung cho đúng {config.TargetSceneCount} clip video riêng biệt cho mục tiêu được cung cấp, mỗi clip dài {config.TargetDurationPerSceneSeconds} giây. AI tự phân chia các phân cảnh/nhịp quay trong từng clip. Không tạo clip ghép dài.");
         sb.AppendLine();
         sb.AppendLine("[DỮ LIỆU LẦN TẠO — do app serialize]");
-        sb.AppendLine($"USER_BRIEF: \"{EscapeForPromptData(brief)}\"");
+        if (!string.IsNullOrWhiteSpace(brief))
+        {
+            sb.AppendLine($"USER_BRIEF: \"{EscapeForPromptData(brief)}\"");
+        }
         sb.AppendLine($"TARGET_CLIPS: {config.TargetSceneCount} clip riêng biệt.");
         sb.AppendLine($"DURATION_PER_CLIP: {config.TargetDurationPerSceneSeconds} giây.");
         sb.AppendLine($"WORKFLOW_MODE: {config.WorkflowMode}.");
@@ -239,6 +189,78 @@ public sealed class VideoWorkflowPromptComposer
             ComposedPrompt: sb.ToString().TrimEnd(),
             OutputContractVersion: 1
         );
+    }
+
+    /// <summary>
+    /// Tổng hợp yêu cầu gửi AI writer viết content và prompt video theo schema:
+    /// { idea, hook, video_script, video_prompt, tiktok_content }.
+    /// </summary>
+    public async Task<VideoPromptCompositionResult> ComposeContentAndPromptAiRequestAsync(
+        string workspaceId,
+        ProjectWorkflowConfigDto config,
+        Scene? scene = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        var brief = (config.GoalPrompt ?? string.Empty).Trim();
+
+        var sb = new StringBuilder();
+        sb.AppendLine("[VAI TRÒ]");
+        sb.AppendLine("Bạn là chuyên gia biên kịch video ngắn (TikTok/Reels/Shorts) và chuyên gia tạo prompt AI video chuyên nghiệp.");
+        sb.AppendLine();
+        sb.AppendLine("[YÊU CẦU NỘI DUNG / MỤC TIÊU]");
+        if (!string.IsNullOrWhiteSpace(brief))
+        {
+            sb.AppendLine($"USER_BRIEF: \"{EscapeForPromptData(brief)}\"");
+        }
+        sb.AppendLine($"WORKFLOW_MODE: {config.WorkflowMode}");
+        sb.AppendLine($"DURATION: {config.TargetDurationPerSceneSeconds} giây");
+        if (scene != null)
+        {
+            sb.AppendLine($"SCENE_ORDER: {scene.SequenceOrder}");
+            sb.AppendLine($"SCENE_NAME: {scene.Name}");
+        }
+        sb.AppendLine();
+        sb.AppendLine("[QUY CHUẨN ĐẦU RA - JSON BẮT BUỘC]");
+        sb.AppendLine("Hãy trả về DUY NHẤT một khối mã JSON hợp lệ theo đúng schema sau:");
+        sb.AppendLine("```json");
+        sb.AppendLine("{");
+        sb.AppendLine("  \"idea\": \"Ý tưởng video cốt lõi ngắn gọn và hấp dẫn\",");
+        sb.AppendLine("  \"hook\": \"Câu mở đầu gây tò mò giữ chân người xem trong 3 giây đầu tiên\",");
+        sb.AppendLine("  \"video_script\": \"Kịch bản chi tiết từng phân cảnh (mô tả hành động, lời thoại/lồng tiếng, chuyển cảnh)\",");
+        sb.AppendLine("  \"video_prompt\": \"Prompt tiếng Anh chi tiết cho mô hình AI video (chuyển động camera, góc máy, ánh sáng, chi tiết trang phục/sản phẩm 4K photorealistic)\",");
+        sb.AppendLine("  \"tiktok_content\": \"Tiêu đề video cuốn hút, caption đầy đủ kêu gọi hành động kèm 3-5 hashtag thịnh hành\"");
+        sb.AppendLine("}");
+        sb.AppendLine("```");
+
+        return new VideoPromptCompositionResult(
+            TemplateId: "content-schema-v1",
+            TemplateName: "Schema Kịch Bản & Prompt Video",
+            VersionId: "v1",
+            IsOverride: false,
+            UserBrief: brief,
+            ComposedPrompt: sb.ToString().TrimEnd(),
+            OutputContractVersion: 1
+        );
+    }
+
+    private static string ResolveRenderedTemplate(string? renderedPromptText, string templateText, string templateName)
+    {
+        var promptText = string.IsNullOrWhiteSpace(renderedPromptText) ? templateText : renderedPromptText.Trim();
+        var (detectedVariables, malformed) = PromptRenderer.ParseTemplate(promptText);
+        if (malformed.Count > 0)
+        {
+            throw new ProjectWorkflowValidationException(
+                $"Template '{templateName}' chứa placeholder lỗi cú pháp: {string.Join(", ", malformed)}");
+        }
+
+        if (detectedVariables.Count > 0)
+        {
+            throw new ProjectWorkflowValidationException(
+                $"Prompt '{templateName}' còn biến chưa được điền: {string.Join(", ", detectedVariables)}. Vui lòng điền biến trong giao diện rồi lưu lại.");
+        }
+
+        return promptText;
     }
 
     private static string EscapeForPromptData(string text)

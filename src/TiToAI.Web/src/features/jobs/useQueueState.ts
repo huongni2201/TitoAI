@@ -81,6 +81,7 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
   const { workspaceId, autoFetch = true, isOpen } = options;
 
   const [jobs, setJobs] = useState<JobItem[]>([]);
+  const [historyJobs, setHistoryJobs] = useState<JobItem[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<ErrorDto | null>(null);
   const [activeTab, setActiveTab] = useState<QueueTabFilter>("all");
@@ -93,23 +94,37 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
   // Ref đồng bộ chặn race condition / double-click trên cùng jobId
   const actionLoadingRef = useRef<Set<string>>(new Set());
 
-  // Lưu timestamp của event cuối cùng theo jobId để tránh stale event ghi đè dữ liệu mới
-  const eventTimestampsRef = useRef<Map<string, number>>(new Map());
+  // T17-R1: Lưu revision logic lớn nhất theo jobId
+  const eventRevisionsRef = useRef<Map<string, number>>(new Map());
 
   // T17-R1: Generation counter để discard response cũ khi có nhiều refresh đồng thời
   const fetchGenerationRef = useRef<number>(0);
 
-  // T17-R6: Lưu trữ lịch sử các job đã hoàn tất (Succeeded / Canceled resolved) trong phiên
+  // Lưu trữ lịch sử các job đã hoàn tất trong phiên
   const completedHistoryRef = useRef<Map<string, JobItem>>(new Map());
 
   const clearError = useCallback(() => {
     setError(null);
   }, []);
 
-  // T17-R1 & T17-R6: Refresh có kiểm soát generation và merge snapshot an toàn
+  // T17-R6: Tải lịch sử hoàn tất từ backend qua job.list_history
+  const loadHistory = useCallback(async () => {
+    try {
+      const res = await jobApi.listHistory({ workspaceId, pageSize: 50 });
+      if (res?.items) {
+        setHistoryJobs(res.items);
+        for (const item of res.items) {
+          completedHistoryRef.current.set(item.id, item);
+        }
+      }
+    } catch (err) {
+      console.warn("[TiToAI Queue] Failed to load history jobs:", err);
+    }
+  }, [workspaceId]);
+
+  // T17-R1 & T17-R6: Refresh có kiểm soát generation và merge snapshot an toàn theo logical revision
   const refresh = useCallback(async () => {
     const currentGen = ++fetchGenerationRef.current;
-    const fetchStartTime = Date.now();
 
     setIsLoading(true);
     setError(null);
@@ -117,16 +132,13 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
     try {
       const activeJobs = await jobApi.listActive(workspaceId);
 
-      // Nếu đã có một request refresh mới hơn được phát đi: discard response cũ này
+      // Nếu đã có một request refresh mới hơn: discard response cũ
       if (currentGen !== fetchGenerationRef.current) {
         return;
       }
 
       setJobs((prevJobs) => {
-        // Tạo map từ previous jobs để đối chiếu trạng thái hiện thời
         const prevMap = new Map<string, JobItem>(prevJobs.map((j) => [j.id, j]));
-
-        // Danh sách kết quả hợp nhất
         const mergedJobs: JobItem[] = [];
         const seenIds = new Set<string>();
 
@@ -134,24 +146,16 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
         for (const rawJob of activeJobs) {
           seenIds.add(rawJob.id);
           const localJob = prevMap.get(rawJob.id);
-          const lastEventTime = eventTimestampsRef.current.get(rawJob.id) ?? 0;
+          const rawRev = rawJob.revision ?? 1;
 
-          // T17-R1: Nếu localJob có event mới hơn thời điểm gửi request, HOẶC localJob đã là terminal
-          // mà response từ backend vẫn là non-terminal -> GIỮ NGUYÊN local state!
           if (localJob) {
-            const hasNewerEvent = lastEventTime > fetchStartTime;
+            const localRev = localJob.revision ?? 1;
             const isLocalTerminal = isTerminalState(localJob.state);
             const isRemoteActive = !isTerminalState(rawJob.state);
 
-            if (hasNewerEvent || (isLocalTerminal && isRemoteActive)) {
+            // T17-R1: Nếu localJob có revision mới hơn response HOẶC localJob đã terminal mà remote vẫn active: GIỮ LOCAL!
+            if (localRev > rawRev || (isLocalTerminal && isRemoteActive)) {
               mergedJobs.push(localJob);
-              continue;
-            }
-          } else {
-            // Nếu localJob chưa có nhưng đã có trong completedHistoryRef hoặc event mới hơn
-            const historyJob = completedHistoryRef.current.get(rawJob.id);
-            if (historyJob && isTerminalState(historyJob.state) && !isTerminalState(rawJob.state)) {
-              mergedJobs.push(historyJob);
               continue;
             }
           }
@@ -159,7 +163,7 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
           // Cập nhật job từ snapshot backend
           const jobToAdd: JobItem = {
             ...rawJob,
-            // Giữ lại các metadata hữu ích nếu local đã có (như profileId, cancelRequested)
+            revision: Math.max(rawRev, localJob?.revision ?? 1),
             cancelRequested: localJob?.cancelRequested ?? rawJob.cancelRequested,
             profileId: localJob?.profileId ?? rawJob.profileId,
             sideEffectSubmitted: localJob?.sideEffectSubmitted ?? rawJob.sideEffectSubmitted,
@@ -167,7 +171,6 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
             maxAttempts: localJob?.maxAttempts ?? rawJob.maxAttempts,
           };
 
-          // Nếu job này ở trạng thái terminal, cập nhật vào history cache
           if (isTerminalState(jobToAdd.state)) {
             completedHistoryRef.current.set(jobToAdd.id, jobToAdd);
           }
@@ -175,10 +178,9 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
           mergedJobs.push(jobToAdd);
         }
 
-        // 2. T17-R6: Bổ sung các job hoàn tất từ lịch sử phiên nếu chưa có trong active jobs
+        // 2. Bổ sung các job hoàn tất từ lịch sử phiên nếu có
         for (const [historyId, historyJob] of completedHistoryRef.current.entries()) {
           if (!seenIds.has(historyId)) {
-            // Kiểm tra workspace nếu có lọc theo workspaceId
             if (!workspaceId || historyJob.workspaceId === workspaceId) {
               mergedJobs.push(historyJob);
               seenIds.add(historyId);
@@ -186,13 +188,17 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
           }
         }
 
-        // Sắp xếp thứ tự createdAtUtc giảm dần (mới nhất lên đầu)
         mergedJobs.sort(
           (a, b) => new Date(b.createdAtUtc).getTime() - new Date(a.createdAtUtc).getTime()
         );
 
         return mergedJobs;
       });
+
+      // Nếu đang mở tab completed, nạp cả history
+      if (activeTab === "completed") {
+        void loadHistory();
+      }
     } catch (err) {
       if (currentGen === fetchGenerationRef.current) {
         setError(err as ErrorDto);
@@ -202,7 +208,7 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
         setIsLoading(false);
       }
     }
-  }, [workspaceId]);
+  }, [workspaceId, activeTab, loadHistory]);
 
   // Tự động tải dữ liệu ban đầu hoặc khi mở drawer
   useEffect(() => {
@@ -211,12 +217,18 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
     }
   }, [refresh, autoFetch]);
 
-  // Nếu options truyền isOpen, nạp lại khi mở drawer
   useEffect(() => {
     if (isOpen) {
       void refresh();
     }
   }, [isOpen, refresh]);
+
+  // T17-R6: Tải lịch sử khi người dùng chuyển sang tab completed
+  useEffect(() => {
+    if (activeTab === "completed") {
+      void loadHistory();
+    }
+  }, [activeTab, loadHistory]);
 
   // T17-R5: Hàm hydrate chi tiết tác vụ bất đồng bộ từ backend
   const hydrateJob = useCallback(async (wsId: string, jobId: string) => {
@@ -238,13 +250,13 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
             cancelRequested: detail.cancelRequested,
             hasUnresolvedSideEffect: detail.hasUnresolvedSideEffect,
             resultReference: detail.resultReference ?? j.resultReference,
+            revision: Math.max(detail.revision ?? 1, j.revision ?? 1),
             isHydrating: false,
           };
         })
       );
     } catch (err) {
       console.warn(`[TiToAI Queue] Hydrate job ${jobId} failed:`, err);
-      // Tắt trạng thái hydrating dù lỗi để không treo UI
       setJobs((prevJobs) =>
         prevJobs.map((j) => (j.id === jobId ? { ...j, isHydrating: false } : j))
       );
@@ -257,33 +269,46 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
       const payload = envelope.payload;
       if (!payload?.jobId) return;
 
-      const eventTime = payload.timestampUtc
-        ? new Date(payload.timestampUtc).getTime()
-        : Date.now();
-      const lastTime = eventTimestampsRef.current.get(payload.jobId) ?? 0;
+      const jobRev = payload.jobRevision;
+      const lastRev = eventRevisionsRef.current.get(payload.jobId) ?? 0;
 
-      // Tránh event cũ hoặc đến trễ ghi đè trạng thái mới hơn
-      if (eventTime < lastTime) {
+      // T17-R1: Kiểm tra revision để bỏ qua stale event
+      if (jobRev !== undefined && jobRev < lastRev) {
         return;
       }
-      eventTimestampsRef.current.set(payload.jobId, eventTime);
+      if (jobRev !== undefined) {
+        eventRevisionsRef.current.set(payload.jobId, jobRev);
+      }
 
       setJobs((prevJobs) => {
         const existingIdx = prevJobs.findIndex((j) => j.id === payload.jobId);
         if (existingIdx >= 0) {
           const updated = [...prevJobs];
           const existing = updated[existingIdx];
+          const currentRev = existing.revision ?? 1;
+
+          // T17-R1: Gap detection: nếu revision nhảy cóc -> kích hoạt reload để lấp gap
+          if (jobRev !== undefined && jobRev > currentRev + 1) {
+            queueMicrotask(() => {
+              void refresh();
+            });
+          }
+
+          if (jobRev !== undefined && jobRev < currentRev) {
+            return prevJobs;
+          }
+
           const updatedJob: JobItem = {
             ...existing,
             state: payload.newState,
             reasonCode: payload.reasonCode ?? null,
             resultReference: payload.resultReference ?? existing.resultReference,
+            revision: jobRev ?? currentRev + 1,
             cancelRequested:
               payload.newState === "Canceled" ? false : existing.cancelRequested,
           };
           updated[existingIdx] = updatedJob;
 
-          // T17-R6: Nếu chuyển sang terminal state, lưu vào history cache
           if (isTerminalState(payload.newState)) {
             completedHistoryRef.current.set(payload.jobId, updatedJob);
           }
@@ -291,15 +316,15 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
           return updated;
         }
 
-        // T17-R5 & T17-R6: Nếu job mới chưa có trong danh sách
+        // T17-R5: Job mới qua event -> Tạo placeholder an toàn và kích hoạt hydrate
         const isTerminal = isTerminalState(payload.newState);
         const newJob: JobItem = {
           id: payload.jobId,
           workspaceId: payload.workspaceId,
           projectId: payload.projectId ?? "",
           sceneId: null,
-          // Đặt isHydrating: true cho non-terminal, taskType tạm thời không gán Script giả mạo
-          taskType: isTerminal ? "Tác vụ hoàn tất" : "Đang tải...",
+          // Placeholder loading khi chưa hydrate, KHÔNG gán Script hay attempts=1 giả
+          taskType: isTerminal ? "Tác vụ hoàn tất" : "Đang nạp dữ liệu...",
           state: payload.newState,
           reasonCode: payload.reasonCode ?? null,
           attempts: 1,
@@ -307,13 +332,13 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
           currentStep: null,
           createdAtUtc: payload.timestampUtc || new Date().toISOString(),
           resultReference: payload.resultReference ?? null,
+          revision: jobRev ?? 1,
           isHydrating: !isTerminal,
         };
 
         if (isTerminal) {
           completedHistoryRef.current.set(payload.jobId, newJob);
         } else if (ACTIVE_STATES.includes(payload.newState)) {
-          // Kích hoạt hydrate bất đồng bộ để lấy taskType, sceneId, attempts thật từ backend
           void hydrateJob(payload.workspaceId, payload.jobId);
         }
 
@@ -336,9 +361,13 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
 
         const existing = prevJobs[idx];
 
-        // T17-R1: NẾU JOB ĐÃ Ở TRẠNG THÁI TERMINAL (Succeeded, Failed, Canceled):
-        // CẤM TUYỆT ĐỐI không cho progress event trễ đổi state về Running hay Queued!
+        // T17-R1: NẾU JOB ĐÃ Ở TRẠNG THÁI TERMINAL: CẤM ĐỔI VỀ RUNNING HAY QUEUED!
         if (isTerminalState(existing.state)) {
+          return prevJobs;
+        }
+
+        // Nếu progress event có revision cũ hơn revision hiện tại của job -> bỏ qua
+        if (payload.jobRevision !== undefined && payload.jobRevision < (existing.revision ?? 1)) {
           return prevJobs;
         }
 
@@ -347,8 +376,8 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
           ...existing,
           progressPercent: payload.progressPercent,
           currentStep: payload.currentStep,
-          // Chỉ cập nhật state nếu payload có state và không làm lùi terminal state
           state: payload.state || existing.state,
+          revision: Math.max(existing.revision ?? 1, payload.jobRevision ?? 1),
         };
         return updated;
       });
@@ -358,7 +387,7 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
       unsubState();
       unsubProgress();
     };
-  }, [hydrateJob]);
+  }, [hydrateJob, refresh]);
 
   // Chi tiết job khi người dùng chọn
   const fetchJobDetail = useCallback(
@@ -367,7 +396,6 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
         const detail = await jobApi.getStatus(wsId, jobId);
         setSelectedJobDetail(detail);
 
-        // Đồng thời cập nhật metadata vào job trong danh sách nếu có
         setJobs((prevJobs) =>
           prevJobs.map((j) =>
             j.id === jobId
@@ -378,6 +406,7 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
                   maxAttempts: detail.maxAttempts,
                   cancelRequested: detail.cancelRequested,
                   hasUnresolvedSideEffect: detail.hasUnresolvedSideEffect,
+                  revision: Math.max(detail.revision ?? 1, j.revision ?? 1),
                 }
               : j
           )
@@ -420,6 +449,7 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
               ...j,
               state: res.state,
               cancelRequested: res.cancelRequested ?? true,
+              revision: (j.revision ?? 1) + 1,
             };
             if (isTerminalState(res.state)) {
               completedHistoryRef.current.set(job.id, updated);
@@ -461,7 +491,7 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
         const res = await jobApi.resume(job.workspaceId, job.id);
         setJobs((prevJobs) =>
           prevJobs.map((j) =>
-            j.id === job.id ? { ...j, state: res.state, reasonCode: null } : j
+            j.id === job.id ? { ...j, state: res.state, reasonCode: null, revision: (j.revision ?? 1) + 1 } : j
           )
         );
         return true;
@@ -495,6 +525,7 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
               resultReference: res.resultReference ?? j.resultReference,
               reasonCode: null,
               hasUnresolvedSideEffect: false,
+              revision: res.revision ?? (j.revision ?? 1) + 1,
             };
             if (isTerminalState(res.currentState)) {
               completedHistoryRef.current.set(request.jobId, updated);
@@ -539,7 +570,7 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
     []
   );
 
-  // T17-R2: Thử lại an toàn tuân thủ backend semantics và eligibility
+  // T17-R2 & C2: Thử lại an toàn qua lệnh job.retry với ExpectedRevision (CAS)
   const handleRetry = useCallback(
     async (job: JobSummaryDto | JobDetailDto): Promise<boolean> => {
       // 1. Nếu tác vụ ở AwaitingUser: dùng resume
@@ -564,8 +595,9 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
       let maxAttempts = job.maxAttempts;
       let cancelRequested = job.cancelRequested;
       let hasUnresolved = job.hasUnresolvedSideEffect;
+      let currentRevision = job.revision;
 
-      if (sideEffect === undefined || maxAttempts === undefined) {
+      if (sideEffect === undefined || maxAttempts === undefined || currentRevision === undefined) {
         try {
           const detail = await jobApi.getStatus(job.workspaceId, job.id);
           sideEffect = detail.sideEffectSubmitted;
@@ -573,6 +605,7 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
           maxAttempts = detail.maxAttempts;
           cancelRequested = detail.cancelRequested;
           hasUnresolved = detail.hasUnresolvedSideEffect;
+          currentRevision = detail.revision;
         } catch (fetchErr) {
           setError(fetchErr as ErrorDto);
           return false;
@@ -617,22 +650,18 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
       setIsActionLoading((prev) => ({ ...prev, [job.id]: true }));
 
       try {
-        // Backend chấp nhận retry qua job.reconcile action="retry" với confirmedNotReceived=true
-        const res = await jobApi.reconcile({
-          workspaceId: job.workspaceId,
-          jobId: job.id,
-          action: "retry",
-          confirmedNotReceived: true,
-        });
+        // C2: Gọi job.retry với expectedRevision chuẩn xác
+        const expectedRev = currentRevision ?? 1;
+        const res = await jobApi.retry(job.workspaceId, job.id, expectedRev);
 
         setJobs((prevJobs) =>
           prevJobs.map((j) =>
             j.id === job.id
               ? {
                   ...j,
-                  state: res.currentState,
+                  state: res.state,
                   reasonCode: null,
-                  attempts: (j.attempts || 1) + 1,
+                  revision: res.revision,
                 }
               : j
           )
@@ -649,7 +678,7 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
     [handleResume]
   );
 
-  // Thống kê số lượng theo tab (tính trên toàn bộ jobs trước khi lọc search)
+  // Thống kê số lượng theo tab (kết hợp active và history)
   const tabCounts = useMemo<Record<QueueTabFilter, number>>(() => {
     const counts: Record<QueueTabFilter, number> = {
       all: jobs.length,
@@ -669,13 +698,41 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
         counts.completed++;
       }
     }
+    // Bổ sung số lượng từ historyJobs nếu chưa có trong counts.completed
+    if (historyJobs.length > 0) {
+      const activeIds = new Set(jobs.map((j) => j.id));
+      for (const hj of historyJobs) {
+        if (!activeIds.has(hj.id)) {
+          counts.completed++;
+        }
+      }
+    }
     return counts;
-  }, [jobs]);
+  }, [jobs, historyJobs]);
 
-  // Danh sách đã lọc theo activeTab và searchQuery
+  // Danh sách đã lọc theo activeTab và searchQuery (T17-R6: tab completed lấy từ historyJobs)
   const filteredJobs = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
-    return jobs.filter((job) => {
+    let baseList: JobItem[];
+
+    if (activeTab === "completed") {
+      const map = new Map<string, JobItem>();
+      for (const h of historyJobs) {
+        map.set(h.id, h);
+      }
+      for (const j of jobs) {
+        if (j.state === "Succeeded" || j.state === "Canceled") {
+          map.set(j.id, j);
+        }
+      }
+      baseList = Array.from(map.values()).sort(
+        (a, b) => new Date(b.createdAtUtc).getTime() - new Date(a.createdAtUtc).getTime()
+      );
+    } else {
+      baseList = jobs;
+    }
+
+    return baseList.filter((job) => {
       if (!matchesTab(job.state, activeTab)) {
         return false;
       }
@@ -689,7 +746,7 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
       const matchState = job.state.toLowerCase().includes(query);
       return matchId || matchType || matchStep || matchReason || matchState;
     });
-  }, [jobs, activeTab, searchQuery]);
+  }, [jobs, historyJobs, activeTab, searchQuery]);
 
   return {
     jobs,

@@ -1,5 +1,9 @@
 # TiToAI — giao diện tham khảo và browser chạy ẩn
 
+> **Kiến trúc sản phẩm mới 2026-10-27:** [VIDEO_FIRST_ARCHITECTURE_PLAN.md](VIDEO_FIRST_ARCHITECTURE_PLAN.md) bỏ Workspace khỏi navigation/domain/schema hoạt động và chốt một Project = một video TikTok. Các bố cục, selector, card và analytics gắn Workspace bên dưới là baseline cũ; thay theo plan video-first.
+>
+> **Yêu cầu mới nhất 2026-10-27:** [Luồng tạo video chỉ chạy tự động](AUTOMATIC_VIDEO_WORKFLOW_PLAN.md) thay mọi yêu cầu manual handoff bên dưới trong phạm vi tạo video. Gỡ UI copy/import kết quả để hoàn tất job; lỗi automation được báo rõ. Giữ đăng nhập thủ công và đối soát an toàn khi kết quả chưa xác định.
+
 > **Đã chốt 2026-10-27:** [Luồng sản xuất từ ảnh](PRODUCT_IMAGE_VIDEO_WORKFLOW_PLAN.md) tự chạy sau một lần Bắt đầu: lập nhiều cảnh theo prompt → ảnh → prompt chuyển động → video, không bắt duyệt trung gian. Audio tùy chọn; mẫu và sản phẩm dùng lại trong thư viện Workspace. Trong mode này, tự áp output hợp lệ bằng revision guard; yêu cầu audio bắt buộc/duyệt từng bước bên dưới là baseline cũ đã được thay trong phạm vi này. Contract/version/validator/adapter còn phải triển khai đồng bộ; chưa là evidence code hỗ trợ. Lỗi, capability không tương thích, login, xung đột hoặc uncertainty vẫn dừng đúng policy.
 
 

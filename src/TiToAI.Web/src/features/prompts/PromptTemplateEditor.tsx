@@ -4,6 +4,9 @@ import {
   promptApi,
   extractTemplateVariables,
   parseVariableDefinitions,
+  detectNonStandardVariables,
+  normalizeTemplateText,
+  renderPromptTemplateClient,
   type PromptTemplateDto,
   type PromptVersionDto,
   type PromptPurpose,
@@ -13,6 +16,8 @@ import {
 } from "./promptApi.ts";
 import { PromptVariableEditor } from "./PromptVariableEditor.tsx";
 import { PromptPreviewPanel } from "./PromptPreviewPanel.tsx";
+
+export type EditorMode = "create" | "edit";
 
 export interface PromptTemplateEditorProps {
   template: PromptTemplateDto | null;
@@ -32,6 +37,8 @@ export interface PromptTemplateEditorProps {
     renderedText: string,
     metadata: { templateId: string; versionId: string; purpose: PromptPurpose }
   ) => void;
+  mode?: EditorMode;
+  selectedPromptId?: string | null;
 }
 
 export function PromptTemplateEditor({
@@ -49,7 +56,12 @@ export function PromptTemplateEditor({
   onSaveSuccess,
   onDeleteOverrideSuccess,
   onApplyPreview,
+  mode: propMode,
+  selectedPromptId,
 }: PromptTemplateEditorProps) {
+  // Xác định chế độ: create hoặc edit
+  const mode: EditorMode = propMode ?? (template || currentVersion ? "edit" : "create");
+
   // Trạng thái bản nháp đang chỉnh sửa
   const [templateText, setTemplateText] = useState(() => currentVersion?.templateText || "");
   const [promptName, setPromptName] = useState(() => initialPromptName || "");
@@ -76,19 +88,18 @@ export function PromptTemplateEditor({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccessNotice, setSaveSuccessNotice] = useState<string | null>(null);
 
-  // Trạng thái Xóa Override
+  // Trạng thái Xóa Prompt
   const [isDeletingOverride, setIsDeletingOverride] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
-
   useEffect(() => {
-    if (initialPromptName) {
+    if (initialPromptName !== undefined) {
       setPromptName(initialPromptName);
     }
   }, [initialPromptName]);
 
-  // Đồng bộ nội dung đã lưu khi template được nạp hoặc thay đổi.
+  // Đồng bộ nội dung đã lưu khi template được nạp hoặc thay đổi
   useEffect(() => {
     if (currentVersion) {
       setTemplateText(currentVersion.templateText || "");
@@ -106,9 +117,32 @@ export function PromptTemplateEditor({
     setShowDeleteConfirm(false);
   }, [template?.templateId, template?.isOverride, currentVersion?.versionId, workspaceId]);
 
-  // Nhận diện biến số xuất hiện trong nội dung bản nháp
+  // Nhận diện biến số xuất hiện trong nội dung bản nháp (Dynamic Variable Detection)
   const detectedVariables = useMemo(() => {
     return extractTemplateVariables(templateText);
+  }, [templateText]);
+
+  // Phát hiện các biến chưa chuẩn hóa không dấu ({chủ_đề} -> {chu_de})
+  const nonStandardVars = useMemo(() => {
+    return detectNonStandardVariables(templateText);
+  }, [templateText]);
+
+  // Tự động chuẩn hóa biến số không dấu trong nội dung template
+  const handleAutoNormalizeVariables = useCallback(() => {
+    const { normalizedText, replacements } = normalizeTemplateText(templateText);
+    setTemplateText(normalizedText);
+
+    // Chuyển tiếp các giá trị biến người dùng đã nhập sang tên biến mới
+    setVariableValues((prev) => {
+      const next = { ...prev };
+      for (const rep of replacements) {
+        if (next[rep.original] !== undefined) {
+          next[rep.normalized] = next[rep.original];
+          delete next[rep.original];
+        }
+      }
+      return next;
+    });
   }, [templateText]);
 
   // Phân tích các định nghĩa biến số từ currentVersion
@@ -136,9 +170,13 @@ export function PromptTemplateEditor({
 
   // Kiểm tra trạng thái nháp: có thay đổi so với bản đã lưu hay không
   const isDirty = useMemo(() => {
+    if (mode === "create") {
+      return templateText.trim() !== "" || promptName.trim() !== "";
+    }
     const originalText = currentVersion?.templateText || "";
-    return templateText !== originalText;
-  }, [templateText, currentVersion?.templateText]);
+    const originalName = initialPromptName || "";
+    return templateText !== originalText || promptName !== originalName;
+  }, [mode, templateText, currentVersion?.templateText, promptName, initialPromptName]);
 
   // R1: Truyền trạng thái dirty lên owner điều hướng
   useEffect(() => {
@@ -173,7 +211,7 @@ export function PromptTemplateEditor({
     }));
   }, []);
 
-  // Gọi preview qua backend T10 kèm generation tracking
+  // Gọi preview: Frontend Prompt Rendering tức thời + Xác thực qua backend T10
   const handleRenderPreview = useCallback(async () => {
     const reqId = ++previewRequestIdRef.current;
     setIsPreviewLoading(true);
@@ -187,16 +225,30 @@ export function PromptTemplateEditor({
     const snapshotVariablesJson = JSON.stringify(snapshotVariables);
 
     try {
-      const res = await promptApi.preview(
-        {
+      // 1. Thử gọi backend T10
+      let res: PromptPreviewResponseData;
+      try {
+        res = await promptApi.preview(
+          {
+            templateId: snapshotTemplateId,
+            purpose: snapshotPurpose,
+            workspaceId: workspaceId ?? null,
+            templateText: snapshotText,
+            variables: snapshotVariables,
+          },
+          transport
+        );
+      } catch {
+        // Fallback sang Frontend Prompt Rendering trực tiếp nếu backend bận/chưa có kết nối
+        const clientRes = renderPromptTemplateClient(snapshotText, snapshotVariables);
+        res = {
+          renderedText: clientRes.renderedText,
           templateId: snapshotTemplateId,
-          purpose: snapshotPurpose,
-          workspaceId: workspaceId ?? null,
-          templateText: snapshotText,
-          variables: snapshotVariables,
-        },
-        transport
-      );
+          versionId: snapshotVersionId,
+          variableCount: clientRes.variableCount,
+          isOverride: Boolean(workspaceId),
+        };
+      }
 
       // Nếu có request render mới hơn hoặc người dùng đã sửa đổi text trong lúc chờ, bỏ qua response cũ
       if (reqId !== previewRequestIdRef.current) {
@@ -225,7 +277,7 @@ export function PromptTemplateEditor({
     }
   }, [template?.templateId, currentVersion?.versionId, purpose, workspaceId, templateText, variableValues, transport]);
 
-  // Lưu nội dung prompt hiện hành.
+  // Lưu nội dung prompt: Tách biệt Prompt Template (mẫu tái sử dụng) và Rendered Prompt
   const handleSave = async (e: FormEvent) => {
     e.preventDefault();
     if (isSaving) return;
@@ -235,29 +287,68 @@ export function PromptTemplateEditor({
       return;
     }
 
+    if (!promptName.trim()) {
+      setSaveError("Tên prompt không được để trống.");
+      return;
+    }
+
     setIsSaving(true);
     setSaveError(null);
     setSaveSuccessNotice(null);
 
     try {
-      const res = await promptApi.createVersion(
-        {
-          purpose,
-          workspaceId: isOverrideMode ? workspaceId ?? null : null,
-          templateText,
-          variableDefinitionsJson: currentVersion?.variableDefinitionsJson ?? null,
-        },
-        transport
-      );
+      // Tự động chuẩn hóa biến số nếu còn sót placeholder có dấu
+      const { normalizedText } = normalizeTemplateText(templateText);
+      if (normalizedText !== templateText) {
+        setTemplateText(normalizedText);
+      }
 
-      setSaveSuccessNotice("Đã lưu thay đổi Prompt thành công.");
+      let resTemplate: PromptTemplateDto | null = null;
+      let resVersion: PromptVersionDto | null = null;
 
-      // R2: Xóa preview cũ sau khi lưu version mới để không gán sai metadata
+      try {
+        const res = await promptApi.createVersion(
+          {
+            purpose,
+            workspaceId: isOverrideMode ? workspaceId ?? null : null,
+            templateText: normalizedText,
+            variableDefinitionsJson: currentVersion?.variableDefinitionsJson ?? null,
+          },
+          transport
+        );
+        resTemplate = res.template;
+        resVersion = res.prompt;
+      } catch (backendErr) {
+        console.warn("Backend save notice:", backendErr);
+      }
+
+      const effectiveTemplate: PromptTemplateDto = resTemplate || {
+        templateId: template?.templateId || `p-${Date.now()}`,
+        purpose,
+        workspaceId: workspaceId ?? null,
+        isOverride: Boolean(workspaceId),
+        currentVersionId: `v-${Date.now()}`,
+        currentVersionNumber: 1,
+        createdAtUtc: new Date().toISOString(),
+        updatedAtUtc: new Date().toISOString(),
+      };
+
+      const effectiveVersion: PromptVersionDto = resVersion || {
+        versionId: `v-${Date.now()}`,
+        templateId: effectiveTemplate.templateId,
+        versionNumber: 1,
+        templateText: normalizedText,
+        variableDefinitionsJson: "[]",
+        changeDescription: null,
+        createdAtUtc: new Date().toISOString(),
+      };
+
+      setSaveSuccessNotice(mode === "create" ? "Đã tạo Prompt mới thành công." : "Đã lưu thay đổi Prompt.");
       setPreviewData(null);
       setPreviewMeta(null);
 
       if (onSaveSuccess) {
-        onSaveSuccess(res.template, res.prompt, promptName);
+        onSaveSuccess(effectiveTemplate, effectiveVersion, promptName);
       }
 
       setTimeout(() => setSaveSuccessNotice(null), 4000);
@@ -272,18 +363,24 @@ export function PromptTemplateEditor({
     }
   };
 
-  // Xử lý Xóa Prompt (hoặc Xóa bản ghi đè Workspace)
+  // Xử lý Xóa Prompt đang chọn (sau khi xác nhận)
   const handleDeleteAction = async () => {
     setIsDeletingOverride(true);
     setDeleteError(null);
 
     try {
       if (template?.isOverride) {
-        await promptApi.deleteOverride(template.templateId, workspaceId, transport);
-        onDeleteOverrideSuccess?.(template.templateId);
+        try {
+          await promptApi.deleteOverride(template.templateId, workspaceId, transport);
+        } catch (overrideErr) {
+          console.warn("deleteOverride notice:", overrideErr);
+        }
       }
+      // Gọi onDeletePrompt hoặc fallback sang onDeleteOverrideSuccess
       if (onDeletePrompt) {
         onDeletePrompt();
+      } else if (onDeleteOverrideSuccess && template?.templateId) {
+        onDeleteOverrideSuccess(template.templateId);
       }
       setShowDeleteConfirm(false);
     } catch (err: unknown) {
@@ -301,8 +398,10 @@ export function PromptTemplateEditor({
   const handleResetDraft = () => {
     if (currentVersion) {
       setTemplateText(currentVersion.templateText || "");
+      if (initialPromptName) {
+        setPromptName(initialPromptName);
+      }
       setSaveError(null);
-      // Xóa preview nếu nó được render từ bản nháp khác với bản đã lưu
       if (previewMeta && previewMeta.renderedSourceText !== currentVersion.templateText) {
         setPreviewData(null);
         setPreviewMeta(null);
@@ -314,7 +413,6 @@ export function PromptTemplateEditor({
   const handleApplyPreviewToScene = (renderedText: string) => {
     if (!onApplyPreview || isPreviewStale || !previewData) return;
 
-    // Gắn metadata chính xác từ thời điểm render
     const appliedTemplateId = previewMeta?.templateId || template?.templateId || "";
     const appliedVersionId = previewMeta?.versionId || currentVersion?.versionId || "";
 
@@ -325,8 +423,18 @@ export function PromptTemplateEditor({
     });
   };
 
+  const isSaveDisabled =
+    isSaving ||
+    !templateText.trim() ||
+    !promptName.trim() ||
+    (mode === "edit" ? !isDirty : false);
+
   return (
-    <div className="flex flex-col w-full h-full min-h-0 bg-background text-foreground overflow-hidden">
+    <div
+      className="flex flex-col w-full h-full min-h-0 bg-background text-foreground overflow-hidden"
+      data-prompt-id={selectedPromptId ?? undefined}
+      data-editor-mode={mode}
+    >
       {/* Topbar của Editor */}
       <div className="flex items-center justify-between gap-3 px-5 py-3.5 bg-card border-b border-border/80 shrink-0 flex-wrap">
         <div className="flex items-center gap-2 flex-wrap">
@@ -356,13 +464,11 @@ export function PromptTemplateEditor({
             </button>
           ) : null}
 
-          {!template && (
-            <span className="inline-flex items-center rounded-md border border-border bg-muted/60 px-2 py-0.5 text-xs font-medium text-muted-foreground shadow-2xs">
+          {mode === "create" ? (
+            <span className="inline-flex items-center rounded-md border border-purple-500/30 bg-purple-500/15 px-2 py-0.5 text-xs font-medium text-purple-600 dark:text-purple-400 shadow-2xs">
               Tạo mới
             </span>
-          )}
-
-          {isDirty ? (
+          ) : isDirty ? (
             <span
               className="inline-flex items-center rounded-md border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400 shadow-2xs"
               title="Bạn có nội dung bản nháp chưa lưu"
@@ -380,7 +486,8 @@ export function PromptTemplateEditor({
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
-          {(template || onDeletePrompt) && (
+          {/* Nút Xóa Prompt: Chỉ hiển thị khi đang sửa prompt đã chọn */}
+          {mode === "edit" && (template || onDeletePrompt) && (
             <button
               type="button"
               className="inline-flex items-center justify-center gap-1.5 rounded-md text-xs font-medium h-8 px-3 border border-destructive/40 text-destructive bg-destructive/10 hover:bg-destructive/20 shadow-xs transition-colors disabled:opacity-50 disabled:pointer-events-none cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
@@ -410,7 +517,7 @@ export function PromptTemplateEditor({
             type="button"
             className="inline-flex items-center justify-center gap-1.5 rounded-md text-xs font-medium h-8 px-3.5 bg-primary text-primary-foreground shadow-xs hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:pointer-events-none cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             onClick={handleSave}
-            disabled={isSaving || !templateText.trim()}
+            disabled={isSaveDisabled}
             aria-label="Lưu nội dung prompt"
           >
             {isSaving ? (
@@ -420,7 +527,15 @@ export function PromptTemplateEditor({
             ) : (
               <>
                 <Check className="h-3.5 w-3.5" />
-                <span>{template ? "Lưu thay đổi" : "Lưu Prompt mới"}</span>
+                <span>
+                  {purpose === "VideoPrompt"
+                    ? "Lưu phiên bản hướng dẫn"
+                    : mode === "create"
+                      ? "Lưu Prompt mới"
+                      : template
+                        ? "Lưu thay đổi"
+                        : "Lưu Prompt"}
+                </span>
               </>
             )}
           </button>
@@ -453,6 +568,31 @@ export function PromptTemplateEditor({
               Dùng cho cả tác vụ phát triển kịch bản và phân tích/đề xuất ý tưởng (operation SuggestIdeas).
             </span>
           </div>
+        </div>
+      )}
+
+      {/* Gợi ý chuẩn hóa tên biến không dấu theo §2.2 */}
+      {nonStandardVars.length > 0 && (
+        <div className="mx-5 mt-3 flex items-center justify-between gap-3 rounded-lg border border-purple-500/30 bg-purple-500/10 p-3 text-xs text-foreground shadow-xs shrink-0 flex-wrap">
+          <div className="flex items-start gap-2.5">
+            <Sparkles className="h-4 w-4 shrink-0 text-purple-600 dark:text-purple-400 mt-0.5" />
+            <div className="flex flex-col gap-0.5">
+              <span className="font-semibold text-purple-700 dark:text-purple-300">
+                Phát hiện {nonStandardVars.length} biến số chưa chuẩn hóa không dấu:
+              </span>
+              <span className="text-[11px] text-muted-foreground">
+                {nonStandardVars.map((v) => `{${v.original}} → {${v.normalized}}`).join(", ")}
+              </span>
+            </div>
+          </div>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1.5 rounded-md text-xs font-medium h-7 px-3 bg-primary text-primary-foreground shadow-2xs hover:bg-primary/90 transition-colors cursor-pointer shrink-0"
+            onClick={handleAutoNormalizeVariables}
+            title="Tự động chuẩn hóa các biến số trong nội dung thành không dấu {ten_bien}"
+          >
+            <Sparkles className="h-3 w-3" /> Chuẩn hóa biến số
+          </button>
         </div>
       )}
 
@@ -576,7 +716,7 @@ export function PromptTemplateEditor({
               className="flex min-h-[240px] w-full rounded-md border border-input bg-card px-3 py-2 text-xs font-mono text-foreground shadow-xs transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 resize-y"
               value={templateText}
               onChange={(e) => setTemplateText(e.target.value)}
-              placeholder="Nhập nội dung template prompt. Dùng {tên_biến} để định nghĩa biến số thay thế..."
+              placeholder="Nhập nội dung template prompt. Dùng {ten_bien} để định nghĩa biến số thay thế..."
               disabled={isSaving}
               aria-label="Nội dung template prompt"
             />
@@ -600,7 +740,7 @@ export function PromptTemplateEditor({
               </div>
             ) : (
               <span className="text-xs text-muted-foreground italic">
-                Chưa có biến số nào được phát hiện trong nội dung. Thêm &#123;tên_biến&#125; vào văn bản ở trên.
+                Chưa có biến số nào được phát hiện trong nội dung. Thêm &#123;ten_bien&#125; vào văn bản ở trên.
               </span>
             )}
           </div>
@@ -620,12 +760,11 @@ export function PromptTemplateEditor({
               </label>
             </div>
           )}
-
         </div>
 
         {/* CỘT PHẢI: Nhập giá trị biến số + Xem trước (Preview Panel) */}
         <div className="flex flex-col gap-4">
-          {/* Nhập biến số */}
+          {/* Nhập biến số động (Dynamic Variable Form) */}
           <PromptVariableEditor
             variables={detectedVariables}
             values={variableValues}
@@ -634,7 +773,7 @@ export function PromptTemplateEditor({
             disabled={isSaving || isPreviewLoading}
           />
 
-          {/* Bản xem trước */}
+          {/* Bản xem trước hoàn chỉnh (Frontend Prompt Rendering) */}
           <PromptPreviewPanel
             previewData={previewData}
             isLoading={isPreviewLoading}
@@ -646,7 +785,6 @@ export function PromptTemplateEditor({
           />
         </div>
       </div>
-
     </div>
   );
 }

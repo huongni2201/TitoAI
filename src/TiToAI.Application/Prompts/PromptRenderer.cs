@@ -16,6 +16,53 @@ public static class PromptRenderer
         new(@"^[\p{L}\p{M}\p{N}_]+$", RegexOptions.Compiled);
 
     /// <summary>
+    /// Regex cho tên biến chuẩn hóa theo §2.2: Bắt đầu bằng chữ thường a-z, chỉ chứa a-z, 0-9 và _.
+    /// </summary>
+    public static readonly Regex StandardVariableNameRegex =
+        new(@"^[a-z][a-z0-9_]*$", RegexOptions.Compiled);
+
+    /// <summary>
+    /// Chuẩn hóa tên biến theo quy tắc §2.2: bỏ dấu tiếng Việt, viết thường, thay khoảng trắng/ký tự đặc biệt bằng _, bắt đầu bằng chữ cái.
+    /// </summary>
+    public static string NormalizeVariableName(string rawName)
+    {
+        if (string.IsNullOrWhiteSpace(rawName))
+        {
+            return "bien";
+        }
+
+        string normalized = rawName.Normalize(NormalizationForm.FormD);
+        var sb = new StringBuilder();
+        foreach (char c in normalized)
+        {
+            var category = System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c);
+            if (category != System.Globalization.UnicodeCategory.NonSpacingMark)
+            {
+                if (c is 'đ' or 'Đ')
+                {
+                    sb.Append('d');
+                }
+                else
+                {
+                    sb.Append(c);
+                }
+            }
+        }
+
+        string clean = sb.ToString().ToLowerInvariant();
+        clean = Regex.Replace(clean, @"[^a-z0-9_]+", "_");
+        clean = Regex.Replace(clean, @"_+", "_");
+        clean = clean.Trim('_');
+
+        if (clean.Length > 0 && char.IsDigit(clean[0]))
+        {
+            clean = "v_" + clean;
+        }
+
+        return string.IsNullOrEmpty(clean) ? "bien" : clean;
+    }
+
+    /// <summary>
     /// Trích xuất danh sách tên biến duy nhất và kiểm tra cú pháp placeholder của template.
     /// </summary>
     public static (IReadOnlyList<string> Variables, IReadOnlyList<string> MalformedPlaceholders) ParseTemplate(string? templateText)

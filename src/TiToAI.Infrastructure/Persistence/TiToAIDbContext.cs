@@ -24,6 +24,9 @@ public class TiToAIDbContext : DbContext
     public DbSet<ProviderAccount> ProviderAccounts => Set<ProviderAccount>();
     public DbSet<ExecutionBinding> ExecutionBindings => Set<ExecutionBinding>();
     public DbSet<ActiveSlotOccupancy> ActiveSlotOccupancies => Set<ActiveSlotOccupancy>();
+    public DbSet<AnalyticsSnapshot> AnalyticsSnapshots => Set<AnalyticsSnapshot>();
+    public DbSet<VideoAnalyticsRecord> VideoAnalyticsRecords => Set<VideoAnalyticsRecord>();
+    public DbSet<TikTokAnalyticsDailyRecord> TikTokAnalyticsDailyRecords => Set<TikTokAnalyticsDailyRecord>();
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {

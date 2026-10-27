@@ -1,9 +1,12 @@
+using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using System.Windows;
 using System.Windows.Media;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using TiToAI.Application.Accounts;
+using TiToAI.Application.Analytics;
 using TiToAI.Application.Assets;
 using TiToAI.Application.Content;
 using TiToAI.Application.Documents;
@@ -14,7 +17,6 @@ using TiToAI.Application.Providers;
 using TiToAI.Application.Scenes;
 using TiToAI.Application.Settings;
 using TiToAI.Application.Workflows;
-using TiToAI.Application.Workspaces;
 using TiToAI.Browser;
 using TiToAI.Browser.Abstractions;
 using TiToAI.Browser.Models;
@@ -34,7 +36,6 @@ public partial class MainWindow : Window
 {
     private readonly SemaphoreSlim _startupLock = new(1, 1);
     private CancellationTokenSource? _startupCts;
-    private WorkspaceHandlers? _workspaceHandlers;
     private AccountHandlers? _accountHandlers;
     private ProviderAccountHandlers? _providerAccountHandlers;
     private PromptHandlers? _promptHandlers;
@@ -43,6 +44,7 @@ public partial class MainWindow : Window
     private VideoWorkflowHandlers? _videoWorkflowHandlers;
     private ProviderHandlers? _providerHandlers;
     private WorkflowHandlers? _workflowHandlers;
+    private AnalyticsHandlers? _analyticsHandlers;
     private BrowserHandlers? _browserHandlers;
     private SettingsHandlers? _settingsHandlers;
     private AssetHandlers? _assetHandlers;
@@ -103,6 +105,9 @@ public partial class MainWindow : Window
         ErrorOverlay.Background = new SolidColorBrush(isDark
             ? Color.FromRgb(0x0B, 0x12, 0x20)
             : Color.FromRgb(0xF4, 0xF6, 0xFB));
+        ErrorTitleText.Foreground = new SolidColorBrush(isDark
+            ? Color.FromRgb(0xF4, 0xF7, 0xFC)
+            : Color.FromRgb(0x0F, 0x17, 0x2A));
         ErrorMessageText.Foreground = new SolidColorBrush(isDark
             ? Color.FromRgb(0xA9, 0xB8, 0xCD)
             : Color.FromRgb(0x47, 0x55, 0x69));
@@ -192,7 +197,7 @@ public partial class MainWindow : Window
             ApplyEffectiveTheme(ThemeService.CurrentEffectiveTheme);
 
             // 3. ĐĂNG KÝ G2 HANDLERS CHỈ SAU KHI BOOTSTRAP THÀNH CÔNG VÀ CHƯA BỊ HỦY
-            // Nối Workspace, Account và Prompt Handlers thật (thay thế projection tạm để tránh trùng lặp workspace.list)
+            // Nối account, prompt và Project-first handlers.
             var connectionString = DatabasePathHelper.BuildConnectionString(bootstrapResult.DatabasePath);
             var dbOptions = new DbContextOptionsBuilder<TiToAIDbContext>()
                 .UseSqlite(connectionString)
@@ -231,19 +236,22 @@ public partial class MainWindow : Window
                 return _browserGatekeeper?.GetActiveOrBusyProfileIds().Count ?? 0;
             }
 
+            BrowserSessionCheckpointCoordinator? sessionCheckpointCoordinator = null;
             var loginCoordinator = new LoginCoordinator(
                 profileRegistry,
                 processController,
                 sessionProbe,
                 getMaxOpenBrowsers: GetMaxOpenBrowsers,
-                getOpenBrowserCount: GetOpenBrowserCount);
-            var workspaceService = new WorkspaceService(dbOptions);
+                getOpenBrowserCount: GetOpenBrowserCount,
+                canReplaceHeadlessContext: profileId =>
+                    tabPool.GetActiveJobCount(profileId) == 0 &&
+                    sessionCheckpointCoordinator?.HasUncertainOrActiveJobs(profileId) != true);
             var accountLinkService = new AccountLinkService(dbOptions, sessionProbe);
 
             _profileRegistry = profileRegistry;
             _loginCoordinator = loginCoordinator;
 
-            var sessionCheckpointCoordinator = new BrowserSessionCheckpointCoordinator(
+            sessionCheckpointCoordinator = new BrowserSessionCheckpointCoordinator(
                 profileRegistry,
                 loginCoordinator,
                 sessionProbe,
@@ -272,19 +280,14 @@ public partial class MainWindow : Window
             };
             profileRegistry.ProfileStateChanged += _profileStateChangedHandler;
 
-            _workspaceHandlers = new WorkspaceHandlers(workspaceService, async envelope =>
-            {
-                if (BridgeRouter != null)
-                {
-                    await BridgeRouter.PostEventAsync(envelope.EventName, envelope.WorkspaceId, envelope.Payload).ConfigureAwait(false);
-                }
-            });
-            _workspaceHandlers.Register(DispatcherInstance);
-
             _accountHandlers = new AccountHandlers(accountLinkService);
             _accountHandlers.Register(DispatcherInstance);
 
-            var providerAccountService = new ProviderAccountService(dbOptions, sessionProbe);
+            var providerAccountService = new ProviderAccountService(dbOptions, sessionProbe, async (pid, ct) =>
+            {
+                await processController.CloseContextAsync(pid, ct);
+                await profileRegistry.DeleteUserDataAsync(pid, ct);
+            });
             _providerAccountHandlers = new ProviderAccountHandlers(providerAccountService);
             _providerAccountHandlers.Register(DispatcherInstance);
 
@@ -332,6 +335,17 @@ public partial class MainWindow : Window
             _workflowHandlers = workflowHandlers;
             _workflowHandlers.Register(DispatcherInstance);
 
+            var analyticsService = new AnalyticsService(dbOptions);
+            var tiktokCrawler = new TikTokAnalyticsSyncService(
+                dbOptions,
+                profileRegistry,
+                processController,
+                loginCoordinator,
+                sessionProbe,
+                analyticsService);
+            _analyticsHandlers = new AnalyticsHandlers(analyticsService, tiktokCrawler);
+            _analyticsHandlers.Register(DispatcherInstance);
+
             var snapshotFactory = new JobSnapshotFactory(settingsService, dbOptions: dbOptions);
             var reservation = new JobReservation(dbOptions);
             var executor = new ProductionJobExecutor(providerRegistry);
@@ -339,12 +353,12 @@ public partial class MainWindow : Window
             var jobService = new JobService(dbOptions, snapshotFactory, scheduler);
 
             var workflowService = new ProjectWorkflowService(dbOptions, jobService);
-            var manualHandoffService = new ManualHandoffService(dbOptions, (jobId, token) => workflowService.ApplyJobOutputAsync(jobId, token));
 
             _videoWorkflowHandlers = new VideoWorkflowHandlers(workflowService);
             _videoWorkflowHandlers.Register(DispatcherInstance);
 
             await jobService.RunCrashRecoverySweepAsync(ct).ConfigureAwait(false);
+            await workflowService.RunWorkflowApplySweepAsync(ct).ConfigureAwait(false);
             await workflowService.RunWorkflowContinuationSweepAsync(ct).ConfigureAwait(false);
 
             _jobScheduler = scheduler;
@@ -358,7 +372,7 @@ public partial class MainWindow : Window
                 // Khi một tác vụ thuộc workflow thành công: Tự động áp dụng kết quả vào Scene và kích hoạt bước tiếp theo (§3.3)
                 if (string.Equals(payload.NewState, JobState.Succeeded, StringComparison.OrdinalIgnoreCase))
                 {
-                    _ = workflowService.ApplyJobOutputAsync(payload.JobId);
+                    _ = ApplyWorkflowOutputSafelyAsync(workflowService, payload.JobId);
                 }
             };
             scheduler.OnJobStateChanged += _jobStateChangedHandler;
@@ -380,7 +394,7 @@ public partial class MainWindow : Window
                 {
                     await BridgeRouter.PostEventAsync(envelope.EventName, envelope.WorkspaceId, envelope.Payload).ConfigureAwait(false);
                 }
-            }, manualHandoffService);
+            });
             _jobHandlers.Register(DispatcherInstance);
 
             // 4. Khởi tạo WebView2 Host Manager và điều hướng UI
@@ -414,7 +428,7 @@ public partial class MainWindow : Window
             Opacity = 1;
             ErrorOverlay.Visibility = Visibility.Visible;
         }
-        catch (InvalidOperationException ex) when (ex.Message.Contains("cơ sở dữ liệu", StringComparison.OrdinalIgnoreCase))
+        catch (Exception ex) when (ex is SqliteException || ex is DbUpdateException || (ex is InvalidOperationException inv && inv.Message.Contains("cơ sở dữ liệu", StringComparison.OrdinalIgnoreCase)))
         {
             if (_isClosed || ct.IsCancellationRequested)
             {
@@ -422,13 +436,14 @@ public partial class MainWindow : Window
             }
 
             CleanupG2Handlers();
+            Debug.WriteLine($"[MainWindow] Lỗi cơ sở dữ liệu: {ex}");
 
-            ErrorMessageText.Text = "Không thể khởi tạo cơ sở dữ liệu ứng dụng.\nVui lòng kiểm tra quyền truy cập hệ thống và nhấn 'Thử lại'.";
+            ErrorMessageText.Text = $"Không thể khởi tạo cơ sở dữ liệu ứng dụng ({ex.Message}).\nVui lòng kiểm tra quyền truy cập hệ thống và nhấn 'Thử lại'.";
             ApplyEffectiveTheme(ThemeService.CurrentEffectiveTheme);
             Opacity = 1;
             ErrorOverlay.Visibility = Visibility.Visible;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
             if (_isClosed || ct.IsCancellationRequested)
             {
@@ -436,8 +451,9 @@ public partial class MainWindow : Window
             }
 
             CleanupG2Handlers();
+            Debug.WriteLine($"[MainWindow] Lỗi khởi tạo ứng dụng: {ex}");
 
-            ErrorMessageText.Text = "Khởi tạo ứng dụng thất bại.\nVui lòng kiểm tra WebView2 Runtime trên hệ thống và nhấn 'Thử lại'.";
+            ErrorMessageText.Text = $"Khởi tạo ứng dụng thất bại: {ex.Message}\nVui lòng kiểm tra môi trường hệ thống và nhấn 'Thử lại'.";
             ApplyEffectiveTheme(ThemeService.CurrentEffectiveTheme);
             Opacity = 1;
             ErrorOverlay.Visibility = Visibility.Visible;
@@ -445,6 +461,18 @@ public partial class MainWindow : Window
         finally
         {
             _startupLock.Release();
+        }
+    }
+
+    private static async Task ApplyWorkflowOutputSafelyAsync(ProjectWorkflowService workflowService, string jobId)
+    {
+        try
+        {
+            await workflowService.ApplyJobOutputAsync(jobId).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[Workflow] Output apply failed for job {jobId}: {ex}");
         }
     }
 
@@ -468,11 +496,6 @@ public partial class MainWindow : Window
         _sessionCheckpointCoordinator = null;
         _profileRegistry = null;
 
-        if (_workspaceHandlers != null)
-        {
-            _workspaceHandlers.Unregister(DispatcherInstance);
-            _workspaceHandlers = null;
-        }
         if (_accountHandlers != null)
         {
             _accountHandlers.Unregister(DispatcherInstance);
@@ -523,6 +546,11 @@ public partial class MainWindow : Window
         {
             _workflowHandlers.Unregister(DispatcherInstance);
             _workflowHandlers = null;
+        }
+        if (_analyticsHandlers != null)
+        {
+            _analyticsHandlers.Unregister(DispatcherInstance);
+            _analyticsHandlers = null;
         }
 
         if (_browserGatekeeper != null)
@@ -567,11 +595,6 @@ public partial class MainWindow : Window
 
     private async Task CleanupG2HandlersAsync()
     {
-        if (_workspaceHandlers != null)
-        {
-            _workspaceHandlers.Unregister(DispatcherInstance);
-            _workspaceHandlers = null;
-        }
         if (_accountHandlers != null)
         {
             _accountHandlers.Unregister(DispatcherInstance);
@@ -627,6 +650,11 @@ public partial class MainWindow : Window
         {
             _workflowHandlers.Unregister(DispatcherInstance);
             _workflowHandlers = null;
+        }
+        if (_analyticsHandlers != null)
+        {
+            _analyticsHandlers.Unregister(DispatcherInstance);
+            _analyticsHandlers = null;
         }
 
         if (_browserGatekeeper != null)

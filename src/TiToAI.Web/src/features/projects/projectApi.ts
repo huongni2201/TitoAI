@@ -7,6 +7,7 @@ export interface ProjectSummaryDto {
   description: string | null;
   status: string;
   sceneCount: number;
+  hasVideo: boolean;
   createdAtUtc: string;
   updatedAtUtc: string;
 }
@@ -148,6 +149,15 @@ export interface SceneReorderResponseData {
  * Typed Bridge Client cho các thao tác Quản lý Dự án (Project) và Cảnh (Scene) theo contracts v1.0.4.
  */
 export const projectApi = {
+  /** Lists every project for the project-first shell. */
+  async listAll(): Promise<ProjectSummaryDto[]> {
+    const data = await bridgeClient.invoke<ProjectListResponseData>(
+      "project.list",
+      {},
+    );
+    return data?.projects ?? [];
+  },
+
   /**
    * Lấy danh sách Dự án theo Workspace
    */

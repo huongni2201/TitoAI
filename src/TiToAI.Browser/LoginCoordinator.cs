@@ -25,6 +25,7 @@ public sealed class LoginCoordinator : ILoginCoordinator, IDisposable
     private readonly ISessionProbe? _sessionProbe;
     private readonly Func<int>? _getMaxOpenBrowsers;
     private readonly Func<int>? _getOpenBrowserCount;
+    private readonly Func<string, bool>? _canReplaceHeadlessContext;
 
     private bool _disposed;
 
@@ -51,13 +52,15 @@ public sealed class LoginCoordinator : ILoginCoordinator, IDisposable
         IBrowserProcessController? processController = null,
         ISessionProbe? sessionProbe = null,
         Func<int>? getMaxOpenBrowsers = null,
-        Func<int>? getOpenBrowserCount = null)
+        Func<int>? getOpenBrowserCount = null,
+        Func<string, bool>? canReplaceHeadlessContext = null)
     {
         _profileRegistry = profileRegistry;
         _processController = processController;
         _sessionProbe = sessionProbe ?? (profileRegistry != null ? new SessionProbe(profileRegistry) : null);
         _getMaxOpenBrowsers = getMaxOpenBrowsers;
         _getOpenBrowserCount = getOpenBrowserCount;
+        _canReplaceHeadlessContext = canReplaceHeadlessContext;
 
         if (_processController != null)
         {
@@ -104,6 +107,19 @@ public sealed class LoginCoordinator : ILoginCoordinator, IDisposable
 
             // 1. Kiểm tra nếu cửa sổ trình duyệt của profile này ĐÃ ĐANG MỞ
             bool isAlreadyRunning = (_processController != null && _processController.IsRunning(profileId)) || _activeVisibleProfiles.ContainsKey(profileId);
+            if (isAlreadyRunning && _processController?.TryGetContext(profileId) is { IsHeadless: true })
+            {
+                if (_canReplaceHeadlessContext?.Invoke(profileId) != true)
+                {
+                    throw new InvalidOperationException(
+                        $"Profile '{profileId}' đang được tác vụ nền sử dụng. Hãy đợi tác vụ kết thúc rồi mở cửa sổ đăng nhập lại.");
+                }
+
+                await _processController.CloseContextAsync(profileId, cancellationToken);
+                _activeVisibleProfiles.TryRemove(profileId, out _);
+                isAlreadyRunning = false;
+            }
+
             if (isAlreadyRunning)
             {
                 _activeVisibleProfiles.TryAdd(profileId, 0);

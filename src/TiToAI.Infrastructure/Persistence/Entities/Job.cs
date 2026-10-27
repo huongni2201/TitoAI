@@ -27,6 +27,7 @@ public class Job
     public string? LastHeartbeatAtUtc { get; set; }
     public string CreatedAtUtc { get; set; } = string.Empty;
     public string UpdatedAtUtc { get; set; } = string.Empty;
+    public long Revision { get; set; } = 1;
 
     public Project? Project { get; set; }
     public Scene? Scene { get; set; }

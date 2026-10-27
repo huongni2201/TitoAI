@@ -96,8 +96,13 @@ export function PromptPreviewPanel({
         </button>
       </div>
 
-      <div className="rounded-md border border-border/60 bg-muted/30 px-3 py-1.5 text-[11px] text-muted-foreground leading-relaxed">
-        <strong>Lưu ý:</strong> Thao tác này chỉ render xem trước nội dung yêu cầu ghép với dữ liệu; hoàn toàn không gọi AI và không tốn lượt gửi. Thao tác gửi AI được thực hiện tại luồng Tạo nội dung trong Dự án.
+      <div className="rounded-md border border-border/60 bg-muted/30 px-3 py-1.5 text-[11px] text-muted-foreground leading-relaxed flex flex-col gap-1">
+        <div>
+          <strong>Phân biệt mẫu & bản hoàn chỉnh:</strong> Mẫu gốc (Prompt Template) chứa biến số được bảo toàn để tái sử dụng; nội dung hiển thị dưới đây là <strong>Rendered Prompt</strong> đã thay thế các biến bằng giá trị thực tế để gọi AI hoặc lưu theo lần chạy.
+        </div>
+        <div className="text-[10px] text-muted-foreground/80">
+          Thao tác render xem trước chỉ kiểm tra cú pháp và kết nối dữ liệu tại frontend; hoàn toàn không gọi AI và không tốn lượt gửi. Thao tác gửi AI được thực hiện tại luồng Tạo nội dung trong Dự án.
+        </div>
       </div>
 
       {/* Cảnh báo bản xem trước cũ không khớp với bản nháp hiện tại */}

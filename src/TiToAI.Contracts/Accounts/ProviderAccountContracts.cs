@@ -84,11 +84,11 @@ public sealed record EnableProviderAccountResponseData(
     [property: JsonPropertyName("account")] ProviderAccountDto Account
 );
 
-public sealed record ArchiveProviderAccountRequest(
+public sealed record DeleteProviderAccountRequest(
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("expectedRevision")] long? ExpectedRevision = null
 );
 
-public sealed record ArchiveProviderAccountResponseData(
+public sealed record DeleteProviderAccountResponseData(
     [property: JsonPropertyName("account")] ProviderAccountDto Account
 );

@@ -28,14 +28,6 @@ interface LibraryPageProps {
 type FilterType = "all" | "Image" | "Audio" | "Video";
 
 export function LibraryPage({ workspaceId }: LibraryPageProps) {
-  if (!workspaceId) {
-    return (
-      <div className="p-8 text-center text-muted-foreground bg-card border rounded-lg">
-        Vui lòng chọn một không gian làm việc (Workspace) để duyệt Thư viện tài nguyên.
-      </div>
-    );
-  }
-
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [assets, setAssets] = useState<AssetItem[]>([]);
@@ -109,6 +101,7 @@ export function LibraryPage({ workspaceId }: LibraryPageProps) {
   }, [loadAssets]);
 
   const handleOpenFolder = async (asset: AssetItem) => {
+    if (!workspaceId) return;
     try {
       setActionMessage(null);
       const res = await openAssetFolder({
@@ -163,6 +156,14 @@ export function LibraryPage({ workspaceId }: LibraryPageProps) {
   };
 
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+
+  if (!workspaceId) {
+    return (
+      <div className="p-8 text-center text-muted-foreground bg-card border rounded-lg">
+        Mở hoặc tạo một dự án video để duyệt và quản lý tài nguyên media.
+      </div>
+    );
+  }
 
   return (
     <div className="library-page space-y-4">

@@ -30,6 +30,30 @@ public sealed class ProjectService
     }
 
     /// <summary>
+    /// Lists projects across legacy workspace scopes for the project-first UI.
+    /// WorkspaceId remains migration metadata on each row until the schema migration is complete.
+    /// </summary>
+    public async Task<IReadOnlyList<ProjectSummaryDto>> ListAllAsync(CancellationToken cancellationToken = default)
+    {
+        await using var dbContext = new TiToAIDbContext(_dbOptions);
+
+        return await dbContext.Projects
+            .AsNoTracking()
+            .OrderByDescending(p => p.UpdatedAtUtc)
+            .Select(p => new ProjectSummaryDto(
+                p.Id,
+                p.WorkspaceId,
+                p.Name,
+                p.Description,
+                p.Status,
+                dbContext.Scenes.Count(s => s.ProjectId == p.Id),
+                dbContext.Scenes.Any(s => s.ProjectId == p.Id && s.VideoAssetId != null),
+                p.CreatedAtUtc,
+                p.UpdatedAtUtc))
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <summary>
     /// Lấy danh sách Dự án theo Không gian làm việc kèm số lượng Cảnh (sceneCount) được tính toán chính xác.
     /// </summary>
     public async Task<IReadOnlyList<ProjectSummaryDto>> ListByWorkspaceAsync(string workspaceId, CancellationToken cancellationToken = default)
@@ -58,6 +82,7 @@ public sealed class ProjectService
                 p.Description,
                 p.Status,
                 dbContext.Scenes.Count(s => s.ProjectId == p.Id && s.WorkspaceId == normalizedWorkspaceId),
+                dbContext.Scenes.Any(s => s.ProjectId == p.Id && s.WorkspaceId == normalizedWorkspaceId && s.VideoAssetId != null),
                 p.CreatedAtUtc,
                 p.UpdatedAtUtc))
             .ToListAsync(cancellationToken);
@@ -106,10 +131,14 @@ public sealed class ProjectService
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var normalizedWorkspaceId = NormalizeAndValidateGuid(request.WorkspaceId, nameof(request.WorkspaceId));
         var (name, description) = ValidateProjectFields(request.Name, request.Description);
 
         await using var dbContext = new TiToAIDbContext(_dbOptions);
+
+        var normalizedWorkspaceId = await ResolveLegacyWorkspaceIdAsync(
+            dbContext,
+            request.WorkspaceId,
+            cancellationToken);
 
         var workspaceExists = await dbContext.Workspaces
             .AsNoTracking()
@@ -338,6 +367,42 @@ public sealed class ProjectService
         }
 
         return (trimmedName, trimmedDesc);
+    }
+
+    private static async Task<string> ResolveLegacyWorkspaceIdAsync(
+        TiToAIDbContext dbContext,
+        string? requestedWorkspaceId,
+        CancellationToken cancellationToken)
+    {
+        if (!string.IsNullOrWhiteSpace(requestedWorkspaceId))
+        {
+            return NormalizeAndValidateGuid(requestedWorkspaceId, nameof(requestedWorkspaceId));
+        }
+
+        // Compatibility container for pre-migration schema. It is never shown as a user-facing Workspace.
+        const string defaultId = "00000000-0000-0000-0000-000000000001";
+        var alreadyCreated = await dbContext.Workspaces
+            .AsNoTracking()
+            .AnyAsync(w => w.Id == defaultId, cancellationToken);
+        if (alreadyCreated)
+        {
+            return defaultId;
+        }
+
+        var nowUtc = DateTime.UtcNow.ToString("o");
+        dbContext.Workspaces.Add(new Workspace
+        {
+            Id = defaultId,
+            Name = "TiToAI Local",
+            ChannelHandle = "@titoai-local-000000000001",
+            Topic = string.Empty,
+            Status = "Active",
+            CreatedAtUtc = nowUtc,
+            UpdatedAtUtc = nowUtc
+        });
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+        return defaultId;
     }
 
     private static string NormalizeAndValidateGuid(string? id, string paramName)

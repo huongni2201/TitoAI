@@ -1,3 +1,7 @@
+> **Kiến trúc sản phẩm mới 2026-10-27:** [VIDEO_FIRST_ARCHITECTURE_PLAN.md](VIDEO_FIRST_ARCHITECTURE_PLAN.md) là nguồn chuẩn mới: bỏ Workspace, một Project cho một video TikTok đích và có chặng publish. Mọi đoạn bên dưới dùng Workspace/channel làm ranh giới active ownership, UI, storage, account hoặc analytics đã bị thay; giữ các phần khác của plan nếu không xung đột.
+>
+> **Quyết định hiện hành về tạo video:** [Luồng chỉ chạy tự động](AUTOMATIC_VIDEO_WORKFLOW_PLAN.md) bỏ manual handoff/fallback trong quy trình tạo video. Các yêu cầu manual bên dưới chỉ là baseline lịch sử trong phạm vi này; không dùng làm acceptance mới.
+
 > **Quyết định hiện hành về queue/tài khoản/Settings:** đọc [plan 1.2](QUEUE_EXECUTION_SETTINGS_PLAN.md). Phần popup, account gắn Workspace hoặc queue theo Workspace trong nguồn này đã được thay; nội dung nguồn dưới giữ để đối chiếu, không là lệnh thực thi.
 
 > **Bổ sung P0 ngày 2026-10-26:** [§7.4](#74-tạo-ý-tưởngprompt-kèm-nội-dung-đăng-tiktok--p0) yêu cầu AI tạo ý tưởng/kịch bản hoặc prompt kèm luôn nội dung bài đăng TikTok để người dùng sửa và sao chép.
@@ -302,6 +306,8 @@ public interface IProviderAdapter
 ## 9. TikTok analytics
 
 - Một workspace ↔ một profile TikTok; ưu tiên API/export hoặc dữ liệu người dùng có quyền truy cập; UI automation chỉ ở nơi được phép.
+- Luồng export được người dùng yêu cầu dùng giao diện TikTok Studio đã đăng nhập để tải riêng `Overview.csv`, `Content.csv`, `Viewers.csv`, sau đó nhập cả ba vào cùng một snapshot của Workspace. Không dùng endpoint nội bộ không được công bố làm nguồn dữ liệu.
+- `Overview` và `Viewers` lưu chuỗi số liệu theo ngày; `Content` lưu từng video. Metric vắng mặt giữ `null`, số 0 từ file giữ nguyên là 0; file `Content.csv` chỉ có header là báo cáo hợp lệ với 0 video.
 - Metrics được ghi theo `account_id`, `workspace_id`, `video_key`, `captured_at_utc`, `source` để không trộn kênh.
 - Giai đoạn MVP: lượt xem, like, comment, share, tỷ lệ tương tác nếu nguồn cung cấp; affiliate như click/GMV/hoa hồng chỉ khi dữ liệu được quyền truy cập.
 - Từ các thống kê đã xác thực, hiển thị phân tích hiệu quả chủ đề, hook, thời lượng và cải thiện prompt *trong cùng workspace*.

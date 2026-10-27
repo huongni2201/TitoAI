@@ -15,6 +15,10 @@ import type {
   JobReconcileResponseData,
   JobStateChangedPayload,
   JobProgressUpdatedPayload,
+  JobRetryRequest,
+  JobRetryResponseData,
+  JobListHistoryRequest,
+  JobListHistoryResponseData,
 } from "./jobTypes";
 
 export const jobApi = {
@@ -76,6 +80,29 @@ export const jobApi = {
       "job.reconcile",
       payload,
       { workspaceId: payload.workspaceId },
+    );
+  },
+
+  /**
+   * Thử lại an toàn một tác vụ thất bại (C2 - job.retry) với ExpectedRevision (CAS)
+   */
+  async retry(workspaceId: string, jobId: string, expectedRevision: number): Promise<JobRetryResponseData> {
+    const payload: JobRetryRequest = { workspaceId, jobId, expectedRevision };
+    return await bridgeClient.invoke<JobRetryResponseData>(
+      "job.retry",
+      payload,
+      { workspaceId },
+    );
+  },
+
+  /**
+   * Lấy lịch sử các tác vụ đã hoàn tất / kết thúc (C3 - job.list_history)
+   */
+  async listHistory(req: JobListHistoryRequest = {}): Promise<JobListHistoryResponseData> {
+    return await bridgeClient.invoke<JobListHistoryResponseData>(
+      "job.list_history",
+      req,
+      req.workspaceId ? { workspaceId: req.workspaceId } : undefined,
     );
   },
 

@@ -43,6 +43,8 @@ export interface JobListProps {
   ) => Promise<void> | void;
   onReconcileSuccess?: (job: JobSummaryDto | JobDetailDto, result: JobReconcileResponseData) => void;
   initialFilter?: QueueTabFilter;
+  activeTab?: QueueTabFilter;
+  onTabChange?: (tab: QueueTabFilter) => void;
   className?: string;
   actionLoadingJobId?: string | null;
 }
@@ -56,10 +58,17 @@ export function JobList({
   onAction,
   onReconcileSuccess,
   initialFilter = "all",
+  activeTab: controlledActiveTab,
+  onTabChange,
   className,
   actionLoadingJobId,
 }: JobListProps) {
-  const [activeTab, setActiveTab] = useState<QueueTabFilter>(initialFilter);
+  const [internalTab, setInternalTab] = useState<QueueTabFilter>(initialFilter);
+  const activeTab = controlledActiveTab ?? internalTab;
+  const handleTabChange = (tab: QueueTabFilter) => {
+    setInternalTab(tab);
+    onTabChange?.(tab);
+  };
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedJobForDetails, setSelectedJobForDetails] =
     useState<(JobSummaryDto | JobDetailDto) | null>(null);
@@ -189,7 +198,7 @@ export function JobList({
       {/* Tabs phân loại trạng thái */}
       <Tabs
         value={activeTab}
-        onValueChange={(val) => setActiveTab(val as QueueTabFilter)}
+        onValueChange={(val) => handleTabChange(val as QueueTabFilter)}
         className="w-full"
       >
         <TabsList className="grid w-full grid-cols-5 h-9 p-1 bg-muted/60">

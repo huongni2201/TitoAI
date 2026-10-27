@@ -36,7 +36,6 @@ export interface ProviderCapabilityDto {
   supportedTasks: string[];
   verificationStatus: "VERIFIED" | "NOT_VERIFIED" | string;
   sessionStatus?: string;
-  manualHandoffMode?: string;
 }
 
 export interface ProviderAccountSummaryDto {

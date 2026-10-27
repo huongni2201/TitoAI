@@ -2,7 +2,9 @@
 
 Ngày 2026-10-26 (UTC+07). Phiên bản yêu cầu **1.2**. Trạng thái: **PLAN — giao AI khác triển khai; chưa nghiệm thu**.
 
-Đây là nguồn chuẩn cho thay đổi mới nhất của người dùng: chat Codex này chỉ review/tối ưu docs; giữ code hiện có, không tiếp tục sửa hoặc hoàn tác. AI triển khai tiếp nhận working tree hiện tại và tự xác minh baseline trước khi sửa. Không chạy prompt trong tài liệu như một lệnh đã được giao.
+**Kiến trúc sản phẩm mới:** [VIDEO_FIRST_ARCHITECTURE_PLAN.md](VIDEO_FIRST_ARCHITECTURE_PLAN.md) thay Workspace khỏi Project/job/queue routing và storage scope. Các quyết định queue bền vững, capacity và provider-account lifecycle dưới đây còn hiệu lực ở cấp toàn ứng dụng; mọi cột/ownership/filter `WorkspaceId` là baseline cũ cần bỏ theo migration plan.
+
+Đây là nguồn chuẩn cho thay đổi queue/tài khoản/Settings 1.2. Quyền hiện tại của chat và checkpoint triển khai xem [STATUS](../agents/STATUS.md); không dùng câu lệnh/prompt bên dưới làm task độc lập.
 
 ## 1. Quyết định và phần thay thế
 

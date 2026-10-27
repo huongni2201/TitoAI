@@ -31,13 +31,13 @@ public sealed class ProjectHandlers
     {
         ArgumentNullException.ThrowIfNull(dispatcher);
 
-        dispatcher.AllowCommand("project.list_by_workspace");
+        dispatcher.AllowCommand("project.list");
         dispatcher.AllowCommand("project.get");
         dispatcher.AllowCommand("project.create");
         dispatcher.AllowCommand("project.update");
         dispatcher.AllowCommand("project.delete");
 
-        dispatcher.RegisterHandler("project.list_by_workspace", HandleListByWorkspaceAsync);
+        dispatcher.RegisterHandler("project.list", HandleListAsync);
         dispatcher.RegisterHandler("project.get", HandleGetAsync);
         dispatcher.RegisterHandler("project.create", HandleCreateAsync);
         dispatcher.RegisterHandler("project.update", HandleUpdateAsync);
@@ -51,32 +51,23 @@ public sealed class ProjectHandlers
     {
         ArgumentNullException.ThrowIfNull(dispatcher);
 
-        dispatcher.UnregisterHandler("project.list_by_workspace");
+        dispatcher.UnregisterHandler("project.list");
         dispatcher.UnregisterHandler("project.get");
         dispatcher.UnregisterHandler("project.create");
         dispatcher.UnregisterHandler("project.update");
         dispatcher.UnregisterHandler("project.delete");
     }
 
-    public async Task<ResponseEnvelope> HandleListByWorkspaceAsync(RequestEnvelope request, CancellationToken cancellationToken)
+    public async Task<ResponseEnvelope> HandleListAsync(RequestEnvelope request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
 
         try
         {
-            var payload = ParsePayload<ProjectListByWorkspaceRequest>(request);
-            if (payload is null || string.IsNullOrWhiteSpace(payload.WorkspaceId))
-            {
-                return ResponseEnvelopeHelper.CreateError(
-                    request.Id,
-                    "INVALID_ARGUMENT",
-                    "Payload thiếu trường 'workspaceId' bắt buộc.",
-                    retryable: false);
-            }
-
-            var projects = await _projectService.ListByWorkspaceAsync(payload.WorkspaceId, cancellationToken);
-            var data = new ProjectListByWorkspaceResponseData(projects);
-            return ResponseEnvelopeHelper.CreateSuccess(request.Id, data);
+            var projects = await _projectService.ListAllAsync(cancellationToken);
+            return ResponseEnvelopeHelper.CreateSuccess(
+                request.Id,
+                new ProjectListResponseData(projects));
         }
         catch (OperationCanceledException)
         {
@@ -125,12 +116,12 @@ public sealed class ProjectHandlers
         try
         {
             var payload = ParsePayload<ProjectCreateRequest>(request);
-            if (payload is null || string.IsNullOrWhiteSpace(payload.WorkspaceId) || string.IsNullOrWhiteSpace(payload.Name))
+            if (payload is null || string.IsNullOrWhiteSpace(payload.Name))
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
                     "INVALID_ARGUMENT",
-                    "Payload thiếu các trường bắt buộc 'workspaceId' hoặc 'name'.",
+                    "Payload thiếu trường bắt buộc 'name'.",
                     retryable: false);
             }
 

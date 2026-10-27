@@ -22,6 +22,8 @@ globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
 (globalThis as unknown as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
 // Stub WebView2 Window
+import { bridgeCommandAllowlist, bridgeContractVersion } from "../../contracts/bridge.ts";
+
 const dispatchedMessages: unknown[] = [];
 const messageListeners: ((event: MessageEvent) => void)[] = [];
 (domWindow as unknown as Record<string, unknown>).chrome = {
@@ -36,13 +38,25 @@ const messageListeners: ((event: MessageEvent) => void)[] = [];
     postMessage(msg: unknown) {
       dispatchedMessages.push(msg);
       const req = msg as { id: string; command: string };
-      const responseData = {
-        id: req.id,
-        type: "response",
-        success: true,
-        contractVersion: "1.0",
-        data: {},
-      };
+      const isAllowed = (bridgeCommandAllowlist as readonly string[]).includes(req.command);
+      const responseData = isAllowed
+        ? {
+            id: req.id,
+            type: "response",
+            success: true,
+            contractVersion: "1.0",
+            data: {},
+          }
+        : {
+            id: req.id,
+            type: "response",
+            success: false,
+            contractVersion: "1.0",
+            error: {
+              code: "UNKNOWN_COMMAND",
+              message: `Command '${req.command}' is not in bridgeCommandAllowlist`,
+            },
+          };
       setTimeout(() => {
         for (const l of messageListeners) {
           l({ data: responseData } as MessageEvent);
@@ -124,11 +138,12 @@ console.log("=== BẮT ĐẦU KIỂM THỬ COMPONENT PROMPT TEMPLATE (R1–R6, H
 // R5: Kiểm chứng Production Allow-list qua defaultPromptTransport
 // ---------------------------------------------------------------------------------
 {
-  console.log("R5: Kiểm tra defaultPromptTransport với 7 lệnh backend T10 trên allow-list thật...");
+  console.log("R5: Kiểm tra defaultPromptTransport với các lệnh prompt trên bridgeCommandAllowlist thật...");
 
   const commands = [
     "prompt.list_templates",
     "prompt.get_template",
+    "prompt.save_template",
     "prompt.list_versions",
     "prompt.create_version",
     "prompt.preview",
@@ -137,6 +152,13 @@ console.log("=== BẮT ĐẦU KIỂM THỬ COMPONENT PROMPT TEMPLATE (R1–R6, H
   ];
 
   for (const cmd of commands) {
+    // 1. Kiểm tra tĩnh trong bridgeCommandAllowlist
+    assertTrue(
+      (bridgeCommandAllowlist as readonly string[]).includes(cmd),
+      `Lệnh ${cmd} phải có mặt trong bridgeCommandAllowlist`
+    );
+
+    // 2. Kiểm tra động qua defaultPromptTransport.invoke
     dispatchedMessages.length = 0;
     try {
       await defaultPromptTransport.invoke(cmd, {});
@@ -151,11 +173,28 @@ console.log("=== BẮT ĐẦU KIỂM THỬ COMPONENT PROMPT TEMPLATE (R1–R6, H
     }
 
     assertTrue(dispatchedMessages.length > 0, `Lệnh ${cmd} phải được postMessage tới WebView2`);
-    const lastEnvelope = dispatchedMessages[dispatchedMessages.length - 1] as { command: string };
+    const lastEnvelope = dispatchedMessages[dispatchedMessages.length - 1] as {
+      id: string;
+      command: string;
+      contractVersion: string;
+    };
     assertEqual(lastEnvelope.command, cmd, `Envelope command phải khớp ${cmd}`);
+    assertEqual(lastEnvelope.contractVersion, bridgeContractVersion, `Contract version envelope phải là ${bridgeContractVersion}`);
   }
 
-  console.log("  -> PASS: Cả 7 lệnh prompt.* đều vượt qua allow-list production thật mà không bị UNKNOWN_COMMAND.");
+  // 3. Kiểm thử phủ định: Lệnh không nằm trong allowlist phải bị từ chối UNKNOWN_COMMAND thật sự
+  let unknownRejected = false;
+  try {
+    await defaultPromptTransport.invoke("prompt.fake_unregistered_command", {});
+  } catch (err: unknown) {
+    const code = err && typeof err === "object" && "code" in err ? (err as { code: string }).code : "";
+    if (code === "UNKNOWN_COMMAND") {
+      unknownRejected = true;
+    }
+  }
+  assertTrue(unknownRejected, "Lệnh không hợp lệ phải bị stub allowlist từ chối UNKNOWN_COMMAND");
+
+  console.log("  -> PASS: Cả 8 lệnh prompt.* đều có trong bridgeCommandAllowlist và lệnh ngoài danh mục bị từ chối chính xác.");
 }
 
 // ---------------------------------------------------------------------------------

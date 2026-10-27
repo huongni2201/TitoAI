@@ -29,13 +29,16 @@ public sealed class ProviderAccountService
 {
     private readonly DbContextOptions<TiToAIDbContext> _dbOptions;
     private readonly IProfileIdentityResolver _identityResolver;
+    private readonly Func<string, CancellationToken, Task>? _releaseProfileAsync;
 
     public ProviderAccountService(
         DbContextOptions<TiToAIDbContext> dbOptions,
-        IProfileIdentityResolver identityResolver)
+        IProfileIdentityResolver identityResolver,
+        Func<string, CancellationToken, Task>? releaseProfileAsync = null)
     {
         _dbOptions = dbOptions ?? throw new ArgumentNullException(nameof(dbOptions));
         _identityResolver = identityResolver ?? throw new ArgumentNullException(nameof(identityResolver));
+        _releaseProfileAsync = releaseProfileAsync;
     }
 
     public async Task<IReadOnlyList<ProviderAccountDto>> ListAccountsAsync(
@@ -440,7 +443,7 @@ public sealed class ProviderAccountService
         );
     }
 
-    public async Task<ProviderAccountDto> ArchiveAccountAsync(
+    public async Task<ProviderAccountDto> DeleteAccountAsync(
         string accountId,
         long? expectedRevision = null,
         CancellationToken cancellationToken = default)
@@ -466,16 +469,41 @@ public sealed class ProviderAccountService
             throw new ProviderAccountConcurrencyException($"Xung đột sửa đổi: Phiên bản tài khoản ({account.Revision}) không khớp với phiên bản dự kiến ({expectedRevision.Value}).");
         }
 
+        int activeCount = await dbContext.ActiveSlotOccupancies
+            .CountAsync(o => o.ProviderAccountId == account.Id, cancellationToken).ConfigureAwait(false);
+        if (activeCount > 0)
+        {
+            throw new ProviderAccountValidationException($"Tài khoản \"{account.DisplayName}\" đang có {activeCount} tác vụ chạy. Hãy đợi tác vụ kết thúc rồi xoá lại.");
+        }
+
+        // Profile có thể được tài khoản khác dùng chung (dữ liệu cũ): chỉ xoá thư mục trình duyệt khi không còn ai dùng
+        bool profileShared = await dbContext.ProviderAccounts
+            .AnyAsync(a => a.ProfileId == account.ProfileId && a.Id != account.Id && a.Lifecycle == "Active", cancellationToken)
+            .ConfigureAwait(false);
+
+        // Đóng trình duyệt và xoá dữ liệu phiên trước: nếu thất bại thì tài khoản giữ nguyên để người dùng thử lại
+        if (!profileShared && _releaseProfileAsync != null)
+        {
+            await _releaseProfileAsync(account.ProfileId, cancellationToken).ConfigureAwait(false);
+        }
+
         string nowIso = DateTime.UtcNow.ToString("o");
-        account.Lifecycle = "ArchivedLegacy";
+        account.Lifecycle = "Deleted";
         account.Enabled = false;
+        account.VerifiedIdentity = null;
+        account.IdentityVerifiedAtUtc = null;
         account.Revision += 1;
         account.UpdatedAtUtc = nowIso;
 
-        await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        if (!profileShared && account.Profile != null)
+        {
+            account.Profile.Lifecycle = "Deleted";
+            account.Profile.SessionStatus = "Unverified";
+            account.Profile.AccountIdentity = null;
+            account.Profile.UpdatedAtUtc = nowIso;
+        }
 
-        int activeCount = await dbContext.ActiveSlotOccupancies
-            .CountAsync(o => o.ProviderAccountId == account.Id, cancellationToken).ConfigureAwait(false);
+        await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
         return new ProviderAccountDto(
             Id: account.Id,
@@ -492,8 +520,8 @@ public sealed class ProviderAccountService
             Revision: account.Revision,
             CreatedAtUtc: account.CreatedAtUtc,
             UpdatedAtUtc: account.UpdatedAtUtc,
-            ActiveJobCount: activeCount,
-            SessionStatus: account.Profile?.SessionStatus ?? (account.VerifiedIdentity != null ? "Connected" : "Unverified")
+            ActiveJobCount: 0,
+            SessionStatus: "Unverified"
         );
     }
 }

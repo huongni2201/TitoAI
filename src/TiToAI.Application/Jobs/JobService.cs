@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
@@ -40,6 +42,11 @@ public sealed class JobService
 
     private DateTimeOffset UtcNow => _clock?.Invoke() ?? DateTimeOffset.UtcNow;
 
+    public void NotifyWorkflowRunReady(string workspaceId)
+    {
+        _wakeupNotifier.NotifyWakeup(new JobWakeupSignal("workflow.run_ready", workspaceId));
+    }
+
     /// <summary>
     /// Xếp hàng tác vụ mới (job.enqueue): Xác thực ranh giới, đóng băng snapshot bất biến và lưu vào SQLite.
     /// Kích hoạt tín hiệu đánh thức qua Channel để Scheduler phân phối ngay lập tức.
@@ -64,6 +71,15 @@ public sealed class JobService
         {
             throw new JobValidationException($"Loại tác vụ '{request.TaskType}' không hợp lệ. Các loại cho phép: {string.Join(", ", JobTaskType.All)}.", nameof(request.TaskType));
         }
+
+        if (string.IsNullOrWhiteSpace(request.WorkflowRunId) != string.IsNullOrWhiteSpace(request.WorkflowStepKey))
+        {
+            throw new JobValidationException(
+                "WorkflowRunId và WorkflowStepKey phải được truyền cùng nhau.",
+                nameof(request.WorkflowStepKey));
+        }
+
+        var workflowIdempotencyKey = CreateWorkflowIdempotencyKey(request);
 
         await using var dbContext = new TiToAIDbContext(_dbOptions);
 
@@ -111,6 +127,28 @@ public sealed class JobService
             }
         }
 
+        if (workflowIdempotencyKey != null)
+        {
+            var existingJobId = await dbContext.AppSettings
+                .AsNoTracking()
+                .Where(setting => setting.Key == workflowIdempotencyKey)
+                .Select(setting => setting.Value)
+                .FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
+
+            if (existingJobId != null)
+            {
+                var existingJob = await dbContext.Jobs.AsNoTracking()
+                    .FirstOrDefaultAsync(job => job.Id == existingJobId, cancellationToken).ConfigureAwait(false);
+                if (existingJob == null)
+                {
+                    throw new InvalidOperationException("Workflow idempotency record points to a missing job.");
+                }
+
+                ValidateWorkflowJobIdentity(existingJob, request, normalizedSceneId);
+                return ToEnqueueResponse(existingJob);
+            }
+        }
+
         // 4. Chụp bản sao bất biến của các tham số đầu vào (Provider, Storage Root, Prompt, Config)
         var snapshot = await _snapshotFactory.CreateSnapshotAsync(request, cancellationToken).ConfigureAwait(false);
 
@@ -140,7 +178,43 @@ public sealed class JobService
         };
 
         dbContext.Jobs.Add(jobEntity);
-        await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        if (workflowIdempotencyKey != null)
+        {
+            dbContext.AppSettings.Add(new AppSetting
+            {
+                Key = workflowIdempotencyKey,
+                Value = jobId,
+                UpdatedAtUtc = nowIso
+            });
+        }
+
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (DbUpdateException) when (workflowIdempotencyKey != null)
+        {
+            // AppSetting.Key is the unique claim. If another dispatcher won, its job is the replay result.
+            await using var winnerContext = new TiToAIDbContext(_dbOptions);
+            var winnerId = await winnerContext.AppSettings.AsNoTracking()
+                .Where(setting => setting.Key == workflowIdempotencyKey)
+                .Select(setting => setting.Value)
+                .FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
+            if (winnerId == null)
+            {
+                throw;
+            }
+
+            var winner = await winnerContext.Jobs.AsNoTracking()
+                .FirstOrDefaultAsync(job => job.Id == winnerId, cancellationToken).ConfigureAwait(false);
+            if (winner == null)
+            {
+                throw;
+            }
+
+            ValidateWorkflowJobIdentity(winner, request, normalizedSceneId);
+            return ToEnqueueResponse(winner);
+        }
 
         // 6. Gửi tín hiệu đánh thức tức thời tới Scheduler qua Channel
         _wakeupNotifier.NotifyWakeup(new JobWakeupSignal(
@@ -149,16 +223,41 @@ public sealed class JobService
             JobId: jobId
         ));
 
-        return new JobEnqueueResponseData(
-            JobId: jobId,
-            State: JobState.Queued,
-            WorkspaceId: request.WorkspaceId,
-            TaskType: request.TaskType,
-            ProviderKey: snapshot.ProviderKey,
-            StorageRootId: snapshot.StorageRootId,
-            CreatedAtUtc: nowIso
-        );
+        return ToEnqueueResponse(jobEntity);
     }
+
+    private static string? CreateWorkflowIdempotencyKey(JobEnqueueRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.WorkflowRunId) || string.IsNullOrWhiteSpace(request.WorkflowStepKey))
+        {
+            return null;
+        }
+
+        var material = string.Join("\0", request.WorkspaceId, request.ProjectId, request.WorkflowRunId, request.WorkflowStepKey);
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
+        return $"workflow.job.{hash}";
+    }
+
+    private static void ValidateWorkflowJobIdentity(Job job, JobEnqueueRequest request, string? sceneId)
+    {
+        if (job.WorkspaceId != request.WorkspaceId || job.ProjectId != request.ProjectId ||
+            job.SceneId != sceneId || job.TaskType != request.TaskType)
+        {
+            throw new JobValidationException(
+                "Workflow step key đã được dùng cho một job có phạm vi hoặc loại tác vụ khác.",
+                nameof(request.WorkflowStepKey));
+        }
+    }
+
+    private static JobEnqueueResponseData ToEnqueueResponse(Job job) => new(
+        JobId: job.Id,
+        State: job.State,
+        WorkspaceId: job.WorkspaceId,
+        TaskType: job.TaskType,
+        ProviderKey: job.ProviderKey,
+        StorageRootId: job.StorageRootId,
+        CreatedAtUtc: job.CreatedAtUtc,
+        Revision: job.Revision);
 
     /// <summary>
     /// Lấy chi tiết trạng thái của một tác vụ (job.get_status).
@@ -215,7 +314,8 @@ public sealed class JobService
             CreatedAtUtc: job.CreatedAtUtc,
             UpdatedAtUtc: job.UpdatedAtUtc,
             ProfileId: binding?.ProfileId,
-            HasUnresolvedSideEffect: hasUnresolved
+            HasUnresolvedSideEffect: hasUnresolved,
+            Revision: job.Revision
         );
 
         return new JobGetStatusResponseData(detail);
@@ -288,7 +388,8 @@ public sealed class JobService
                 CancelRequested: j.CancelRequested == 1,
                 HasUnresolvedSideEffect: hasUnresolved,
                 ProfileId: profileId,
-                ResultReference: j.ResultReference
+                ResultReference: j.ResultReference,
+                Revision: j.Revision
             );
         }).ToList();
 
@@ -335,6 +436,7 @@ public sealed class JobService
             job.ReasonCode = JobReasonCode.UserCanceled;
             job.LeaseExpiresAtUtc = null;
             job.LeaseOwnerId = null;
+            job.Revision += 1;
             job.UpdatedAtUtc = nowIso;
 
             // Giải phóng slot occupancy nếu đã được cấp
@@ -352,7 +454,8 @@ public sealed class JobService
                 State: JobState.Canceled,
                 CancelRequested: false,
                 Message: "Tác vụ đã được hủy bỏ thành công trước khi gửi side-effect.",
-                PreviousState: prevState
+                PreviousState: prevState,
+                Revision: job.Revision
             );
         }
 
@@ -362,6 +465,7 @@ public sealed class JobService
             job.CancelRequested = 1;
             job.ReasonCode = JobReasonCode.UserCanceled;
             job.LeaseExpiresAtUtc = null;
+            job.Revision += 1;
             job.UpdatedAtUtc = nowIso;
 
             // T16 FINDING 2: Nếu job đã submit side effect nhưng chưa có kết quả (unresolved),
@@ -389,12 +493,14 @@ public sealed class JobService
                 Message: hasUnresolvedSideEffect
                     ? "Tác vụ đã được hủy bỏ. Do có tác dụng phụ chưa giải quyết, slot occupancy được bảo lưu cho đến khi đối soát an toàn."
                     : "Tác vụ đang chờ đối soát đã được người dùng hủy bỏ.",
-                PreviousState: prevState
+                PreviousState: prevState,
+                Revision: job.Revision
             );
         }
 
         // Job đang Running và đã submit side effect
         job.CancelRequested = 1;
+        job.Revision += 1;
         job.UpdatedAtUtc = nowIso;
         await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
@@ -403,7 +509,8 @@ public sealed class JobService
             State: job.State,
             CancelRequested: true,
             Message: "Đã ghi nhận yêu cầu hủy tác vụ. Do tác dụng phụ đã gửi ra ngoài, hệ thống sẽ bảo vệ kết quả hoặc chuyển sang đối soát.",
-            PreviousState: prevState
+            PreviousState: prevState,
+            Revision: job.Revision
         );
     }
 
@@ -437,6 +544,13 @@ public sealed class JobService
                 jobId);
         }
 
+        if (JobRetryAndCancelPolicy.IsAutomationUnavailable(job.ReasonCode))
+        {
+            throw new JobValidationException(
+                "Tự động hóa chưa sẵn sàng cho tác vụ này. Hãy hủy tác vụ cũ và tạo yêu cầu mới sau khi adapter/capability đã sẵn sàng.",
+                nameof(job.ReasonCode));
+        }
+
         var profileId = job.ExecutionBinding?.ProfileId;
         bool sideEffectSubmitted = job.SideEffectSubmitted == 1;
 
@@ -461,6 +575,7 @@ public sealed class JobService
             job.LeaseExpiresAtUtc = null;
             job.LeaseOwnerId = null;
         }
+        job.Revision += 1;
         job.UpdatedAtUtc = UtcNow.ToString("o");
         await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
@@ -471,8 +586,243 @@ public sealed class JobService
             State: targetState,
             Message: (sideEffectSubmitted && !hasCheckpoint)
                 ? "Tác vụ có side-effect đã được chuyển sang chế độ đối soát."
-                : "Tác vụ đã được tiếp tục và đưa trở lại hàng đợi thành công."
+                : "Tác vụ đã được tiếp tục và đưa trở lại hàng đợi thành công.",
+            Revision: job.Revision
         );
+    }
+
+    /// <summary>
+    /// Thử lại tác vụ bị thất bại (job.retry) theo contract v1.1 §5:
+    /// - Chỉ áp dụng cho Job ở trạng thái Failed
+    /// - SideEffectSubmitted == 0 và không có tác dụng phụ chưa giải quyết (không giữ occupancy)
+    /// - CancelRequested == 0
+    /// - Attempts &lt; MaxAttempts
+    /// - ReasonCode không nằm trong danh sách không thể retry
+    /// - So khớp ExpectedRevision (Optimistic Concurrency)
+    /// - Đưa về Queued, tăng Revision, bảo toàn ExecutionBinding và attempts hiện có.
+    /// </summary>
+    public async Task<JobRetryResponseData> RetryAsync(
+        JobRetryRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.WorkspaceId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.JobId);
+
+        await using var dbContext = new TiToAIDbContext(_dbOptions);
+
+        var job = await dbContext.Jobs
+            .FirstOrDefaultAsync(j => j.Id == request.JobId && j.WorkspaceId == request.WorkspaceId, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (job is null)
+        {
+            throw new JobNotFoundException(request.JobId);
+        }
+
+        if (job.Revision != request.ExpectedRevision)
+        {
+            throw new JobConcurrencyConflictException(
+                $"Xung đột phiên bản tác vụ: phiên bản kỳ vọng là {request.ExpectedRevision}, phiên bản hiện tại là {job.Revision}.",
+                job.Id);
+        }
+
+        if (job.State != JobState.Failed)
+        {
+            throw new JobConcurrencyConflictException(
+                $"Chỉ có thể thử lại (retry) tác vụ ở trạng thái 'Failed', trạng thái hiện tại là '{job.State}'.",
+                job.Id);
+        }
+
+        if (job.SideEffectSubmitted != 0)
+        {
+            throw new JobValidationException(
+                "Không thể thử lại (retry) tác vụ đã phát sinh tác dụng phụ (side-effect) ra bên ngoài.",
+                nameof(job.SideEffectSubmitted));
+        }
+
+        bool hasOccupancy = await dbContext.ActiveSlotOccupancies
+            .AsNoTracking()
+            .AnyAsync(o => o.JobId == job.Id, cancellationToken).ConfigureAwait(false);
+
+        bool hasUnresolved = hasOccupancy ||
+            (job.SideEffectSubmitted == 1 &&
+             string.IsNullOrWhiteSpace(job.ResultReference) &&
+             string.IsNullOrWhiteSpace(job.ResultText));
+
+        if (hasUnresolved)
+        {
+            throw new JobValidationException(
+                "Tác vụ có tác dụng phụ chưa được giải quyết, không thể retry.",
+                nameof(job.SideEffectSubmitted));
+        }
+
+        if (job.CancelRequested != 0)
+        {
+            throw new JobValidationException(
+                "Tác vụ đã yêu cầu hủy bỏ bởi người dùng, không thể retry.",
+                nameof(job.CancelRequested));
+        }
+
+        var nonRetryableReasons = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            JobReasonCode.UserCanceled,
+            JobReasonCode.CanceledLateResult,
+            JobReasonCode.LoginRequired,
+            JobReasonCode.SessionExpired,
+            JobReasonCode.AuthClosed,
+            JobReasonCode.WrongAccount,
+            JobReasonCode.StorageRootUnavailable,
+            "adapter_not_available"
+        };
+
+        if (JobRetryAndCancelPolicy.IsAutomationUnavailable(job.ReasonCode)
+            || (!string.IsNullOrWhiteSpace(job.ReasonCode) && nonRetryableReasons.Contains(job.ReasonCode)))
+        {
+            throw new JobValidationException(
+                $"Tác vụ thất bại với lý do '{job.ReasonCode}' không đủ điều kiện thử lại tự động.",
+                nameof(job.ReasonCode));
+        }
+
+        if (job.Attempts >= job.MaxAttempts)
+        {
+            throw new JobValidationException(
+                $"Tác vụ đã vượt quá ngân sách số lần thử tối đa ({job.Attempts}/{job.MaxAttempts}). Hết ngân sách muốn chạy lại phải tạo tác vụ mới có chủ ý.",
+                nameof(job.Attempts));
+        }
+
+        job.State = JobState.Queued;
+        job.ReasonCode = null;
+        job.RetryAfterUtc = null;
+        job.LeaseExpiresAtUtc = null;
+        job.LeaseOwnerId = null;
+        job.Revision += 1;
+        job.UpdatedAtUtc = UtcNow.ToString("o");
+
+        await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+        _wakeupNotifier?.NotifyWakeup(new JobWakeupSignal("job.retry", request.WorkspaceId, request.JobId));
+
+        return new JobRetryResponseData(
+            JobId: job.Id,
+            State: job.State,
+            Revision: job.Revision,
+            Message: "Tác vụ đã được đưa trở lại hàng đợi để thử lại thành công."
+        );
+    }
+
+    /// <summary>
+    /// Liệt kê lịch sử các tác vụ đã hoàn tất và được giải quyết an toàn (job.list_history) theo contract v1.1 §5:
+    /// - Chỉ trả về các job ở trạng thái terminal: Succeeded, Failed, Canceled
+    /// - Chỉ trả về các job đã resolved: KHÔNG giữ ActiveSlotOccupancy và KHÔNG có unresolved side-effect
+    /// - Sắp xếp theo updatedAtUtc DESC rồi id DESC
+    /// - Phân trang theo cursor opaque (base64 của updatedAtUtc|id)
+    /// - PageSize: 1–100 (mặc định 20)
+    /// </summary>
+    public async Task<JobListHistoryResponseData> ListHistoryAsync(
+        JobListHistoryRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        int pageSize = request.PageSize switch
+        {
+            null or <= 0 => 20,
+            > 100 => 100,
+            _ => request.PageSize.Value
+        };
+
+        await using var dbContext = new TiToAIDbContext(_dbOptions);
+
+        var query = dbContext.Jobs
+            .AsNoTracking()
+            .Where(j => JobState.TerminalStates.Contains(j.State)
+                && !dbContext.ActiveSlotOccupancies.Any(o => o.JobId == j.Id)
+                && !((j.State == JobState.Canceled || j.State == JobState.Failed) &&
+                     j.SideEffectSubmitted == 1 &&
+                     (j.ResultReference == null || j.ResultReference == "") &&
+                     (j.ResultText == null || j.ResultText == "")));
+
+        if (!string.IsNullOrWhiteSpace(request.WorkspaceId))
+        {
+            query = query.Where(j => j.WorkspaceId == request.WorkspaceId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.ProjectId))
+        {
+            query = query.Where(j => j.ProjectId == request.ProjectId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.Cursor))
+        {
+            try
+            {
+                var decoded = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(request.Cursor));
+                var parts = decoded.Split('|', 2);
+                if (parts.Length == 2)
+                {
+                    var cursorUpdatedAt = parts[0];
+                    var cursorId = parts[1];
+                    query = query.Where(j => string.Compare(j.UpdatedAtUtc, cursorUpdatedAt) < 0 ||
+                                            (j.UpdatedAtUtc == cursorUpdatedAt && string.Compare(j.Id, cursorId) < 0));
+                }
+            }
+            catch
+            {
+                throw new JobValidationException("Cursor phân trang không hợp lệ.", nameof(request.Cursor));
+            }
+        }
+
+        query = query
+            .OrderByDescending(j => j.UpdatedAtUtc)
+            .ThenByDescending(j => j.Id);
+
+        var itemsWithExtra = await query
+            .Take(pageSize + 1)
+            .ToListAsync(cancellationToken).ConfigureAwait(false);
+
+        bool hasMore = itemsWithExtra.Count > pageSize;
+        var pagedJobs = hasMore ? itemsWithExtra.Take(pageSize).ToList() : itemsWithExtra;
+
+        var jobIds = pagedJobs.Select(j => j.Id).ToList();
+        var bindings = await dbContext.ExecutionBindings
+            .AsNoTracking()
+            .Where(b => jobIds.Contains(b.JobId))
+            .ToDictionaryAsync(b => b.JobId, b => b.ProfileId, cancellationToken).ConfigureAwait(false);
+
+        string? nextCursor = null;
+        if (hasMore && pagedJobs.Count > 0)
+        {
+            var last = pagedJobs[^1];
+            nextCursor = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"{last.UpdatedAtUtc}|{last.Id}"));
+        }
+
+        var dtos = pagedJobs.Select(j =>
+        {
+            bindings.TryGetValue(j.Id, out var profileId);
+            return new JobSummaryDto(
+                Id: j.Id,
+                WorkspaceId: j.WorkspaceId,
+                ProjectId: j.ProjectId,
+                SceneId: j.SceneId,
+                TaskType: j.TaskType,
+                State: j.State,
+                ReasonCode: j.ReasonCode,
+                Attempts: j.Attempts,
+                ProgressPercent: null,
+                CurrentStep: null,
+                CreatedAtUtc: j.CreatedAtUtc,
+                MaxAttempts: j.MaxAttempts,
+                SideEffectSubmitted: j.SideEffectSubmitted,
+                CancelRequested: j.CancelRequested == 1,
+                HasUnresolvedSideEffect: false,
+                ProfileId: profileId,
+                ResultReference: j.ResultReference,
+                Revision: j.Revision
+            );
+        }).ToList();
+
+        return new JobListHistoryResponseData(dtos, nextCursor);
     }
 
     /// <summary>

@@ -415,7 +415,7 @@ export function AiProviderSettingsPanel({
               data-testid="verification-badge"
             >
               <AlertTriangle className="h-3 w-3" />
-              Chưa xác minh — Chỉ hỗ trợ chế độ thủ công (Manual Mode)
+              Chưa xác minh — Tự động hóa chưa sẵn sàng
             </Badge>
           ) : (
             <Badge

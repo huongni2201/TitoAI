@@ -69,7 +69,8 @@ public sealed record JobSummaryDto(
     bool? CancelRequested = null,
     bool? HasUnresolvedSideEffect = null,
     string? ProfileId = null,
-    string? ResultReference = null
+    string? ResultReference = null,
+    long Revision = 1
 );
 
 public sealed record JobDetailDto(
@@ -91,7 +92,8 @@ public sealed record JobDetailDto(
     string CreatedAtUtc,
     string UpdatedAtUtc,
     string? ProfileId = null,
-    bool? HasUnresolvedSideEffect = null
+    bool? HasUnresolvedSideEffect = null,
+    long Revision = 1
 );
 
 /// <summary>
@@ -134,7 +136,8 @@ public sealed record JobEnqueueResponseData(
     string TaskType,
     string ProviderKey,
     string StorageRootId,
-    string CreatedAtUtc
+    string CreatedAtUtc,
+    long Revision = 1
 );
 
 public sealed record JobGetStatusRequest(string WorkspaceId, string JobId);
@@ -143,11 +146,46 @@ public sealed record JobGetStatusResponseData(JobDetailDto Job);
 public sealed record JobListActiveRequest(string? WorkspaceId = null);
 public sealed record JobListActiveResponseData(IReadOnlyList<JobSummaryDto> Jobs);
 
+public sealed record JobListHistoryRequest(
+    string? WorkspaceId = null,
+    string? ProjectId = null,
+    string? Cursor = null,
+    int? PageSize = null
+);
+public sealed record JobListHistoryResponseData(
+    IReadOnlyList<JobSummaryDto> Items,
+    string? NextCursor
+);
+
 public sealed record JobCancelRequest(string WorkspaceId, string JobId);
-public sealed record JobCancelResponseData(string JobId, string State, bool CancelRequested, string Message, string? PreviousState = null);
+public sealed record JobCancelResponseData(
+    string JobId,
+    string State,
+    bool CancelRequested,
+    string Message,
+    string? PreviousState = null,
+    long Revision = 0
+);
 
 public sealed record JobResumeRequest(string WorkspaceId, string JobId);
-public sealed record JobResumeResponseData(string JobId, string State, string Message);
+public sealed record JobResumeResponseData(
+    string JobId,
+    string State,
+    string Message,
+    long Revision = 0
+);
+
+public sealed record JobRetryRequest(
+    string WorkspaceId,
+    string JobId,
+    long ExpectedRevision
+);
+public sealed record JobRetryResponseData(
+    string JobId,
+    string State,
+    long Revision,
+    string Message
+);
 
 public sealed record JobReconcileRequest(
     string WorkspaceId,
@@ -162,7 +200,8 @@ public sealed record JobReconcileResponseData(
     string PreviousState,
     string CurrentState,
     string ReconcileResult,
-    string? ResultReference
+    string? ResultReference,
+    long Revision = 0
 );
 
 public sealed record JobProgressUpdatedPayload(
@@ -172,7 +211,8 @@ public sealed record JobProgressUpdatedPayload(
     string? SceneId,
     string State,
     int ProgressPercent,
-    string CurrentStep
+    string CurrentStep,
+    long JobRevision = 0
 );
 
 public sealed record JobStateChangedPayload(
@@ -183,5 +223,6 @@ public sealed record JobStateChangedPayload(
     string NewState,
     string? ReasonCode,
     string? ResultReference,
-    string TimestampUtc
+    string TimestampUtc,
+    long JobRevision = 0
 );

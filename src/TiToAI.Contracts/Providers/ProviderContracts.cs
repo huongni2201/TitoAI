@@ -44,7 +44,6 @@ public static class ProviderVerificationStatus
 public static class ProviderExecutionMode
 {
     public const string Automation = "automation";
-    public const string ManualOnly = "manual_only";
     public const string Unavailable = "unavailable";
 }
 

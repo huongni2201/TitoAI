@@ -117,6 +117,23 @@ window.chrome = {
             responseData = { job: detail };
             break;
           }
+          case "job.retry": {
+            const jobId = req.payload.jobId as string;
+            responseData = {
+              jobId,
+              state: "Queued",
+              message: "Tác vụ đã được đưa lại vào hàng đợi để thử lại an toàn.",
+              revision: 2,
+            };
+            break;
+          }
+          case "job.list_history": {
+            responseData = {
+              items: [],
+              nextCursor: null,
+            };
+            break;
+          }
           case "job.cancel": {
             responseData = {
               jobId: req.payload.jobId,
@@ -607,12 +624,12 @@ test("AC4 (R2): Click Retry trên QueueDrawer production: đúng command/backend
     retryBtn.click();
   });
 
-  await waitForCondition(() => lastExecutedCommand === "job.reconcile");
+  await waitForCondition(() => lastExecutedCommand === "job.retry");
 
-  // Khẳng định: Backend nhận đúng command 'job.reconcile' với action 'retry' và confirmedNotReceived=true
-  assert.equal(lastExecutedCommand, "job.reconcile", "Phải gọi job.reconcile thay vì gọi bừa job.resume trên Failed job");
-  assert.equal((lastCommandPayload as any)?.action, "retry");
-  assert.equal((lastCommandPayload as any)?.confirmedNotReceived, true);
+  // Khẳng định: Backend nhận đúng command 'job.retry' với expectedRevision theo v1.1 §5
+  assert.equal(lastExecutedCommand, "job.retry", "Phải gọi job.retry theo v1.1 §5");
+  assert.equal((lastCommandPayload as any)?.jobId, "job_failed_safe");
+  assert.equal(typeof (lastCommandPayload as any)?.expectedRevision, "number");
 
   await act(async () => {
     root.unmount();

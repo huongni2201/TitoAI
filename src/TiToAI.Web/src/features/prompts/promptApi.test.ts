@@ -40,6 +40,11 @@ const {
   extractTemplateVariables,
   parseVariableDefinitions,
   promptApi,
+  normalizeVariableName,
+  isValidVariableName,
+  detectNonStandardVariables,
+  normalizeTemplateText,
+  renderPromptTemplateClient,
 } = await import("./promptApi.ts");
 
 // Bộ hàm kiểm chứng tự túc (self-contained assertions) không phụ thuộc @types/node
@@ -279,7 +284,7 @@ console.log("=== BẮT ĐẦU KIỂM THỬ PROMPT API & VARIABLE LOGIC ===");
     mockTransport
   );
 
-  assertEqual(capturedCmd, "prompt.create_version");
+  assertEqual(capturedCmd, "prompt.save_template");
   assertDeepEqual(capturedPayload, {
     purpose: "VideoPrompt",
     workspaceId: "ws-override",
@@ -418,4 +423,49 @@ console.log("=== BẮT ĐẦU KIỂM THỬ PROMPT API & VARIABLE LOGIC ===");
   console.log("  -> PASS");
 }
 
-console.log("=== TẤT CẢ 14 KIỂM THỬ PROMPT API & VARIABLE ĐỀU PASS 100% ===");
+{
+  console.log("Test 15: Chuẩn hóa tên biến không dấu (§2.2)...");
+  assertEqual(normalizeVariableName("chủ_đề"), "chu_de");
+  assertEqual(normalizeVariableName("sản phẩm"), "san_pham");
+  assertEqual(normalizeVariableName("Đối Tượng Khách Hàng"), "doi_tuong_khach_hang");
+  assertEqual(normalizeVariableName("phong cách video"), "phong_cach_video");
+  assertEqual(normalizeVariableName("thời_lượng"), "thoi_luong");
+  assertTrue(isValidVariableName("chu_de"));
+  assertTrue(isValidVariableName("san_pham"));
+  assertTrue(!isValidVariableName("chủ_đề"));
+  assertTrue(!isValidVariableName("sản phẩm"));
+  console.log("  -> PASS");
+}
+
+{
+  console.log("Test 16: detectNonStandardVariables và normalizeTemplateText (§2.2)...");
+  const oldTemplate = "Kịch bản về {chủ_đề} cho {sản phẩm} với {phong cách video}.";
+  const nonStandard = detectNonStandardVariables(oldTemplate);
+  assertEqual(nonStandard.length, 3);
+  assertEqual(nonStandard[0].normalized, "chu_de");
+  assertEqual(nonStandard[1].normalized, "san_pham");
+  assertEqual(nonStandard[2].normalized, "phong_cach_video");
+
+  const { normalizedText } = normalizeTemplateText(oldTemplate);
+  assertEqual(normalizedText, "Kịch bản về {chu_de} cho {san_pham} với {phong_cach_video}.");
+  console.log("  -> PASS");
+}
+
+{
+  console.log("Test 17: Frontend Prompt Rendering ghép biến số tất định tại client...");
+  const template = "Bạn là chuyên gia {linh_vuc}. Hãy viết {so_luong} kịch bản về {chu_de}.";
+  const rendered = renderPromptTemplateClient(template, {
+    linh_vuc: "TikTok Affiliate",
+    so_luong: "5",
+    chu_de: "Thời trang hè",
+  });
+  assertEqual(
+    rendered.renderedText,
+    "Bạn là chuyên gia TikTok Affiliate. Hãy viết 5 kịch bản về Thời trang hè."
+  );
+  assertEqual(rendered.missingVariables.length, 0);
+  assertEqual(rendered.variableCount, 3);
+  console.log("  -> PASS");
+}
+
+console.log("=== TẤT CẢ 17 KIỂM THỬ PROMPT API, VARIABLE & RENDERING ĐỀU PASS 100% ===");

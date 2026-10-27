@@ -40,9 +40,15 @@ public class SqliteDatabaseBootstrapper : ISqliteDatabaseBootstrapper
         }
 
         // 2. Run EF Core Migrations
+        // Bắt buộc tắt foreign_keys khi chạy EF Core Migrations trong SQLite để cho phép
+        // DropTable, DropColumn và tái cấu trúc bảng (table rebuild) không bị chặn bởi SQLite FK check.
+        var migrationConnectionString = new SqliteConnectionStringBuilder(connectionString)
+        {
+            ForeignKeys = false
+        }.ToString();
+
         var optionsBuilder = new DbContextOptionsBuilder<TiToAIDbContext>();
-        optionsBuilder.UseSqlite(connectionString);
-        optionsBuilder.AddInterceptors(new SqlitePragmaInterceptor());
+        optionsBuilder.UseSqlite(migrationConnectionString);
         optionsBuilder.ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning));
 
         IReadOnlyList<string> appliedMigrations;
