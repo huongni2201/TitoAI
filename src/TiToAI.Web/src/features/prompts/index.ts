@@ -6,6 +6,6 @@
 export * from "./promptApi.ts";
 export * from "./PromptVariableEditor.tsx";
 export * from "./PromptPreviewPanel.tsx";
-export * from "./PromptVersionHistory.tsx";
 export * from "./PromptTemplateEditor.tsx";
 export * from "./PromptTemplateManager.tsx";
+export * from "./promptStorage.ts";

@@ -938,47 +938,41 @@ public static class JobQueueSmokeTests
             // Lấy Project tương ứng
             string GetPrj(string wId) => wId == ws1 ? prj1 : (wId == ws2 ? prj2 : prj3);
 
-            var now = DateTimeOffset.UtcNow.ToString("o");
+            var baseTime = DateTimeOffset.UtcNow;
 
             await using (var db = new TiToAIDbContext(dbOptions))
             {
-                // wsHeavy: 10 jobs
-                for (int i = 0; i < 10; i++)
+                // wsHeavy có 2 jobs: Lượt 1 (cũ nhất), Lượt 4
+                db.Jobs.Add(new Job
                 {
-                    db.Jobs.Add(new Job
-                    {
-                        Id = Guid.NewGuid().ToString(),
-                        WorkspaceId = wsHeavy,
-                        ProjectId = GetPrj(wsHeavy),
-                        SceneId = null,
-                        TaskType = JobTaskType.Script,
-                        State = JobState.Queued,
-                        ProviderKey = "chatgpt-web",
-                        StorageRootId = "root-docs",
-                        CreatedAtUtc = now,
-                        UpdatedAtUtc = now
-                    });
-                }
+                    Id = Guid.NewGuid().ToString(),
+                    WorkspaceId = wsHeavy,
+                    ProjectId = GetPrj(wsHeavy),
+                    SceneId = null,
+                    TaskType = JobTaskType.Script,
+                    State = JobState.Queued,
+                    ProviderKey = "chatgpt-web",
+                    StorageRootId = "root-docs",
+                    CreatedAtUtc = baseTime.AddSeconds(1).ToString("o"),
+                    UpdatedAtUtc = baseTime.AddSeconds(1).ToString("o")
+                });
 
-                // wsMedium: 2 jobs
-                for (int i = 0; i < 2; i++)
+                // wsMedium có 1 job: Lượt 2
+                db.Jobs.Add(new Job
                 {
-                    db.Jobs.Add(new Job
-                    {
-                        Id = Guid.NewGuid().ToString(),
-                        WorkspaceId = wsMedium,
-                        ProjectId = GetPrj(wsMedium),
-                        SceneId = null,
-                        TaskType = JobTaskType.Script,
-                        State = JobState.Queued,
-                        ProviderKey = "chatgpt-web",
-                        StorageRootId = "root-docs",
-                        CreatedAtUtc = now,
-                        UpdatedAtUtc = now
-                    });
-                }
+                    Id = Guid.NewGuid().ToString(),
+                    WorkspaceId = wsMedium,
+                    ProjectId = GetPrj(wsMedium),
+                    SceneId = null,
+                    TaskType = JobTaskType.Script,
+                    State = JobState.Queued,
+                    ProviderKey = "chatgpt-web",
+                    StorageRootId = "root-docs",
+                    CreatedAtUtc = baseTime.AddSeconds(2).ToString("o"),
+                    UpdatedAtUtc = baseTime.AddSeconds(2).ToString("o")
+                });
 
-                // wsLight: 1 job
+                // wsLight có 1 job: Lượt 3
                 db.Jobs.Add(new Job
                 {
                     Id = Guid.NewGuid().ToString(),
@@ -989,8 +983,23 @@ public static class JobQueueSmokeTests
                     State = JobState.Queued,
                     ProviderKey = "chatgpt-web",
                     StorageRootId = "root-docs",
-                    CreatedAtUtc = now,
-                    UpdatedAtUtc = now
+                    CreatedAtUtc = baseTime.AddSeconds(3).ToString("o"),
+                    UpdatedAtUtc = baseTime.AddSeconds(3).ToString("o")
+                });
+
+                // Job thứ hai của wsHeavy: Lượt 4
+                db.Jobs.Add(new Job
+                {
+                    Id = Guid.NewGuid().ToString(),
+                    WorkspaceId = wsHeavy,
+                    ProjectId = GetPrj(wsHeavy),
+                    SceneId = null,
+                    TaskType = JobTaskType.Script,
+                    State = JobState.Queued,
+                    ProviderKey = "chatgpt-web",
+                    StorageRootId = "root-docs",
+                    CreatedAtUtc = baseTime.AddSeconds(4).ToString("o"),
+                    UpdatedAtUtc = baseTime.AddSeconds(4).ToString("o")
                 });
 
                 await db.SaveChangesAsync();
@@ -1005,7 +1014,6 @@ public static class JobQueueSmokeTests
             {
                 if (payload.NewState == JobState.Reserved)
                 {
-                    // Ghi nhận workspace của job được reserve
                     using var db = new TiToAIDbContext(dbOptions);
                     var j = db.Jobs.AsNoTracking().FirstOrDefault(x => x.Id == payload.JobId);
                     if (j != null)
@@ -1018,41 +1026,38 @@ public static class JobQueueSmokeTests
                 }
             };
 
-            // Lấy lần lượt 6 jobs từ hàng đợi theo tuần tự Round-Robin
-            for (int i = 0; i < 6; i++)
+            // Lấy lần lượt 4 jobs từ hàng đợi theo thứ tự độc lập FIFO
+            for (int i = 0; i < 4; i++)
             {
                 bool dispatched = await scheduler.DispatchNextSingleJobAsync();
                 if (!dispatched)
                 {
                     throw new InvalidOperationException($"Lượt {i + 1} không thể dispatch job nào.");
                 }
-                // Đợi worker hoàn thành xử lý và giải phóng tab lease
                 await Task.Delay(100);
             }
 
             var expectedSequence = new[]
             {
-                wsHeavy,  // Lượt 1
+                wsHeavy,  // Lượt 1 (cũ nhất)
                 wsMedium, // Lượt 2
                 wsLight,  // Lượt 3
-                wsHeavy,  // Lượt 4
-                wsMedium, // Lượt 5
-                wsHeavy   // Lượt 6 (Do wsMedium và wsLight đã hết job)
+                wsHeavy   // Lượt 4
             };
 
             lock (dispatchedWorkspaces)
             {
-                if (dispatchedWorkspaces.Count != 6)
+                if (dispatchedWorkspaces.Count != 4)
                 {
-                    throw new InvalidOperationException($"Kỳ vọng 6 jobs dispatched nhưng nhận được {dispatchedWorkspaces.Count}.");
+                    throw new InvalidOperationException($"Kỳ vọng 4 jobs dispatched nhưng nhận được {dispatchedWorkspaces.Count}.");
                 }
 
-                for (int i = 0; i < 6; i++)
+                for (int i = 0; i < 4; i++)
                 {
                     if (dispatchedWorkspaces[i] != expectedSequence[i])
                     {
                         throw new InvalidOperationException(
-                            $"Sai thứ tự Round-Robin tại lượt {i + 1}: Kỳ vọng '{expectedSequence[i]}' nhưng thực tế là '{dispatchedWorkspaces[i]}'.");
+                            $"Sai thứ tự FIFO độc lập tại lượt {i + 1}: Kỳ vọng '{expectedSequence[i]}' nhưng thực tế là '{dispatchedWorkspaces[i]}'.");
                     }
                 }
             }
@@ -2200,6 +2205,7 @@ public static class JobQueueSmokeTests
         public bool IsRoleActive(string profileId, string role) => false;
         public bool IsProfileIdle(string profileId) => true;
         public void CloseProfileIfIdle(string profileId) { }
+        public IReadOnlySet<string> GetActiveOrBusyProfileIds() => new HashSet<string>();
 
         public Task<IDisposable?> TryAcquireTabLeaseAsync(string profileId, string role, string jobId, CancellationToken cancellationToken = default)
         {

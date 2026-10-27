@@ -26,9 +26,16 @@ public class PromptTemplateConfiguration : IEntityTypeConfiguration<PromptTempla
             .HasColumnName("workspace_id")
             .HasColumnType("TEXT");
 
-        builder.Property(t => t.CurrentVersionId)
-            .HasColumnName("current_version_id")
-            .HasColumnType("TEXT");
+        builder.Property(t => t.TemplateText)
+            .HasColumnName("template_text")
+            .HasColumnType("TEXT")
+            .IsRequired();
+
+        builder.Property(t => t.VariableDefinitionsJson)
+            .HasColumnName("variable_definitions_json")
+            .HasColumnType("TEXT")
+            .HasDefaultValue("[]")
+            .IsRequired();
 
         builder.Property(t => t.CreatedAtUtc)
             .HasColumnName("created_at_utc")
@@ -44,13 +51,6 @@ public class PromptTemplateConfiguration : IEntityTypeConfiguration<PromptTempla
             .WithMany()
             .HasForeignKey(t => t.WorkspaceId)
             .OnDelete(DeleteBehavior.Cascade);
-
-        // Composite foreign key enforcing that CurrentVersionId belongs to this template (Id)
-        builder.HasOne(t => t.CurrentVersion)
-            .WithMany()
-            .HasForeignKey(t => new { t.CurrentVersionId, t.Id })
-            .HasPrincipalKey(v => new { v.Id, v.TemplateId })
-            .OnDelete(DeleteBehavior.Restrict);
 
         // Global templates unique index: purpose when workspace_id IS NULL
         builder.HasIndex(t => t.Purpose)

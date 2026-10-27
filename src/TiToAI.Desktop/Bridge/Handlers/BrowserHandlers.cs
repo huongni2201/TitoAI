@@ -1,4 +1,5 @@
 using System.Text.Json;
+using TiToAI.Browser;
 using TiToAI.Browser.Abstractions;
 using TiToAI.Browser.Models;
 using TiToAI.Contracts.Bridge;
@@ -123,7 +124,13 @@ public sealed class BrowserHandlers
                     retryable: false);
             }
 
-            var result = await _loginCoordinator.RequestLoginAsync(payload.ProfileId, cancellationToken);
+            string? providerKey = !string.IsNullOrWhiteSpace(payload.ProviderKey)
+                ? payload.ProviderKey
+                : profile.ProviderKey;
+
+            string? targetUrl = ProviderUrlResolver.ResolveUrl(providerKey, profile.Kind, payload.TargetUrl);
+
+            var result = await _loginCoordinator.RequestLoginAsync(payload.ProfileId, targetUrl, cancellationToken);
             return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
         }
         catch (OperationCanceledException)

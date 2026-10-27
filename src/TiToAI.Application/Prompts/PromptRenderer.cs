@@ -13,7 +13,7 @@ namespace TiToAI.Application.Prompts;
 public static class PromptRenderer
 {
     private static readonly Regex ValidVariableNameRegex =
-        new(@"^[a-zA-Z0-9_]+$", RegexOptions.Compiled);
+        new(@"^[\p{L}\p{M}\p{N}_]+$", RegexOptions.Compiled);
 
     /// <summary>
     /// Trích xuất danh sách tên biến duy nhất và kiểm tra cú pháp placeholder của template.

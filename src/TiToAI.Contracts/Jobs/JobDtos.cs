@@ -44,6 +44,12 @@ public static class JobReasonCode
     public const string StorageRootUnavailable = "storage_root_unavailable";
     public const string ProviderRejected = "provider_rejected";
     public const string UserCanceled = "user_canceled";
+    public const string CanceledLateResult = "canceled_late_result";
+    public const string TabCapacityUnavailable = "tab_capacity_unavailable";
+    public const string WaitingForCapacity = "waiting_for_capacity";
+    public const string GlobalJobBudgetReached = "global_job_budget_reached";
+    public const string LeaseExpiredRetry = "lease_expired_retry";
+    public const string ReconcileRejected = "reconcile_rejected";
 }
 
 public sealed record JobSummaryDto(
@@ -57,7 +63,13 @@ public sealed record JobSummaryDto(
     int Attempts,
     int? ProgressPercent,
     string? CurrentStep,
-    string CreatedAtUtc
+    string CreatedAtUtc,
+    int? MaxAttempts = null,
+    int? SideEffectSubmitted = null,
+    bool? CancelRequested = null,
+    bool? HasUnresolvedSideEffect = null,
+    string? ProfileId = null,
+    string? ResultReference = null
 );
 
 public sealed record JobDetailDto(
@@ -77,7 +89,29 @@ public sealed record JobDetailDto(
     string? ResultText,
     bool CancelRequested,
     string CreatedAtUtc,
-    string UpdatedAtUtc
+    string UpdatedAtUtc,
+    string? ProfileId = null,
+    bool? HasUnresolvedSideEffect = null
+);
+
+/// <summary>
+/// Bản chụp bất biến của các tệp media và cấu hình tùy chọn được đóng băng tại thời điểm Enqueue theo PV-R6.
+/// </summary>
+public sealed record JobMediaSnapshotDto(
+    string? ModelAssetId = null,
+    string? ModelAssetHash = null,
+    string? ProductAssetId = null,
+    string? ProductAssetHash = null,
+    string? ReadyImageAssetId = null,
+    string? ReadyImageAssetHash = null,
+    string? SourceImageAssetId = null,
+    string? SourceImageAssetHash = null,
+    string? AudioAssetId = null,
+    string? AudioAssetHash = null,
+    string AudioOption = "None",
+    int DurationSeconds = 15,
+    string? InputRevision = null,
+    IReadOnlyDictionary<string, string>? MediaRoles = null
 );
 
 public sealed record JobEnqueueRequest(
@@ -87,7 +121,10 @@ public sealed record JobEnqueueRequest(
     string TaskType,
     string? PromptTemplateId = null,
     IReadOnlyDictionary<string, string>? PromptVariables = null,
-    string? CustomPromptText = null
+    string? CustomPromptText = null,
+    JobMediaSnapshotDto? MediaSnapshot = null,
+    string? WorkflowRunId = null,
+    string? WorkflowStepKey = null
 );
 
 public sealed record JobEnqueueResponseData(
@@ -108,6 +145,9 @@ public sealed record JobListActiveResponseData(IReadOnlyList<JobSummaryDto> Jobs
 
 public sealed record JobCancelRequest(string WorkspaceId, string JobId);
 public sealed record JobCancelResponseData(string JobId, string State, bool CancelRequested, string Message, string? PreviousState = null);
+
+public sealed record JobResumeRequest(string WorkspaceId, string JobId);
+public sealed record JobResumeResponseData(string JobId, string State, string Message);
 
 public sealed record JobReconcileRequest(
     string WorkspaceId,

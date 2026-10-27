@@ -23,7 +23,9 @@ public sealed record BrowserListProfilesResponseData(
     [property: JsonPropertyName("profiles")] IReadOnlyList<BrowserProfileDto> Profiles);
 
 public sealed record BrowserRequestLoginRequest(
-    [property: JsonPropertyName("profileId")] string ProfileId);
+    [property: JsonPropertyName("profileId")] string ProfileId,
+    [property: JsonPropertyName("targetUrl")] string? TargetUrl = null,
+    [property: JsonPropertyName("providerKey")] string? ProviderKey = null);
 
 public sealed record BrowserRequestLoginResponseData(
     [property: JsonPropertyName("queued")] bool Queued,

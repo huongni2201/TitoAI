@@ -23,6 +23,7 @@ public class TiToAIDbContext : DbContext
     public DbSet<BrowserHandoffCheckpoint> BrowserHandoffCheckpoints => Set<BrowserHandoffCheckpoint>();
     public DbSet<ProviderAccount> ProviderAccounts => Set<ProviderAccount>();
     public DbSet<ExecutionBinding> ExecutionBindings => Set<ExecutionBinding>();
+    public DbSet<ActiveSlotOccupancy> ActiveSlotOccupancies => Set<ActiveSlotOccupancy>();
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
@@ -33,6 +34,7 @@ public class TiToAIDbContext : DbContext
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+        modelBuilder.Ignore<PromptVersion>();
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(TiToAIDbContext).Assembly);
     }
 }

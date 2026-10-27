@@ -11,7 +11,7 @@ Tài liệu này bổ sung `SOURCE_PLAN.md` theo yêu cầu mới của người
 ## 1. Hành vi người dùng
 
 - Hỗ trợ **Sáng (Light)**, **Tối (Dark)** và **Theo hệ thống (System)**. Mặc định lần đầu là Theo hệ thống Windows.
-- Có lựa chọn giao diện trong popup Cài đặt → Giao diện theo `SETTINGS_PLAN.md`; bộ chuyển nhanh trên app shell dùng cùng một preference.
+- Có lựa chọn giao diện trong trang Cài đặt → Giao diện theo `SETTINGS_PLAN.md`; bộ chuyển nhanh trên app shell dùng cùng một preference.
 - Đổi giao diện có hiệu lực ngay, không cần khởi động lại; giữ nguyên màn hình hiện tại, nội dung đang nhập và job đang chạy.
 - Theme là thiết lập toàn ứng dụng theo Windows user, không theo Workspace. Chuyển Workspace không làm đổi lựa chọn theme.
 - Lựa chọn được lưu và phục hồi khi mở lại ứng dụng. System tự cập nhật khi giao diện Windows đổi; Light/Dark được chọn thủ công giữ nguyên khi Windows đổi.

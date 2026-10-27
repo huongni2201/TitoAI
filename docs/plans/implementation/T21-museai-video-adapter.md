@@ -1,5 +1,10 @@
 # MuseAI video adapter trên pool account dùng chung
 
+> **Đã chốt 2026-10-27:** [Luồng sản xuất từ ảnh](../PRODUCT_IMAGE_VIDEO_WORKFLOW_PLAN.md) tự chạy sau một lần Bắt đầu: lập nhiều cảnh theo prompt → ảnh → prompt chuyển động → video, không bắt duyệt trung gian. Audio tùy chọn; mẫu và sản phẩm dùng lại trong thư viện Workspace. Trong mode này, tự áp output hợp lệ bằng revision guard; yêu cầu audio bắt buộc/duyệt từng bước bên dưới là baseline cũ đã được thay trong phạm vi này. Contract/version/validator/adapter còn phải triển khai đồng bộ; chưa là evidence code hỗ trợ. Lỗi, capability không tương thích, login, xung đột hoặc uncertainty vẫn dừng đúng policy.
+
+
+> **Delta hiện hành:** [plan queue/Settings 1.2](../QUEUE_EXECUTION_SETTINGS_PLAN.md) thay popup Settings, nhóm account shared/private, connect tại Workspace và round-robin Workspace. Dùng [TASKS](../../agents/TASKS.md) cho trạng thái/gate; Baseline/checkbox dưới không là evidence đã chạy.
+
 - Task T21, P0/G3. Depends T19 DONE; T13a/T15/T16/T18 contracts/runtime đã có theo dependency.
 - URL/site/account capabilities phải xác minh tại T19; chưa có evidence automation. [V1.1 §1–5](../../decisions/execution-contract-v1.1.md) là contract đầu vào/slot/binding/result.
 

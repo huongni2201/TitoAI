@@ -26,6 +26,14 @@ export const bridgeCommandAllowlist = [
   "account.link",
   "account.unlink",
 
+  // Gate G2 / Q1 — Provider Accounts (Settings -> Tài khoản)
+  "provider_account.list",
+  "provider_account.create",
+  "provider_account.update",
+  "provider_account.probe_session",
+  "provider_account.enable",
+  "provider_account.archive",
+
   // Gate G2 — Prompts
   "prompt.list_templates",
   "prompt.get_template",
@@ -59,6 +67,9 @@ export const bridgeCommandAllowlist = [
   "asset.select_reference_image",
   "asset.get_metadata",
   "asset.open_folder",
+  "asset.list",
+  "asset.get_preview",
+  "asset.upload",
   "document.export",
 
   // Gate G2 — Job Queue & Scheduling
@@ -67,6 +78,35 @@ export const bridgeCommandAllowlist = [
   "job.list_active",
   "job.cancel",
   "job.reconcile",
+  "job.resume",
+  "job.get_handoff",
+  "job.import_result",
+
+  // Gate G3 / T18 — Providers & Capabilities
+  "provider.list",
+  "provider.get_capabilities",
+
+  // Gate G3 / T18 — Workflow Definition & Versioning
+  "workflow.get_active",
+  "workflow.save_version",
+  "workflow.activate",
+
+  // Content Creation (AI Web — ChatGPT/Gemini Web)
+  "content.prepare_context",
+  "content.preview_request",
+  "content.select_idea",
+  "content.apply_script",
+  "content.apply_video_prompts",
+
+  // Video Production from Images Workflow
+  "workflow.get_config",
+  "workflow.save_config",
+  "workflow.start",
+  "workflow.list_scenes",
+  "workflow.update_scene_input",
+  "workflow.pause",
+  "workflow.resume",
+  "workflow.preview_ai_prompt",
 ] as const;
 
 export const g1CommandAllowlist = bridgeCommandAllowlist;

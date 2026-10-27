@@ -1,5 +1,7 @@
 # TikTok Analytics và Affiliate theo dữ liệu có nguồn
 
+> Delta 2026-10-27: [analytics → AI web đề xuất ý tưởng](../AI_WEB_CONTENT_CREATION_PLAN.md) quy định snapshot, preview dữ liệu gửi ChatGPT/Gemini, evidence và nối ý tưởng đã chọn vào pipeline. Giữ P1 và import hợp lệ trước automation đã xác minh.
+
 - Task gốc: **T25** · Ưu tiên: **P1 / không chặn G4 MVP**.
 - Điều kiện mở: T07,T09,T19 DONE; ưu tiên sau P0.
 - Baseline 2026-10-26: Chưa có analytics schema/import/dashboard thật.

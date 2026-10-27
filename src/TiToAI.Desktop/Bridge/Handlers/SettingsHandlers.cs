@@ -175,6 +175,14 @@ public sealed class SettingsHandlers
     {
         return ex switch
         {
+            SettingsConcurrencyException concurrency =>
+                ResponseEnvelopeHelper.CreateError(
+                    requestId,
+                    "CONCURRENCY_CONFLICT",
+                    concurrency.Message,
+                    retryable: true,
+                    details: JsonSerializer.SerializeToElement(new { expectedRevision = concurrency.ExpectedRevision, currentRevision = concurrency.CurrentRevision })),
+
             SettingsValidationException validation =>
                 ResponseEnvelopeHelper.CreateError(
                     requestId,

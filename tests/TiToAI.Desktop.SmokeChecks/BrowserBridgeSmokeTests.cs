@@ -148,9 +148,9 @@ public static class BrowserBridgeSmokeTests
     }
 
     /// <summary>
-    /// Test 2: browser.request_login: profile đầu nhận VisibleActive, profile sau xếp vào queue VisibleWaiting.
+    /// Test 2: browser.request_login: cho phép nhiều profile khác nhau mở đồng thời VisibleActive, không bị xếp hàng.
     /// </summary>
-    public static async Task Test_RequestLogin_FirstActive_SecondQueued_VisibleWaiting()
+    public static async Task Test_RequestLogin_ConcurrentLogins_IndependentVisibleActive()
     {
         var (connection, factory) = await CreateInMemoryDbContextFactoryAsync();
         await using (connection)
@@ -187,19 +187,20 @@ public static class BrowserBridgeSmokeTests
                 var storedFirst = await registry.GetProfileAsync("prof_first");
                 Assert(storedFirst?.VisibilityState == BrowserVisibilityState.VisibleActive, "Trạng thái trong registry phải là VisibleActive");
 
-                // Profile thứ hai yêu cầu login khi slot đang bận: phải bị xếp vào queue VisibleWaiting
+                // Profile thứ hai yêu cầu login đồng thời: nhận ngay VisibleActive, không bị queued
                 var reqSecond = CreateRequest("browser.request_login", new BrowserRequestLoginRequest("prof_second"));
                 var resSecond = await dispatcher.DispatchAsync(reqSecond, CancellationToken.None);
 
-                Assert(resSecond.Success, "Yêu cầu đăng nhập profile thứ hai phải thành công (dưới dạng xếp hàng)");
+                Assert(resSecond.Success, "Yêu cầu đăng nhập profile thứ hai phải thành công");
                 var dataSecond = DeserializeData<BrowserRequestLoginResponseData>(resSecond);
-                Assert(dataSecond.Queued, "Profile thứ hai phải ở trạng thái queued == true");
-                Assert(dataSecond.VisibilityState == BrowserVisibilityState.VisibleWaiting, "VisibilityState phải là VisibleWaiting");
-                Assert(dataSecond.CurrentHolder == "prof_first", "CurrentHolder vẫn phải là prof_first");
+                Assert(!dataSecond.Queued, "Profile thứ hai không bị xếp hàng (Queued == false)");
+                Assert(dataSecond.VisibilityState == BrowserVisibilityState.VisibleActive, "VisibilityState phải là VisibleActive");
+                Assert(dataSecond.CurrentHolder == "prof_second", "CurrentHolder phải là prof_second");
 
-                // Kiểm tra trạng thái của profile thứ hai trong registry
+                // Kiểm tra trạng thái của cả hai profile trong registry: cả hai đều VisibleActive đồng thời
                 var storedSecond = await registry.GetProfileAsync("prof_second");
-                Assert(storedSecond?.VisibilityState == BrowserVisibilityState.VisibleWaiting, "Trạng thái trong registry phải là VisibleWaiting");
+                Assert(storedSecond?.VisibilityState == BrowserVisibilityState.VisibleActive, "Trạng thái prof_second trong registry phải là VisibleActive");
+                Assert(coordinator.ActiveVisibleProfileIds.Count == 2, "Coordinator phải theo dõi 2 profile đang visible đồng thời");
             }
             finally
             {
@@ -212,9 +213,9 @@ public static class BrowserBridgeSmokeTests
     }
 
     /// <summary>
-    /// Test 3: browser.cancel_login: giải phóng slot hiển thị, cập nhật trạng thái Hidden.
+    /// Test 3: browser.cancel_login: đóng cửa sổ của profile chỉ định, profile còn lại vẫn giữ VisibleActive độc lập.
     /// </summary>
-    public static async Task Test_CancelLogin_ReleasesVisibleSlot_UpdatesHiddenState()
+    public static async Task Test_CancelLogin_ReleasesSpecificProfileSlot_OtherProfileRemainsActive()
     {
         var (connection, factory) = await CreateInMemoryDbContextFactoryAsync();
         await using (connection)
@@ -235,17 +236,19 @@ public static class BrowserBridgeSmokeTests
                 await SeedWorkspaceAsync(factory, "ws-1", "Workspace One");
 
                 await registry.EnsureProfileAsync("prof_active", BrowserProfileKind.SharedAI);
-                await registry.EnsureProfileAsync("prof_queued", BrowserProfileKind.MuseAI, workspaceId: "ws-1");
+                await registry.EnsureProfileAsync("prof_active2", BrowserProfileKind.MuseAI, workspaceId: "ws-1");
 
-                // Chiếm slot cho prof_active và xếp hàng prof_queued
+                // Mở cửa sổ login đồng thời cho cả prof_active và prof_active2
                 await dispatcher.DispatchAsync(CreateRequest("browser.request_login", new BrowserRequestLoginRequest("prof_active")), CancellationToken.None);
-                await dispatcher.DispatchAsync(CreateRequest("browser.request_login", new BrowserRequestLoginRequest("prof_queued")), CancellationToken.None);
+                await dispatcher.DispatchAsync(CreateRequest("browser.request_login", new BrowserRequestLoginRequest("prof_active2")), CancellationToken.None);
 
-                // Hủy đăng nhập prof_active (người đang giữ slot)
+                Assert(coordinator.ActiveVisibleProfileIds.Count == 2, "Cả 2 profile đều đang VisibleActive");
+
+                // Hủy đăng nhập prof_active
                 var reqCancelActive = CreateRequest("browser.cancel_login", new BrowserCancelLoginRequest("prof_active"));
                 var resCancelActive = await dispatcher.DispatchAsync(reqCancelActive, CancellationToken.None);
 
-                Assert(resCancelActive.Success, "Hủy đăng nhập slot active phải thành công");
+                Assert(resCancelActive.Success, "Hủy đăng nhập prof_active phải thành công");
                 var dataCancelActive = DeserializeData<BrowserCancelLoginResponseData>(resCancelActive);
                 Assert(dataCancelActive.Canceled, "Canceled phải là true");
 
@@ -253,18 +256,20 @@ public static class BrowserBridgeSmokeTests
                 var storedActive = await registry.GetProfileAsync("prof_active");
                 Assert(storedActive?.VisibilityState == BrowserVisibilityState.Hidden, "Trạng thái prof_active phải là Hidden sau khi hủy");
                 Assert(storedActive?.OperationalState == BrowserOperationalState.Stopped, "Trạng thái vận hành phải là Stopped");
+
+                // Profile thứ hai (prof_active2) VẪN PHẢI GIỮ NGUYÊN VisibleActive!
+                var storedActive2 = await registry.GetProfileAsync("prof_active2");
+                Assert(storedActive2?.VisibilityState == BrowserVisibilityState.VisibleActive, "prof_active2 vẫn phải là VisibleActive");
+                Assert(coordinator.IsProfileVisible("prof_active2"), "prof_active2 vẫn phải visible trong coordinator");
+
+                // Hủy nốt prof_active2
+                var reqCancelActive2 = CreateRequest("browser.cancel_login", new BrowserCancelLoginRequest("prof_active2"));
+                var resCancelActive2 = await dispatcher.DispatchAsync(reqCancelActive2, CancellationToken.None);
+
+                Assert(resCancelActive2.Success, "Hủy đăng nhập prof_active2 phải thành công");
+                var storedActive2After = await registry.GetProfileAsync("prof_active2");
+                Assert(storedActive2After?.VisibilityState == BrowserVisibilityState.Hidden, "Trạng thái prof_active2 phải là Hidden sau khi hủy");
                 Assert(!coordinator.IsVisibleLoginActive, "Coordinator không còn cửa sổ active nào");
-
-                // Hủy prof_queued đang chờ trong hàng đợi
-                var reqCancelQueued = CreateRequest("browser.cancel_login", new BrowserCancelLoginRequest("prof_queued"));
-                var resCancelQueued = await dispatcher.DispatchAsync(reqCancelQueued, CancellationToken.None);
-
-                Assert(resCancelQueued.Success, "Hủy đăng nhập slot queued phải thành công");
-                var dataCancelQueued = DeserializeData<BrowserCancelLoginResponseData>(resCancelQueued);
-                Assert(dataCancelQueued.Canceled, "Canceled phải là true");
-
-                var storedQueued = await registry.GetProfileAsync("prof_queued");
-                Assert(storedQueued?.VisibilityState == BrowserVisibilityState.Hidden, "Trạng thái prof_queued phải là Hidden sau khi hủy");
             }
             finally
             {
@@ -523,6 +528,75 @@ public static class BrowserBridgeSmokeTests
     }
 
     /// <summary>
+    /// Test 9: Đảm bảo ProviderUrlResolver giải quyết chính xác URL cho ChatGPT, Gemini, MuseAI, TikTok
+    /// và lệnh browser.request_login tiếp nhận providerKey/targetUrl hợp lệ.
+    /// </summary>
+    public static async Task Test_ProviderUrlResolution_And_LoginDirectToPage()
+    {
+        // 1. Kiểm tra Resolver độc lập
+        Assert(ProviderUrlResolver.ResolveUrl("chatgpt-web") == "https://chatgpt.com/", "chatgpt-web phải giải quyết ra https://chatgpt.com/");
+        Assert(ProviderUrlResolver.ResolveUrl("chatgpt") == "https://chatgpt.com/", "chatgpt phải giải quyết ra https://chatgpt.com/");
+        Assert(ProviderUrlResolver.ResolveUrl("gemini-web") == "https://gemini.google.com/", "gemini-web phải giải quyết ra https://gemini.google.com/");
+        Assert(ProviderUrlResolver.ResolveUrl("museai") == "https://muse.ai/", "museai phải giải quyết ra https://muse.ai/");
+        Assert(ProviderUrlResolver.ResolveUrl("museai-video") == "https://muse.ai/", "museai-video phải giải quyết ra https://muse.ai/");
+        Assert(ProviderUrlResolver.ResolveUrl("tiktok") == "https://www.tiktok.com/", "tiktok phải giải quyết ra https://www.tiktok.com/");
+        Assert(ProviderUrlResolver.ResolveUrl(null, "MuseAI") == "https://muse.ai/", "Kind MuseAI phải giải quyết ra https://muse.ai/");
+        Assert(ProviderUrlResolver.ResolveUrl(null, "SharedAI") == "https://chatgpt.com/", "Kind SharedAI phải giải quyết ra https://chatgpt.com/");
+        Assert(ProviderUrlResolver.ResolveUrl(null, null, "https://example.com/custom") == "https://example.com/custom", "Custom URL hợp lệ phải được tôn trọng");
+
+        // 2. Kiểm tra qua Bridge Handler
+        var (connection, factory) = await CreateInMemoryDbContextFactoryAsync();
+        await using (connection)
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "titoai_test_bridge_purl_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+
+            try
+            {
+                var registry = new ProfileRegistry(factory, tempDir);
+                using var coordinator = new LoginCoordinator(registry);
+                var probe = new SessionProbe(registry);
+                var handlers = new BrowserHandlers(registry, coordinator, probe);
+
+                var dispatcher = new BridgeDispatcher();
+                handlers.Register(dispatcher);
+
+                // Khởi tạo profile có ProviderKey
+                await registry.EnsureProfileAsync("prof_chatgpt", BrowserProfileKind.SharedAI);
+                await using (var db = factory())
+                {
+                    var p = await db.BrowserProfiles.FindAsync("prof_chatgpt");
+                    if (p != null)
+                    {
+                        p.ProviderKey = "chatgpt-web";
+                        await db.SaveChangesAsync();
+                    }
+                }
+
+                // Gửi request_login với providerKey
+                var req = CreateRequest("browser.request_login", new BrowserRequestLoginRequest(
+                    ProfileId: "prof_chatgpt",
+                    ProviderKey: "chatgpt-web"
+                ));
+                var res = await dispatcher.DispatchAsync(req, CancellationToken.None);
+
+                Assert(res.Success, "browser.request_login với providerKey phải thành công");
+                var data = DeserializeData<BrowserRequestLoginResponseData>(res);
+                Assert(!data.Queued, "Profile đầu tiên phải được cấp slot trực tiếp");
+                Assert(data.VisibilityState == BrowserVisibilityState.VisibleActive, "VisibilityState phải là VisibleActive");
+                Assert(coordinator.CurrentVisibleProfileId == "prof_chatgpt", "CurrentVisibleProfileId phải là prof_chatgpt");
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir))
+                {
+                    try { Directory.Delete(tempDir, true); } catch { }
+                }
+            }
+        }
+    }
+
+    /// <summary>
     /// Chạy toàn bộ các bài kiểm tra khói của Track R1 (Desktop Browser Handlers & Bridge Integration).
     /// </summary>
     public static async Task RunAllAsync()
@@ -550,13 +624,14 @@ public static class BrowserBridgeSmokeTests
         }
 
         await RunAsync("Test 1: List profiles (workspaceId = null & specific workspace, DTO mapping)", Test_ListProfiles_WorkspaceNull_And_SpecificWorkspace);
-        await RunAsync("Test 2: Request login (VisibleActive first slot & VisibleWaiting queue)", Test_RequestLogin_FirstActive_SecondQueued_VisibleWaiting);
-        await RunAsync("Test 3: Cancel login (Releases visible slot & updates Hidden state)", Test_CancelLogin_ReleasesVisibleSlot_UpdatesHiddenState);
+        await RunAsync("Test 2: Request login (Concurrent VisibleActive for independent profiles, no app queue)", Test_RequestLogin_ConcurrentLogins_IndependentVisibleActive);
+        await RunAsync("Test 3: Cancel login (Closes specific profile, independent profile remains active)", Test_CancelLogin_ReleasesSpecificProfileSlot_OtherProfileRemainsActive);
         await RunAsync("Test 4: Check session (Real Unverified / Connected status, no fake PASS)", Test_CheckSession_RealStatus_UnverifiedAndConnected_NoFakePass);
         await RunAsync("Test 5: Unknown command rejected with UNKNOWN_COMMAND", Test_UnknownCommand_RejectedWithUnknownCommand);
         await RunAsync("Test 6: Invalid / missing payload rejected with INVALID_ARGUMENT", Test_PayloadValidation_InvalidArguments_Rejected);
         await RunAsync("Test 7: Non-existent profile rejected with ENTITY_NOT_FOUND", Test_EntityNotFound_ForNonExistentProfile_OnLoginAndCancel);
         await RunAsync("Test 8: Unregister handlers cleans up registration", Test_Unregister_RemovesHandlersCleanly);
+        await RunAsync("Test 9: Provider URL resolution & login directly to provider page", Test_ProviderUrlResolution_And_LoginDirectToPage);
     }
 
     private static RequestEnvelope CreateRequest(string command, object? payload)

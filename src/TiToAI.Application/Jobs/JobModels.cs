@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
@@ -52,7 +53,9 @@ public sealed record JobExecutionContext(
     long FencingToken,
     int Attempts,
     string? ProfileId = null,
-    string? ProviderAccountId = null
+    string? ProviderAccountId = null,
+    string? ExistingResultText = null,
+    string? ExistingResultReference = null
 );
 
 /// <summary>
@@ -94,6 +97,12 @@ public interface IBrowserGatekeeper
     void ReleaseTabLease(string profileId, string role, string jobId);
     bool IsProfileIdle(string profileId);
     void CloseProfileIfIdle(string profileId);
+    IReadOnlySet<string> GetActiveOrBusyProfileIds();
+
+    void TrackJob(string profileId, string jobId, bool sideEffectSubmitted = false, string state = "Running") { }
+    void SetJobSideEffectSubmitted(string profileId, string jobId, bool submitted = true) { }
+    void UntrackJob(string profileId, string jobId) { }
+    bool CanResumeJob(string profileId, string jobId, bool sideEffectSubmitted) => true;
 }
 
 /// <summary>
@@ -116,8 +125,14 @@ public class DefaultBrowserGatekeeper : IBrowserGatekeeper
     public bool IsProfileBusyWithLogin(string profileId) =>
         _loginBusyProfiles.TryGetValue(profileId, out var busy) && busy;
 
-    public bool IsRoleActive(string profileId, string role) =>
-        _activeTabRoles.ContainsKey(MakeKey(profileId, role));
+    public bool IsRoleActive(string profileId, string role)
+    {
+        if (string.Equals(profileId, "shared_ai", StringComparison.OrdinalIgnoreCase))
+        {
+            return _activeTabRoles.Values.Any(r => string.Equals(r, role, StringComparison.OrdinalIgnoreCase));
+        }
+        return false;
+    }
 
     public bool IsProfileIdle(string profileId) =>
         !_activeTabRoles.Keys.Any(k => k.StartsWith($"{profileId}:", StringComparison.OrdinalIgnoreCase));
@@ -130,10 +145,40 @@ public class DefaultBrowserGatekeeper : IBrowserGatekeeper
         }
     }
 
+    public IReadOnlySet<string> GetActiveOrBusyProfileIds()
+    {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var p in _loginBusyProfiles.Where(kv => kv.Value).Select(kv => kv.Key))
+        {
+            set.Add(p);
+        }
+        foreach (var p in _pausedProfiles.Where(kv => kv.Value).Select(kv => kv.Key))
+        {
+            set.Add(p);
+        }
+        foreach (var key in _activeTabRoles.Keys)
+        {
+            int colonIndex = key.IndexOf(':');
+            if (colonIndex > 0)
+            {
+                set.Add(key[..colonIndex]);
+            }
+        }
+        return set;
+    }
+
     public Task<IDisposable?> TryAcquireTabLeaseAsync(string profileId, string role, string jobId, CancellationToken cancellationToken = default)
     {
-        var key = MakeKey(profileId, role);
-        if (_activeTabRoles.TryAdd(key, jobId))
+        if (string.Equals(profileId, "shared_ai", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_activeTabRoles.Values.Any(r => string.Equals(r, role, StringComparison.OrdinalIgnoreCase)))
+            {
+                return Task.FromResult<IDisposable?>(null);
+            }
+        }
+
+        var key = MakeKey(profileId, jobId);
+        if (_activeTabRoles.TryAdd(key, role))
         {
             var lease = new TabLeaseDisposable(() => ReleaseTabLease(profileId, role, jobId));
             return Task.FromResult<IDisposable?>(lease);
@@ -144,14 +189,11 @@ public class DefaultBrowserGatekeeper : IBrowserGatekeeper
 
     public void ReleaseTabLease(string profileId, string role, string jobId)
     {
-        var key = MakeKey(profileId, role);
-        if (_activeTabRoles.TryGetValue(key, out var currentOwner) && string.Equals(currentOwner, jobId, StringComparison.Ordinal))
-        {
-            _activeTabRoles.TryRemove(new KeyValuePair<string, string>(key, jobId));
-        }
+        var key = MakeKey(profileId, jobId);
+        _activeTabRoles.TryRemove(key, out _);
     }
 
-    private static string MakeKey(string profileId, string role) => $"{profileId}:{role}";
+    private static string MakeKey(string profileId, string jobId) => $"{profileId}:{jobId}";
 
     private sealed class TabLeaseDisposable : IDisposable
     {
@@ -176,8 +218,14 @@ public sealed class DeterministicFakeJobExecutor : IJobExecutor
     public bool SimulateCrashBeforeSideEffectCommit { get; set; }
     public bool SimulateCrashAfterSideEffectCommit { get; set; }
     public bool SimulateHangWithoutHeartbeat { get; set; }
+    public bool SimulateStorageErrorAfterAiGeneration { get; set; }
+    public int TotalAiSubmits { get; set; } = 0;
     public string? ResultReferenceToReturn { get; set; } = "asset-fake-ref-001";
     public string? ResultTextToReturn { get; set; } = "Script generated successfully by deterministic fake executor.";
+
+    public TiToAI.Infrastructure.Storage.AssetFileStore? FileStore { get; set; }
+    public TiToAI.Infrastructure.Storage.StorageRootRegistry? RootRegistry { get; set; }
+    public string? FinalizeRelativePath { get; set; }
 
     public List<JobExecutionContext> RecordedExecutions { get; } = new();
 
@@ -192,43 +240,105 @@ public sealed class DeterministicFakeJobExecutor : IJobExecutor
             RecordedExecutions.Add(context);
         }
 
-        if (onProgressAsync is not null)
+        // T16 CHECKPOINT / FINALIZE:
+        // Nếu context đã mang sẵn intermediate result (checkpoint từ lần trước),
+        // KHÔNG gửi lại AI (không gọi onPreSideEffectCommitAsync và không tăng TotalAiSubmits)
+        bool hasExistingCheckpoint = !string.IsNullOrWhiteSpace(context.ExistingResultText) ||
+                                     !string.IsNullOrWhiteSpace(context.ExistingResultReference);
+
+        if (!hasExistingCheckpoint)
         {
-            await onProgressAsync(10, "Chuẩn bị tham số prompt").ConfigureAwait(false);
+            if (onProgressAsync is not null)
+            {
+                await onProgressAsync(10, "Chuẩn bị tham số prompt").ConfigureAwait(false);
+            }
+
+            if (SimulateNetworkErrorBeforeSideEffect)
+            {
+                throw new InvalidOperationException("Mạng bị ngắt kết nối trước khi gửi yêu cầu.");
+            }
+
+            if (SimulateCrashBeforeSideEffectCommit)
+            {
+                throw new ApplicationException("Giả lập sự cố crash ứng dụng trước khi commit cờ side effect.");
+            }
+
+            if (ExecutionDelay > TimeSpan.Zero)
+            {
+                await Task.Delay(ExecutionDelay, cancellationToken).ConfigureAwait(false);
+            }
+
+            // CRITICAL BOUNDARY: Commit cờ side_effect_submitted = 1 vào SQLite TRƯỚC KHI thao tác ngoài
+            await onPreSideEffectCommitAsync().ConfigureAwait(false);
+            TotalAiSubmits++;
+
+            if (onProgressAsync is not null)
+            {
+                await onProgressAsync(50, "Đã gửi yêu cầu AI, đang chờ phản hồi").ConfigureAwait(false);
+            }
+
+            if (SimulateCrashAfterSideEffectCommit)
+            {
+                throw new ApplicationException("Giả lập sự cố crash ứng dụng ngay sau khi commit cờ side effect.");
+            }
+
+            if (SimulateHangWithoutHeartbeat)
+            {
+                // Treo tiến trình và không gửi heartbeat để lease quá hạn
+                await Task.Delay(TimeSpan.FromSeconds(60), cancellationToken).ConfigureAwait(false);
+            }
+
+            // Giả lập lỗi storage sau khi sinh AI
+            if (SimulateStorageErrorAfterAiGeneration)
+            {
+                return new JobExecutionResult(
+                    Success: false,
+                    ResultReference: null,
+                    ResultText: ResultTextToReturn,
+                    ReasonCode: "storage_root_unavailable",
+                    ErrorMessage: "Thư mục lưu trữ đích không khả dụng hoặc bị ngắt kết nối.",
+                    SideEffectSubmitted: true
+                );
+            }
+        }
+        else
+        {
+            // Đã có checkpoint: retry chỉ tiến hành finalize lưu output vào storage mà không gọi lại AI
+            if (SimulateStorageErrorAfterAiGeneration)
+            {
+                return new JobExecutionResult(
+                    Success: false,
+                    ResultReference: context.ExistingResultReference,
+                    ResultText: context.ExistingResultText,
+                    ReasonCode: "storage_root_unavailable",
+                    ErrorMessage: "Thư mục lưu trữ đích vẫn chưa khả dụng khi finalize từ checkpoint.",
+                    SideEffectSubmitted: true
+                );
+            }
         }
 
-        if (SimulateNetworkErrorBeforeSideEffect)
+        if (FileStore != null && RootRegistry != null)
         {
-            throw new InvalidOperationException("Mạng bị ngắt kết nối trước khi gửi yêu cầu.");
-        }
+            var textToSave = context.ExistingResultText ?? ResultTextToReturn;
+            if (!string.IsNullOrWhiteSpace(textToSave))
+            {
+                var rootPath = await RootRegistry.ResolveRootPathAsync(context.StorageRootId, cancellationToken).ConfigureAwait(false);
+                var relPath = FinalizeRelativePath ?? $"{context.WorkspaceId}/output/{context.JobId}_output.txt";
+                using var ms = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(textToSave));
+                await FileStore.SaveFileAsync(rootPath, relPath, ms, cancellationToken).ConfigureAwait(false);
 
-        if (SimulateCrashBeforeSideEffectCommit)
-        {
-            throw new ApplicationException("Giả lập sự cố crash ứng dụng trước khi commit cờ side effect.");
-        }
+                if (onProgressAsync is not null)
+                {
+                    await onProgressAsync(100, "Hoàn tất xử lý tác vụ").ConfigureAwait(false);
+                }
 
-        if (ExecutionDelay > TimeSpan.Zero)
-        {
-            await Task.Delay(ExecutionDelay, cancellationToken).ConfigureAwait(false);
-        }
-
-        // CRITICAL BOUNDARY: Commit cờ side_effect_submitted = 1 vào SQLite TRƯỚC KHI thao tác ngoài
-        await onPreSideEffectCommitAsync().ConfigureAwait(false);
-
-        if (onProgressAsync is not null)
-        {
-            await onProgressAsync(50, "Đã gửi yêu cầu AI, đang chờ phản hồi").ConfigureAwait(false);
-        }
-
-        if (SimulateCrashAfterSideEffectCommit)
-        {
-            throw new ApplicationException("Giả lập sự cố crash ứng dụng ngay sau khi commit cờ side effect.");
-        }
-
-        if (SimulateHangWithoutHeartbeat)
-        {
-            // Treo tiến trình và không gửi heartbeat để lease quá hạn
-            await Task.Delay(TimeSpan.FromSeconds(60), cancellationToken).ConfigureAwait(false);
+                return new JobExecutionResult(
+                    Success: true,
+                    ResultReference: ResultReferenceToReturn ?? relPath,
+                    ResultText: textToSave,
+                    SideEffectSubmitted: true
+                );
+            }
         }
 
         if (onProgressAsync is not null)
@@ -238,8 +348,8 @@ public sealed class DeterministicFakeJobExecutor : IJobExecutor
 
         return new JobExecutionResult(
             Success: true,
-            ResultReference: ResultReferenceToReturn,
-            ResultText: ResultTextToReturn,
+            ResultReference: context.ExistingResultReference ?? ResultReferenceToReturn,
+            ResultText: context.ExistingResultText ?? ResultTextToReturn,
             SideEffectSubmitted: true
         );
     }

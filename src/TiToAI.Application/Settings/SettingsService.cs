@@ -27,6 +27,19 @@ public class SettingsValidationException : Exception
     }
 }
 
+public class SettingsConcurrencyException : Exception
+{
+    public long ExpectedRevision { get; }
+    public long CurrentRevision { get; }
+
+    public SettingsConcurrencyException(long expectedRevision, long currentRevision)
+        : base($"Xung đột phiên bản cài đặt: phiên bản yêu cầu là {expectedRevision} nhưng phiên bản hiện tại trên hệ thống là {currentRevision}. Vui lòng tải lại trang.")
+    {
+        ExpectedRevision = expectedRevision;
+        CurrentRevision = currentRevision;
+    }
+}
+
 /// <summary>
 /// Dịch vụ quản lý Cài đặt toàn hệ thống (Lưu trữ, Providers AI, Theme)
 /// theo SETTINGS_PLAN.md §1–5 và implementation/T09a-storage-settings.md.
@@ -37,6 +50,9 @@ public sealed class SettingsService
     public const string KeyImageProvider = "ai.providers.image";
     public const string KeyScriptProvider = "ai.providers.script";
     public const string KeyVideoPromptProvider = "ai.providers.videoPrompt";
+    public const string KeyRevision = "settings.revision";
+    public const string KeyMaxOpenBrowsers = "scheduler.max_open_browsers";
+    public const string KeyMaxConcurrentJobs = "scheduler.max_concurrent_jobs";
 
     private readonly DbContextOptions<TiToAIDbContext> _dbOptions;
     private readonly StorageRootRegistry _rootRegistry;
@@ -63,12 +79,33 @@ public sealed class SettingsService
             .Where(s => s.Key == KeyTheme ||
                         s.Key == KeyImageProvider ||
                         s.Key == KeyScriptProvider ||
-                        s.Key == KeyVideoPromptProvider)
+                        s.Key == KeyVideoPromptProvider ||
+                        s.Key == KeyRevision ||
+                        s.Key == KeyMaxOpenBrowsers ||
+                        s.Key == KeyMaxConcurrentJobs)
             .ToDictionaryAsync(s => s.Key, s => s.Value, cancellationToken)
             .ConfigureAwait(false);
 
         var themePreference = settings.GetValueOrDefault(KeyTheme, "system")!;
         var effectiveTheme = string.Equals(themePreference, "light", StringComparison.OrdinalIgnoreCase) ? "light" : "dark";
+
+        long revision = 1;
+        if (settings.TryGetValue(KeyRevision, out var revStr) && long.TryParse(revStr, out var parsedRev) && parsedRev > 0)
+        {
+            revision = parsedRev;
+        }
+
+        int maxOpenBrowsers = 4;
+        if (settings.TryGetValue(KeyMaxOpenBrowsers, out var mobStr) && int.TryParse(mobStr, out var parsedMob) && parsedMob > 0)
+        {
+            maxOpenBrowsers = parsedMob;
+        }
+
+        int maxConcurrentJobs = 8;
+        if (settings.TryGetValue(KeyMaxConcurrentJobs, out var mcjStr) && int.TryParse(mcjStr, out var parsedMcj) && parsedMcj > 0)
+        {
+            maxConcurrentJobs = parsedMcj;
+        }
 
         return new SettingsDto(
             DocumentsPath: roots.DocumentsPath,
@@ -81,7 +118,10 @@ public sealed class SettingsService
             ScriptProvider: settings.GetValueOrDefault(KeyScriptProvider),
             VideoPromptProvider: settings.GetValueOrDefault(KeyVideoPromptProvider),
             ThemePreference: themePreference,
-            EffectiveTheme: effectiveTheme
+            EffectiveTheme: effectiveTheme,
+            Revision: revision,
+            MaxOpenBrowsers: maxOpenBrowsers,
+            MaxConcurrentJobs: maxConcurrentJobs
         );
     }
 
@@ -115,13 +155,49 @@ public sealed class SettingsService
             cancellationToken
         ).ConfigureAwait(false);
 
-        if (!validationResult.IsValid)
+        var fieldErrors = new Dictionary<string, List<string>>(validationResult.FieldErrors, StringComparer.OrdinalIgnoreCase);
+
+        // Validate AI Provider keys
+        ValidateProviderKey("imageProvider", request.ImageProvider, fieldErrors);
+        ValidateProviderKey("scriptProvider", request.ScriptProvider, fieldErrors);
+        ValidateProviderKey("videoPromptProvider", request.VideoPromptProvider, fieldErrors);
+
+        // Validate budgets
+        if (request.MaxOpenBrowsers.HasValue && (request.MaxOpenBrowsers.Value < 1 || request.MaxOpenBrowsers.Value > 16))
         {
-            throw new SettingsValidationException(validationResult.FieldErrors);
+            AddError(fieldErrors, "maxOpenBrowsers", "Số trình duyệt mở tối đa phải nằm trong khoảng từ 1 đến 16.");
+        }
+
+        if (request.MaxConcurrentJobs.HasValue && (request.MaxConcurrentJobs.Value < 1 || request.MaxConcurrentJobs.Value > 64))
+        {
+            AddError(fieldErrors, "maxConcurrentJobs", "Số tác vụ chạy đồng thời tối đa toàn app phải nằm trong khoảng từ 1 đến 64.");
+        }
+
+        if (fieldErrors.Count > 0)
+        {
+            throw new SettingsValidationException(fieldErrors);
         }
 
         // Thực hiện cập nhật roots, providers và cấu hình trong CÙNG một transaction SQLite để đảm bảo tính atomic
         await using var dbContext = new TiToAIDbContext(_dbOptions);
+
+        // Kiểm tra Optimistic Concurrency Revision
+        var revItem = await dbContext.AppSettings
+            .AsNoTracking()
+            .FirstOrDefaultAsync(s => s.Key == KeyRevision, cancellationToken)
+            .ConfigureAwait(false);
+
+        long currentRevision = 1;
+        if (revItem != null && long.TryParse(revItem.Value, out var rev) && rev > 0)
+        {
+            currentRevision = rev;
+        }
+
+        if (request.ExpectedRevision.HasValue && request.ExpectedRevision.Value != currentRevision)
+        {
+            throw new SettingsConcurrencyException(request.ExpectedRevision.Value, currentRevision);
+        }
+
         await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
 
         try
@@ -140,18 +216,32 @@ public sealed class SettingsService
 
             if (request.ImageProvider is not null)
             {
-                await UpsertSettingAsync(dbContext, KeyImageProvider, request.ImageProvider, now, cancellationToken).ConfigureAwait(false);
+                await UpsertSettingAsync(dbContext, KeyImageProvider, request.ImageProvider.Trim(), now, cancellationToken).ConfigureAwait(false);
             }
 
             if (request.ScriptProvider is not null)
             {
-                await UpsertSettingAsync(dbContext, KeyScriptProvider, request.ScriptProvider, now, cancellationToken).ConfigureAwait(false);
+                await UpsertSettingAsync(dbContext, KeyScriptProvider, request.ScriptProvider.Trim(), now, cancellationToken).ConfigureAwait(false);
             }
 
             if (request.VideoPromptProvider is not null)
             {
-                await UpsertSettingAsync(dbContext, KeyVideoPromptProvider, request.VideoPromptProvider, now, cancellationToken).ConfigureAwait(false);
+                await UpsertSettingAsync(dbContext, KeyVideoPromptProvider, request.VideoPromptProvider.Trim(), now, cancellationToken).ConfigureAwait(false);
             }
+
+            if (request.MaxOpenBrowsers.HasValue)
+            {
+                await UpsertSettingAsync(dbContext, KeyMaxOpenBrowsers, request.MaxOpenBrowsers.Value.ToString(), now, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (request.MaxConcurrentJobs.HasValue)
+            {
+                await UpsertSettingAsync(dbContext, KeyMaxConcurrentJobs, request.MaxConcurrentJobs.Value.ToString(), now, cancellationToken).ConfigureAwait(false);
+            }
+
+            // 3. Tăng Revision cài đặt
+            long newRevision = currentRevision + 1;
+            await UpsertSettingAsync(dbContext, KeyRevision, newRevision.ToString(), now, cancellationToken).ConfigureAwait(false);
 
             await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -163,6 +253,21 @@ public sealed class SettingsService
         }
 
         return await GetSettingsAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static void ValidateProviderKey(string fieldKey, string? providerKey, Dictionary<string, List<string>> errors)
+    {
+        if (string.IsNullOrWhiteSpace(providerKey))
+        {
+            return; // Null/empty represents "Chưa chọn", which is valid
+        }
+
+        var key = providerKey.Trim();
+        if (!string.Equals(key, "gemini-web", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(key, "chatgpt-web", StringComparison.OrdinalIgnoreCase))
+        {
+            AddError(errors, fieldKey, $"Nhà cung cấp AI '{providerKey}' không được hỗ trợ. Các giá trị hợp lệ: 'gemini-web', 'chatgpt-web' hoặc để trống.");
+        }
     }
 
     /// <summary>

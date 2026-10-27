@@ -213,6 +213,244 @@ public sealed class AssetService
     }
 
     /// <summary>
+    /// Tải lên tài nguyên media (Ảnh hoặc Audio) trực tiếp vào thư viện media của Workspace:
+    /// lưu tệp vật lý vào Storage Root qua cơ chế staging & atomic move,
+    /// đồng thời lưu bản ghi Asset vào cơ sở dữ liệu để có thể tái sử dụng trên toàn Workspace.
+    /// Hỗ trợ cả Base64Data và SourceFilePath.
+    /// </summary>
+    public async Task<UploadAssetResponse> UploadAssetAsync(
+        UploadAssetRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var workspaceId = NormalizeGuid(request.WorkspaceId, nameof(request.WorkspaceId));
+        string? projectId = null;
+        if (!string.IsNullOrWhiteSpace(request.ProjectId))
+        {
+            try
+            {
+                projectId = NormalizeGuid(request.ProjectId, nameof(request.ProjectId));
+            }
+            catch
+            {
+                projectId = null;
+            }
+        }
+
+        var assetType = string.IsNullOrWhiteSpace(request.AssetType) ? "Image" : request.AssetType.Trim();
+        bool isAudio = assetType.Equals("Audio", StringComparison.OrdinalIgnoreCase);
+        bool isImage = assetType.Equals("Image", StringComparison.OrdinalIgnoreCase);
+
+        if (!isAudio && !isImage)
+        {
+            throw new AssetValidationException($"Chỉ hỗ trợ loại tài nguyên 'Image' hoặc 'Audio'. Loại nhận được: '{request.AssetType}'.");
+        }
+
+        await using var dbContext = new TiToAIDbContext(_dbOptions);
+
+        var workspaceExists = await dbContext.Workspaces
+            .AsNoTracking()
+            .AnyAsync(w => w.Id == workspaceId, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (!workspaceExists)
+        {
+            throw new WorkspaceNotFoundException(workspaceId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(projectId))
+        {
+            var projectExists = await dbContext.Projects
+                .AsNoTracking()
+                .AnyAsync(p => p.Id == projectId && p.WorkspaceId == workspaceId, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (!projectExists)
+            {
+                projectId = null;
+            }
+        }
+
+        string extension;
+        string storageRootId;
+        string storageRootPath;
+
+        if (isAudio)
+        {
+            storageRootId = StorageRootRegistry.RootInternalAudioId;
+            storageRootPath = await _rootRegistry.ResolveRootPathAsync(storageRootId, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            var currentRoots = await _rootRegistry.GetCurrentRootsAsync(cancellationToken).ConfigureAwait(false);
+            storageRootId = currentRoots.ImagesRootId;
+            storageRootPath = currentRoots.ImagesPath;
+        }
+
+        AssetFileResult saveResult;
+        var assetId = Guid.NewGuid().ToString("N");
+        string mimeType;
+
+        if (!string.IsNullOrWhiteSpace(request.Base64Data))
+        {
+            var fileName = request.FileName;
+            if (string.IsNullOrWhiteSpace(fileName))
+            {
+                fileName = isAudio ? "audio.mp3" : "image.png";
+            }
+
+            extension = Path.GetExtension(fileName).ToLowerInvariant();
+            if (string.IsNullOrEmpty(extension))
+            {
+                extension = isAudio ? ".mp3" : ".png";
+            }
+
+            if (isAudio && !AllowedAudioExtensions.Contains(extension))
+            {
+                throw new AssetValidationException($"Chỉ hỗ trợ tệp âm thanh .mp3 hoặc .wav. Định dạng hiện tại: '{extension}'.");
+            }
+            if (isImage && !AllowedImageExtensions.Contains(extension))
+            {
+                throw new AssetValidationException($"Chỉ hỗ trợ tệp ảnh .png, .jpg, .jpeg, .webp. Định dạng hiện tại: '{extension}'.");
+            }
+
+            var base64 = request.Base64Data;
+            var commaIndex = base64.IndexOf(',');
+            if (commaIndex >= 0 && base64.Substring(0, commaIndex).Contains("base64", StringComparison.OrdinalIgnoreCase))
+            {
+                base64 = base64.Substring(commaIndex + 1);
+            }
+
+            byte[] fileBytes;
+            try
+            {
+                fileBytes = Convert.FromBase64String(base64);
+            }
+            catch (FormatException ex)
+            {
+                throw new AssetValidationException("Dữ liệu tệp tải lên (Base64) không hợp lệ.", ex);
+            }
+
+            if (fileBytes.Length == 0)
+            {
+                throw new AssetValidationException("Tệp tải lên rỗng (0 bytes).");
+            }
+
+            var subDir = isAudio ? "audio" : "images";
+            var relativePath = string.IsNullOrWhiteSpace(projectId)
+                ? $"{workspaceId}/media/{subDir}/{assetId}{extension}"
+                : $"{workspaceId}/projects/{projectId}/{subDir}/{assetId}{extension}";
+
+            using var memoryStream = new MemoryStream(fileBytes);
+            saveResult = await _fileStore.SaveFileAsync(
+                storageRootPath,
+                relativePath,
+                memoryStream,
+                cancellationToken
+            ).ConfigureAwait(false);
+
+            mimeType = ResolveMimeType(extension, isAudio);
+
+            var asset = new Asset
+            {
+                Id = assetId,
+                WorkspaceId = workspaceId,
+                ProjectId = projectId,
+                AssetType = isAudio ? "Audio" : "Image",
+                StorageRootId = storageRootId,
+                RelativePath = relativePath,
+                ByteSize = saveResult.ByteSize,
+                Sha256Hash = saveResult.Sha256Hash,
+                Status = "Linked",
+                MimeType = mimeType,
+                CreatedAtUtc = DateTimeOffset.UtcNow.ToString("O")
+            };
+
+            dbContext.Assets.Add(asset);
+            await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+            return new UploadAssetResponse(ToDto(asset));
+        }
+        else if (!string.IsNullOrWhiteSpace(request.SourceFilePath))
+        {
+            if (!File.Exists(request.SourceFilePath))
+            {
+                throw new AssetValidationException($"Tệp nguồn không tồn tại: '{request.SourceFilePath}'.");
+            }
+
+            extension = Path.GetExtension(request.SourceFilePath).ToLowerInvariant();
+            if (isAudio && !AllowedAudioExtensions.Contains(extension))
+            {
+                throw new AssetValidationException($"Chỉ hỗ trợ tệp âm thanh .mp3 hoặc .wav. Định dạng hiện tại: '{extension}'.");
+            }
+            if (isImage && !AllowedImageExtensions.Contains(extension))
+            {
+                throw new AssetValidationException($"Chỉ hỗ trợ tệp ảnh .png, .jpg, .jpeg, .webp. Định dạng hiện tại: '{extension}'.");
+            }
+
+            if (isAudio)
+            {
+                ValidateAudioFile(request.SourceFilePath, extension);
+            }
+
+            var subDir = isAudio ? "audio" : "images";
+            var relativePath = string.IsNullOrWhiteSpace(projectId)
+                ? $"{workspaceId}/media/{subDir}/{assetId}{extension}"
+                : $"{workspaceId}/projects/{projectId}/{subDir}/{assetId}{extension}";
+
+            saveResult = await _fileStore.SaveFileFromPathAsync(
+                storageRootPath,
+                relativePath,
+                request.SourceFilePath,
+                cancellationToken
+            ).ConfigureAwait(false);
+
+            mimeType = ResolveMimeType(extension, isAudio);
+
+            var asset = new Asset
+            {
+                Id = assetId,
+                WorkspaceId = workspaceId,
+                ProjectId = projectId,
+                AssetType = isAudio ? "Audio" : "Image",
+                StorageRootId = storageRootId,
+                RelativePath = relativePath,
+                ByteSize = saveResult.ByteSize,
+                Sha256Hash = saveResult.Sha256Hash,
+                Status = "Linked",
+                MimeType = mimeType,
+                CreatedAtUtc = DateTimeOffset.UtcNow.ToString("O")
+            };
+
+            dbContext.Assets.Add(asset);
+            await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+            return new UploadAssetResponse(ToDto(asset));
+        }
+        else
+        {
+            throw new AssetValidationException("Cần cung cấp dữ liệu tệp (Base64 hoặc SourceFilePath) để tải lên tài nguyên.");
+        }
+    }
+
+    private static string ResolveMimeType(string extension, bool isAudio)
+    {
+        if (isAudio)
+        {
+            return extension == ".mp3" ? "audio/mpeg" : "audio/wav";
+        }
+
+        return extension switch
+        {
+            ".png" => "image/png",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".webp" => "image/webp",
+            _ => "application/octet-stream"
+        };
+    }
+
+    /// <summary>
     /// Lấy metadata chi tiết của một Asset theo AssetId và WorkspaceId.
     /// </summary>
     public async Task<AssetDto> GetMetadataAsync(
@@ -311,6 +549,133 @@ public sealed class AssetService
             Status: asset.Status,
             CreatedAtUtc: asset.CreatedAtUtc,
             MimeType: asset.MimeType
+        );
+    }
+
+    /// <summary>
+    /// Liệt kê tài nguyên (Assets) có phân trang, lọc theo Workspace, Project, Loại tài nguyên và từ khóa tìm kiếm.
+    /// </summary>
+    public async Task<ListAssetsResponse> ListAssetsAsync(
+        ListAssetsRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var workspaceId = NormalizeGuid(request.WorkspaceId, nameof(request.WorkspaceId));
+        var page = request.Page <= 0 ? 1 : request.Page;
+        var pageSize = request.PageSize <= 0 ? 20 : (request.PageSize > 100 ? 100 : request.PageSize);
+
+        await using var dbContext = new TiToAIDbContext(_dbOptions);
+
+        var query = dbContext.Assets
+            .AsNoTracking()
+            .Where(a => a.WorkspaceId == workspaceId);
+
+        if (!string.IsNullOrWhiteSpace(request.ProjectId))
+        {
+            var projectId = NormalizeGuid(request.ProjectId, nameof(request.ProjectId));
+            query = query.Where(a => a.ProjectId == projectId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.AssetType) &&
+            !request.AssetType.Equals("all", StringComparison.OrdinalIgnoreCase))
+        {
+            var assetType = request.AssetType.Trim();
+            query = query.Where(a => EF.Functions.Like(a.AssetType, assetType));
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.Search))
+        {
+            var search = $"%{request.Search.Trim()}%";
+            query = query.Where(a => EF.Functions.Like(a.RelativePath, search) || EF.Functions.Like(a.Id, search));
+        }
+
+        var totalCount = await query.CountAsync(cancellationToken).ConfigureAwait(false);
+
+        var items = await query
+            .OrderByDescending(a => a.CreatedAtUtc)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var dtos = items.Select(ToDto).ToList();
+
+        return new ListAssetsResponse(
+            Assets: dtos,
+            TotalCount: totalCount,
+            Page: page,
+            PageSize: pageSize
+        );
+    }
+
+    /// <summary>
+    /// Lấy thông tin preview chi tiết và trạng thái kiểm tra tệp vật lý (tồn tại hay root offline).
+    /// </summary>
+    public async Task<GetAssetPreviewResponse> GetAssetPreviewAsync(
+        GetAssetPreviewRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var workspaceId = NormalizeGuid(request.WorkspaceId, nameof(request.WorkspaceId));
+        if (string.IsNullOrWhiteSpace(request.AssetId))
+        {
+            throw new ArgumentException("Mã assetId không được để trống.", nameof(request.AssetId));
+        }
+
+        await using var dbContext = new TiToAIDbContext(_dbOptions);
+
+        var asset = await dbContext.Assets
+            .AsNoTracking()
+            .FirstOrDefaultAsync(a => a.Id == request.AssetId && a.WorkspaceId == workspaceId, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (asset is null)
+        {
+            throw new AssetNotFoundException(request.AssetId);
+        }
+
+        bool isRootOffline = false;
+        bool fileExists = false;
+
+        try
+        {
+            var rootPath = await _rootRegistry.ResolveRootPathAsync(asset.StorageRootId, cancellationToken).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(rootPath) || !Directory.Exists(rootPath))
+            {
+                isRootOffline = true;
+            }
+            else
+            {
+                var fullPath = StoragePathGuard.CombineAndVerify(rootPath, asset.RelativePath);
+                fileExists = File.Exists(fullPath);
+            }
+        }
+        catch (KeyNotFoundException)
+        {
+            isRootOffline = true;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            isRootOffline = true;
+        }
+        catch
+        {
+            fileExists = false;
+        }
+
+        return new GetAssetPreviewResponse(
+            AssetId: asset.Id,
+            WorkspaceId: asset.WorkspaceId,
+            AssetType: asset.AssetType,
+            RelativePath: asset.RelativePath,
+            MimeType: asset.MimeType,
+            ByteSize: asset.ByteSize,
+            Sha256Hash: asset.Sha256Hash,
+            FileExists: fileExists,
+            IsRootOffline: isRootOffline,
+            Status: asset.Status
         );
     }
 

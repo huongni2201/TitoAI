@@ -1,5 +1,7 @@
 # Màn hình danh sách Workspace và form quản lý
 
+> **Delta hiện hành:** [plan queue/Settings 1.2](../QUEUE_EXECUTION_SETTINGS_PLAN.md) thay popup Settings, nhóm account shared/private, connect tại Workspace và round-robin Workspace. Dùng [TASKS](../../agents/TASKS.md) cho trạng thái/gate; Baseline/checkbox dưới không là evidence đã chạy.
+
 - Task gốc: **T11 (Workspace UI)** · Ưu tiên: **P0 / G2**.
 - Điều kiện mở: T07,T08 DONE.
 - Baseline 2026-10-26: App.tsx đã có danh sách khung; chưa có CRUD UI thật.

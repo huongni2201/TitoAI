@@ -225,7 +225,7 @@ Dựa trên kết quả xác minh của T01, đề xuất các nội dung sau c�
 3. **State Machine & Contract cho Browser Profile / Login Handoff:**
    - Chốt các mã lý do (`reason_codes`): `login_required`, `session_expired`, `wrong_account`, `automation_blocked`, `network_error`.
    - Định nghĩa DTO `BrowserProfileState` (ProfileId, Kind, Status: `Idle | HeadlessRunning | AwaitingLogin | HeadfulLoggingIn | Paused`).
-   - Thiết kế cơ chế khóa Serialization: Đảm bảo toàn ứng dụng chỉ mở tối đa **1 cửa sổ đăng nhập hiển thị tại một thời điểm**.
+   - Thiết kế cơ chế khóa Single-Instance theo từng profile: Đảm bảo mỗi userDataDir có 1 owner, cho phép người dùng chủ động mở đồng thời nhiều profile độc lập, tuân thủ ngân sách tài nguyên max_open_browsers.
 4. **Snapshot Job Lifecycle:**
    - Khóa chặt quy tắc: Mỗi Job khi được tạo lưu cứng `snapshot` gồm Prompt đã render, `provider_key`, cấu hình adapter, và `storage_root_id` đích. Đổi Settings sau đó tuyệt đối không làm đổi đích của job cũ.
 

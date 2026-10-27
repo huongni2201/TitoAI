@@ -4,11 +4,23 @@ import { projectApi, type ProjectSummaryDto } from "../projects/projectApi";
 import { WorkspaceForm } from "./WorkspaceForm";
 import { ProjectForm } from "../projects/ProjectForm";
 import type { ErrorDto } from "../../contracts/bridge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
-  IconProject,
-  IconPlus,
-  IconRefresh,
-} from "../../components/Icons";
+  Film,
+  Layers,
+  Sparkles,
+  Clock,
+  Edit,
+  Plus,
+  RefreshCw,
+  AlertTriangle,
+  Loader2,
+  ChevronRight,
+  Video,
+} from "lucide-react";
 
 export interface WorkspaceOverviewPageProps {
   workspaceId: string;
@@ -19,8 +31,14 @@ export interface WorkspaceOverviewPageProps {
 // Tạo màu avatar ổn định theo tên
 function getAvatarBgColor(text: string): string {
   const colors = [
-    "#6d3af2", "#0284c7", "#059669", "#d97706",
-    "#e11d48", "#7c3aed", "#2563eb", "#db2777",
+    "#6d3af2",
+    "#0284c7",
+    "#059669",
+    "#d97706",
+    "#e11d48",
+    "#7c3aed",
+    "#2563eb",
+    "#db2777",
   ];
   let hash = 0;
   for (let i = 0; i < text.length; i++) {
@@ -109,22 +127,25 @@ export function WorkspaceOverviewPage({
 
   if (isLoading) {
     return (
-      <div className="loading-card" style={{ marginTop: "2rem" }}>
-        <IconRefresh size={32} className="spin" />
-        <p>Đang tải dữ liệu tổng quan kênh…</p>
-      </div>
+      <Card className="flex flex-col items-center justify-center p-16 text-center mt-6">
+        <Loader2 className="h-8 w-8 animate-spin text-primary mb-3" />
+        <p className="text-sm text-muted-foreground">Đang tải dữ liệu tổng quan kênh…</p>
+      </Card>
     );
   }
 
   if (errorMessage || !workspace) {
     return (
-      <div className="empty-card error-card" style={{ marginTop: "2rem" }}>
-        <h3>Không thể tải thông tin kênh</h3>
-        <p>{errorMessage || "Kênh không tồn tại hoặc đã bị xóa."}</p>
-        <button type="button" className="btn btn-secondary" onClick={fetchData}>
-          <IconRefresh size={16} /> Thử lại
-        </button>
-      </div>
+      <Alert variant="destructive" className="flex flex-col items-center p-6 text-center mt-6">
+        <AlertTriangle className="h-6 w-6 mb-2" />
+        <h3 className="text-base font-semibold">Không thể tải thông tin kênh</h3>
+        <AlertDescription className="mt-1 text-sm">
+          {errorMessage || "Kênh không tồn tại hoặc đã bị xóa."}
+        </AlertDescription>
+        <Button variant="outline" size="sm" className="mt-4 gap-2" onClick={fetchData}>
+          <RefreshCw className="h-4 w-4" /> Thử lại
+        </Button>
+      </Alert>
     );
   }
 
@@ -135,475 +156,310 @@ export function WorkspaceOverviewPage({
   const isActive = workspace.status === "Active";
 
   return (
-    <div className="view-overview" style={{ paddingBottom: "2.5rem" }}>
-      {/* Header kênh theo Panel 02 mockup */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          flexWrap: "wrap",
-          gap: "1.25rem",
-          backgroundColor: "var(--surface-card)",
-          border: "1px solid var(--border-subtle)",
-          borderRadius: "var(--radius-xl)",
-          padding: "1.5rem",
-          marginBottom: "1.5rem",
-          boxShadow: "0 2px 10px rgba(0, 0, 0, 0.05)",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: "1.25rem" }}>
-          {/* Avatar to */}
-          <div
-            style={{
-              width: 64,
-              height: 64,
-              borderRadius: "50%",
-              backgroundColor: avatarColor,
-              color: "#ffffff",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: "1.5rem",
-              fontWeight: 800,
-              boxShadow: "0 4px 12px rgba(0, 0, 0, 0.2)",
-              flexShrink: 0,
-            }}
-          >
-            {initials}
-          </div>
-
-          <div>
-            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
-              <h2 style={{ margin: 0, fontSize: "1.4rem", fontWeight: 700, color: "var(--text-primary)" }}>
-                {workspace.name}
-              </h2>
-              <span className={`badge ${isActive ? "badge-success" : "badge-neutral"}`}>
-                ● {isActive ? "Đang hoạt động" : "Tạm dừng"}
-              </span>
+    <div className="space-y-6 pb-10">
+      {/* Header kênh */}
+      <Card className="p-6 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="flex items-center gap-4">
+            {/* Avatar to */}
+            <div
+              className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full text-2xl font-bold text-white shadow-md"
+              style={{ backgroundColor: avatarColor }}
+            >
+              {initials}
             </div>
 
-            <div style={{ display: "flex", alignItems: "center", gap: "1rem", marginTop: "0.35rem", fontSize: "0.85rem", color: "var(--text-secondary)" }}>
-              <span>{workspace.channelHandle}</span>
-              <span>•</span>
-              <span>{workspace.topic || "Chưa thiết lập chủ đề"}</span>
+            <div>
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <h2 className="text-2xl font-bold tracking-tight text-foreground">
+                  {workspace.name}
+                </h2>
+                <Badge variant={isActive ? "success" : "secondary"}>
+                  <span className="mr-1 text-[8px]">●</span>
+                  {isActive ? "Đang hoạt động" : "Tạm dừng"}
+                </Badge>
+              </div>
+
+              <div className="flex items-center gap-2 mt-1 text-sm text-muted-foreground flex-wrap">
+                <span className="font-medium text-foreground/80">{workspace.channelHandle}</span>
+                <span>•</span>
+                <span>{workspace.topic || "Chưa thiết lập chủ đề"}</span>
+              </div>
             </div>
           </div>
-        </div>
 
-        {/* Nút hành động */}
-        <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={() => setIsEditFormOpen(true)}
-            style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}
-          >
-            ✏️ Chỉnh sửa kênh
-          </button>
+          {/* Nút hành động */}
+          <div className="flex items-center gap-2 self-start sm:self-center">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setIsEditFormOpen(true)}
+              className="gap-2"
+            >
+              <Edit className="h-4 w-4" /> Chỉnh sửa kênh
+            </Button>
+          </div>
         </div>
-      </div>
+      </Card>
 
       {/* Hàng 4 thẻ chỉ số thống kê (KPI Cards) */}
-      <div className="kpi-grid" style={{ marginBottom: "1.75rem" }}>
-        <div className="kpi-card">
-          <span className="kpi-label">Tổng số dự án</span>
-          <span className="kpi-val">{projects.length}</span>
-          <span className="kpi-sub">Dự án video đang quản lý</span>
-        </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <Card className="p-5 shadow-xs">
+          <div className="flex items-center justify-between pb-2">
+            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+              Tổng số dự án
+            </span>
+            <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary/10 text-primary">
+              <Film className="h-4 w-4" />
+            </div>
+          </div>
+          <div className="text-2xl font-bold text-foreground">{projects.length}</div>
+          <p className="text-xs text-muted-foreground mt-1">Dự án video đang quản lý</p>
+        </Card>
 
-        <div className="kpi-card">
-          <span className="kpi-label">Tổng số cảnh (Scenes)</span>
-          <span className="kpi-val">{totalScenes}</span>
-          <span className="kpi-sub">Cảnh được tạo trong kênh</span>
-        </div>
+        <Card className="p-5 shadow-xs">
+          <div className="flex items-center justify-between pb-2">
+            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+              Tổng số cảnh (Scenes)
+            </span>
+            <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary/10 text-primary">
+              <Layers className="h-4 w-4" />
+            </div>
+          </div>
+          <div className="text-2xl font-bold text-foreground">{totalScenes}</div>
+          <p className="text-xs text-muted-foreground mt-1">Cảnh được tạo trong kênh</p>
+        </Card>
 
-        <div className="kpi-card">
-          <span className="kpi-label">Tác vụ đang chạy (Jobs)</span>
-          <span className="kpi-val" style={{ fontSize: "1.2rem", color: "var(--text-muted)" }}>
-            Chưa có dữ liệu
-          </span>
-          <span className="kpi-sub">Chờ kết nối hàng đợi xử lý</span>
-        </div>
+        <Card className="p-5 shadow-xs">
+          <div className="flex items-center justify-between pb-2">
+            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+              Tác vụ đang chạy (Jobs)
+            </span>
+            <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary/10 text-primary">
+              <Sparkles className="h-4 w-4" />
+            </div>
+          </div>
+          <div className="text-lg font-semibold text-muted-foreground">Chưa có dữ liệu</div>
+          <p className="text-xs text-muted-foreground mt-1">Chờ kết nối hàng đợi xử lý</p>
+        </Card>
 
-        <div className="kpi-card">
-          <span className="kpi-label">Tác vụ chờ xử lý</span>
-          <span className="kpi-val" style={{ fontSize: "1.2rem", color: "var(--text-muted)" }}>
-            Chưa có dữ liệu
-          </span>
-          <span className="kpi-sub">Cần người dùng can thiệp</span>
-        </div>
+        <Card className="p-5 shadow-xs">
+          <div className="flex items-center justify-between pb-2">
+            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+              Tác vụ chờ xử lý
+            </span>
+            <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary/10 text-primary">
+              <Clock className="h-4 w-4" />
+            </div>
+          </div>
+          <div className="text-lg font-semibold text-muted-foreground">Chưa có dữ liệu</div>
+          <p className="text-xs text-muted-foreground mt-1">Cần người dùng can thiệp</p>
+        </Card>
       </div>
 
-      {/* 2 cột nội dung: Cột trái "Dự án gần đây", Cột phải "Quy trình sản xuất" */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "minmax(0, 1.4fr) minmax(0, 1fr)",
-          gap: "1.5rem",
-        }}
-      >
+      {/* 2 cột nội dung: Cột trái "Dự án hiện tại", Cột phải "Quy trình sản xuất" */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* CỘT TRÁI: DỰ ÁN GẦN ĐÂY */}
-        <div
-          style={{
-            backgroundColor: "var(--surface-card)",
-            border: "1px solid var(--border-subtle)",
-            borderRadius: "var(--radius-lg)",
-            padding: "1.25rem",
-            display: "flex",
-            flexDirection: "column",
-            gap: "1rem",
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-            }}
-          >
-            <div>
-              <h3 style={{ margin: 0, fontSize: "1.1rem", fontWeight: 700, color: "var(--text-primary)" }}>
-                Dự án hiện tại
-              </h3>
-              <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
-                Các dự án video đang tiến hành trong Workspace này
-              </span>
-            </div>
+        <Card className="lg:col-span-7 flex flex-col justify-between shadow-xs">
+          <CardHeader className="p-5 pb-3">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div>
+                <CardTitle className="text-base font-bold text-foreground">
+                  Dự án hiện tại
+                </CardTitle>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Các dự án video đang tiến hành trong Workspace này
+                </p>
+              </div>
 
-            <div style={{ display: "flex", gap: "0.5rem" }}>
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={() => setIsCreateProjectOpen(true)}
-              >
-                <IconPlus size={14} /> Dự án mới
-              </button>
-              {projects.length > 0 && onNavigateToProjects && (
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  onClick={onNavigateToProjects}
-                  style={{ color: "var(--accent)" }}
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIsCreateProjectOpen(true)}
+                  className="gap-1.5"
                 >
-                  Xem tất cả ({projects.length}) →
-                </button>
-              )}
+                  <Plus className="h-3.5 w-3.5" /> Dự án mới
+                </Button>
+                {projects.length > 0 && onNavigateToProjects && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={onNavigateToProjects}
+                    className="text-primary hover:text-primary gap-1"
+                  >
+                    Xem tất cả ({projects.length}) →
+                  </Button>
+                )}
+              </div>
             </div>
-          </div>
+          </CardHeader>
 
-          {projects.length === 0 ? (
-            <div
-              style={{
-                padding: "2rem 1rem",
-                textAlign: "center",
-                backgroundColor: "var(--surface-card-subtle)",
-                borderRadius: "var(--radius-md)",
-                border: "1px dashed var(--border)",
-              }}
-            >
-              <IconProject size={36} style={{ color: "var(--text-muted)", marginBottom: "0.5rem" }} />
-              <p style={{ margin: 0, fontSize: "0.9rem", color: "var(--text-secondary)" }}>
-                Chưa có dự án nào trong kênh này.
-              </p>
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                style={{ marginTop: "0.75rem" }}
-                onClick={() => setIsCreateProjectOpen(true)}
-              >
-                <IconPlus size={14} /> Bắt đầu dự án đầu tiên
-              </button>
-            </div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem" }}>
-              {recentProjects.map((prj) => (
-                <div
-                  key={prj.projectId}
-                  style={{
-                    backgroundColor: "var(--surface-card-subtle)",
-                    border: "1px solid var(--border-subtle)",
-                    borderRadius: "var(--radius-md)",
-                    padding: "1rem",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "0.75rem",
-                  }}
+          <CardContent className="p-5 pt-2 space-y-3">
+            {projects.length === 0 ? (
+              <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border bg-muted/20 p-8 text-center">
+                <Video className="h-9 w-9 text-muted-foreground mb-2" />
+                <p className="text-sm text-muted-foreground">
+                  Chưa có dự án nào trong kênh này.
+                </p>
+                <Button
+                  size="sm"
+                  className="mt-3 gap-1.5"
+                  onClick={() => setIsCreateProjectOpen(true)}
                 >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                    <div>
-                      <h4 style={{ margin: 0, fontSize: "0.95rem", fontWeight: 700, color: "var(--text-primary)" }}>
-                        {prj.name}
-                      </h4>
-                      <p
-                        style={{
-                          margin: "0.25rem 0 0 0",
-                          fontSize: "0.8rem",
-                          color: "var(--text-secondary)",
-                          lineHeight: 1.4,
+                  <Plus className="h-3.5 w-3.5" /> Bắt đầu dự án đầu tiên
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {recentProjects.map((prj) => (
+                  <div
+                    key={prj.projectId}
+                    className="flex flex-col gap-2.5 rounded-lg border border-border/70 bg-card p-4 transition-all hover:border-border hover:shadow-xs"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <h4 className="text-sm font-semibold text-foreground">
+                          {prj.name}
+                        </h4>
+                        <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2">
+                          {prj.description || "Không có mô tả chi tiết."}
+                        </p>
+                      </div>
+                      <Badge variant="outline" className="shrink-0 text-xs">
+                        {prj.sceneCount} cảnh
+                      </Badge>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-1">
+                      <span className="text-xs text-muted-foreground">
+                        Trạng thái: <strong className="text-foreground">{prj.status}</strong>
+                      </span>
+
+                      <Button
+                        size="sm"
+                        className="h-8 gap-1 text-xs"
+                        onClick={() => {
+                          if (onSelectProject) {
+                            onSelectProject(prj.projectId);
+                          } else if (onNavigateToProjects) {
+                            onNavigateToProjects();
+                          }
                         }}
                       >
-                        {prj.description || "Không có mô tả chi tiết."}
-                      </p>
+                        Tiếp tục làm việc <ChevronRight className="h-3.5 w-3.5" />
+                      </Button>
                     </div>
-                    <span className="badge badge-neutral" style={{ fontSize: "0.75rem" }}>
-                      {prj.sceneCount} cảnh
-                    </span>
                   </div>
-
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-                      Trạng thái: <strong>{prj.status}</strong>
-                    </span>
-
-                    <button
-                      type="button"
-                      className="btn btn-primary btn-sm"
-                      onClick={() => {
-                        if (onSelectProject) {
-                          onSelectProject(prj.projectId);
-                        } else if (onNavigateToProjects) {
-                          onNavigateToProjects();
-                        }
-                      }}
-                    >
-                      Tiếp tục làm việc →
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         {/* CỘT PHẢI: QUY TRÌNH SẢN XUẤT NỘI DUNG (PIPELINE MAP) */}
-        <div
-          style={{
-            backgroundColor: "var(--surface-card)",
-            border: "1px solid var(--border-subtle)",
-            borderRadius: "var(--radius-lg)",
-            padding: "1.25rem",
-            display: "flex",
-            flexDirection: "column",
-            gap: "1rem",
-          }}
-        >
-          <div>
-            <h3 style={{ margin: 0, fontSize: "1.1rem", fontWeight: 700, color: "var(--text-primary)" }}>
+        <Card className="lg:col-span-5 flex flex-col justify-between shadow-xs">
+          <CardHeader className="p-5 pb-3">
+            <CardTitle className="text-base font-bold text-foreground">
               Quy trình sản xuất nội dung
-            </h3>
-            <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
+            </CardTitle>
+            <p className="text-xs text-muted-foreground mt-0.5">
               Chu trình chuyển đổi từ ý tưởng kịch bản đến video TikTok
-            </span>
-          </div>
+            </p>
+          </CardHeader>
 
-          <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+          <CardContent className="p-5 pt-2 space-y-2.5">
             {/* Bước 1: Kịch bản */}
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                padding: "0.75rem 1rem",
-                backgroundColor: "var(--surface-card-subtle)",
-                borderRadius: "var(--radius-md)",
-                border: "1px solid var(--border-subtle)",
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-                <div
-                  style={{
-                    width: 28,
-                    height: 28,
-                    borderRadius: "50%",
-                    backgroundColor: "var(--accent-subtle)",
-                    color: "var(--accent)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontWeight: 700,
-                    fontSize: "0.8rem",
-                  }}
-                >
+            <div className="flex items-center justify-between rounded-lg border border-border/70 bg-card p-3 shadow-2xs">
+              <div className="flex items-center gap-3">
+                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">
                   1
                 </div>
                 <div>
-                  <div style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)" }}>
+                  <div className="text-xs font-semibold text-foreground">
                     Kịch bản & Lời dẫn
                   </div>
-                  <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                  <div className="text-[11px] text-muted-foreground">
                     Phân đoạn cảnh và soạn thảo nội dung
                   </div>
                 </div>
               </div>
-              <span className="badge badge-success">Sẵn sàng</span>
+              <Badge variant="success">Sẵn sàng</Badge>
             </div>
 
             {/* Bước 2: Tạo ảnh AI */}
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                padding: "0.75rem 1rem",
-                backgroundColor: "var(--surface-card-subtle)",
-                borderRadius: "var(--radius-md)",
-                border: "1px solid var(--border-subtle)",
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-                <div
-                  style={{
-                    width: 28,
-                    height: 28,
-                    borderRadius: "50%",
-                    backgroundColor: "var(--accent-subtle)",
-                    color: "var(--accent)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontWeight: 700,
-                    fontSize: "0.8rem",
-                  }}
-                >
+            <div className="flex items-center justify-between rounded-lg border border-border/70 bg-card p-3 shadow-2xs">
+              <div className="flex items-center gap-3">
+                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">
                   2
                 </div>
                 <div>
-                  <div style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)" }}>
+                  <div className="text-xs font-semibold text-foreground">
                     Tạo ảnh AI minh họa
                   </div>
-                  <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                  <div className="text-[11px] text-muted-foreground">
                     Sinh hình ảnh nhân vật & bối cảnh
                   </div>
                 </div>
               </div>
-              <span className="badge badge-neutral">Tự động</span>
+              <Badge variant="secondary">Tự động</Badge>
             </div>
 
             {/* Bước 3: Prompt chuyển động */}
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                padding: "0.75rem 1rem",
-                backgroundColor: "var(--surface-card-subtle)",
-                borderRadius: "var(--radius-md)",
-                border: "1px solid var(--border-subtle)",
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-                <div
-                  style={{
-                    width: 28,
-                    height: 28,
-                    borderRadius: "50%",
-                    backgroundColor: "var(--accent-subtle)",
-                    color: "var(--accent)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontWeight: 700,
-                    fontSize: "0.8rem",
-                  }}
-                >
+            <div className="flex items-center justify-between rounded-lg border border-border/70 bg-card p-3 shadow-2xs">
+              <div className="flex items-center gap-3">
+                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">
                   3
                 </div>
                 <div>
-                  <div style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)" }}>
+                  <div className="text-xs font-semibold text-foreground">
                     Prompt chuyển động video
                   </div>
-                  <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                  <div className="text-[11px] text-muted-foreground">
                     Đặc tả camera và hành động nhân vật
                   </div>
                 </div>
               </div>
-              <span className="badge badge-neutral">Tự động</span>
+              <Badge variant="secondary">Tự động</Badge>
             </div>
 
             {/* Bước 4: Âm thanh gốc & Video AI */}
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                padding: "0.75rem 1rem",
-                backgroundColor: "var(--surface-card-subtle)",
-                borderRadius: "var(--radius-md)",
-                border: "1px solid var(--border-subtle)",
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-                <div
-                  style={{
-                    width: 28,
-                    height: 28,
-                    borderRadius: "50%",
-                    backgroundColor: "var(--accent-subtle)",
-                    color: "var(--accent)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontWeight: 700,
-                    fontSize: "0.8rem",
-                  }}
-                >
+            <div className="flex items-center justify-between rounded-lg border border-border/70 bg-card p-3 shadow-2xs">
+              <div className="flex items-center gap-3">
+                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">
                   4
                 </div>
                 <div>
-                  <div style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)" }}>
+                  <div className="text-xs font-semibold text-foreground">
                     Âm thanh gốc & Render Video
                   </div>
-                  <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                  <div className="text-[11px] text-muted-foreground">
                     Sinh video AI qua MuseAI
                   </div>
                 </div>
               </div>
-              <span className="badge badge-neutral">MuseAI</span>
+              <Badge variant="outline">MuseAI</Badge>
             </div>
 
             {/* Bước 5: Đăng tải TikTok */}
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                padding: "0.75rem 1rem",
-                backgroundColor: "var(--surface-card-subtle)",
-                borderRadius: "var(--radius-md)",
-                border: "1px solid var(--border-subtle)",
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-                <div
-                  style={{
-                    width: 28,
-                    height: 28,
-                    borderRadius: "50%",
-                    backgroundColor: "var(--accent-subtle)",
-                    color: "var(--accent)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontWeight: 700,
-                    fontSize: "0.8rem",
-                  }}
-                >
+            <div className="flex items-center justify-between rounded-lg border border-border/70 bg-card p-3 shadow-2xs">
+              <div className="flex items-center gap-3">
+                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">
                   5
                 </div>
                 <div>
-                  <div style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)" }}>
+                  <div className="text-xs font-semibold text-foreground">
                     Thư viện & Đăng TikTok
                   </div>
-                  <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                  <div className="text-[11px] text-muted-foreground">
                     Lưu trữ asset và lên lịch phát hành
                   </div>
                 </div>
               </div>
-              <span className="badge badge-neutral">TikTok</span>
+              <Badge variant="outline">TikTok</Badge>
             </div>
-          </div>
-        </div>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Modal Sửa Workspace */}

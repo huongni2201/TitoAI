@@ -1,5 +1,7 @@
 # Hoàn tất React shell và navigation nền
 
+> **Delta hiện hành:** [plan queue/Settings 1.2](../QUEUE_EXECUTION_SETTINGS_PLAN.md) thay popup Settings, nhóm account shared/private, connect tại Workspace và round-robin Workspace. Dùng [TASKS](../../agents/TASKS.md) cho trạng thái/gate; Baseline/checkbox dưới không là evidence đã chạy.
+
 - Task gốc: **T06** · Ưu tiên: **P0 / G1**.
 - Điều kiện mở: T03 DONE; phối hợp freeze với T05.
 - Trạng thái hiện tại: **DONE** theo addendum trong [review T06](../../reviews/T06-coordinator-review.md).
@@ -11,7 +13,7 @@ App.tsx có sidebar/topbar/Workspace selector, SettingsModal và QueueDrawer. Fi
 
 ## File và contract
 
-- Sửa: `src/TiToAI.Web/src/{App.tsx,style.css,services/bridgeClient.ts,contracts/bridge.ts,contracts/dtos.ts,components/SettingsModal.tsx,components/QueueDrawer.tsx}`.
+- Sửa: `src/TiToAI.Web/src/{App.tsx,style.css,services/bridgeClient.ts,contracts/bridge.ts,contracts/dtos.ts,components/SettingsPage.tsx (đích Q2, kiểm tra file hiện có trước tạo),components/QueueDrawer.tsx}`.
 - Spec: UI_BROWSER §2,§4 và ảnh references/ui-reference.png; Theme §2. Không triển khai CRUD hoặc queue trong shell.
 - G1 cần workspace.list đọc DB thật: integrator nối projection tối thiểu tại Desktop, không đợi toàn bộ CRUD T07. DB rỗng mới trả danh sách rỗng.
 

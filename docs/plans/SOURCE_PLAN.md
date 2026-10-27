@@ -1,3 +1,7 @@
+> **Quyết định hiện hành về queue/tài khoản/Settings:** đọc [plan 1.2](QUEUE_EXECUTION_SETTINGS_PLAN.md). Phần popup, account gắn Workspace hoặc queue theo Workspace trong nguồn này đã được thay; nội dung nguồn dưới giữ để đối chiếu, không là lệnh thực thi.
+
+> **Bổ sung P0 ngày 2026-10-26:** [§7.4](#74-tạo-ý-tưởngprompt-kèm-nội-dung-đăng-tiktok--p0) yêu cầu AI tạo ý tưởng/kịch bản hoặc prompt kèm luôn nội dung bài đăng TikTok để người dùng sửa và sao chép.
+
 # AI Content Studio — Implementation Plan (C# .NET + SQLite)
 
 > Bản nguồn được giữ để đối chiếu. Tên hiện hành là TiToAI. Yêu cầu mới nhất thay phần AI/MuseAI riêng kênh và profile gộp: **ChatGPT/Gemini/MuseAI là pool tài khoản toàn app phục vụ mọi TikTok; một account một browser/profile riêng, không link AI với từng Workspace**. 10 TikTok có thể dùng 1 ChatGPT; 10 video dùng 4 MuseAI theo slot trống/full thì chờ; browser idle đóng rồi job sau mở lại cùng profile. Ba tác vụ AI chọn provider độc lập theo [Settings §4](SETTINGS_PLAN.md); dữ liệu, migration, wire commands và nghiệm thu chi tiết ở [contract bổ sung v1.1](../decisions/execution-contract-v1.1.md). Ví dụ browser/pool cũ bên dưới không phải thiết kế đích; tiến độ và dependency theo STATUS/TASKS.
@@ -131,8 +135,7 @@ AI Content Studio — Windows desktop
 | `browser_profiles` | `id`, `profile_kind`, `relative_path`, `account_id`, `status`, `last_used_at_utc` |
 | `providers` | `id`, `provider_key`, `display_name`, `capabilities_json`, `enabled` |
 | `provider_configs` | `id`, `workspace_id nullable`, `provider_id`, `settings_json`, `mode` |
-| `prompt_templates` | `id`, `workspace_id nullable`, `type`, `name`, `current_version_id` |
-| `prompt_versions` | `id`, `template_id`, `version`, `body`, `variables_schema_json`, `created_at_utc` |
+| `prompt_templates` | `id`, `workspace_id nullable`, `purpose`, `template_text`, `variable_definitions_json`, timestamps |
 | `projects` | `id`, `workspace_id`, `name`, `status`, `created_at_utc` |
 | `scenes` | `id`, `workspace_id`, `project_id`, `sequence`, `description`, `duration_ms`, `status` |
 | `media_assets` | `id`, `workspace_id`, `project_id`, `scene_id nullable`, `asset_type`, `relative_path`, `sha256`, `mime`, `size_bytes` |
@@ -254,13 +257,27 @@ Dùng round-robin/weighted fairness giữa các Workspace, mỗi tab nhận tố
 
 ### 7.3. Pipeline nội dung
 
-1. **Kịch bản**: nhập brief, lấy prompt template kênh, tạo và kiểm duyệt outline/scenes.
+1. **Kịch bản**: nhập brief, lấy prompt template kênh, tạo và kiểm duyệt ý tưởng/outline/scenes kèm bài đăng TikTok theo §7.4.
 2. **Ảnh**: giao job tới image tab phù hợp, lưu prompt snapshot và ảnh tham chiếu.
-3. **Video prompt**: tạo prompt dựa trên brief và (nếu cần) ảnh thực tế; có editor để người dùng sửa lại.
+3. **Video prompt**: tạo prompt dựa trên brief và (nếu cần) ảnh thực tế, kèm phương án bài đăng TikTok theo §7.4; có editor để người dùng sửa lại.
 4. **Audio input**: người dùng thêm tệp audio (MP3/WAV) ở mức scene hoặc project; lưu nguyên bản, không xử lý/cắt.
 5. **Video**: khi đủ ảnh + prompt + audio, gửi tới MuseAI provider account tương ứng nếu khả năng và quyền truy cập website cho phép; nếu không, hỗ trợ bàn giao thủ công.
 6. **Kết quả**: tải/cập nhật video, kiểm tra định dạng, gắn đúng `workspace_id/project_id/scene_id`, lưu vào library.
 7. **Analytics**: đọc/nhập/xuất dữ liệu TikTok có quyền truy cập và đưa insight về prompt/kịch bản từng kênh.
+
+### 7.4. Tạo ý tưởng/prompt kèm nội dung đăng TikTok — P0
+
+Yêu cầu bổ sung ngày 2026-10-26: khi người dùng yêu cầu AI lên ý tưởng/kịch bản hoặc viết/tối ưu prompt nội dung, kết quả phải có luôn **nội dung bài đăng TikTok sẵn để sao chép**, không cần yêu cầu AI viết caption ở lượt riêng. Mục này là nguồn yêu cầu cho template, adapter, pipeline, UI và xuất tài liệu; schema/DTO mở rộng phải được coordinator chốt trước triển khai.
+
+- **Đầu ra:** ý tưởng/kịch bản và prompt theo tác vụ, kèm `tiktokPost` gồm `caption` và `hashtags`. Caption là bài viết hoàn chỉnh: câu mở đầu thu hút (hook), nội dung chính và lời kêu gọi hành động (CTA) phù hợp; hashtags liên quan, không trùng. Bản sao chép ghép caption + xuống dòng + hashtags, không lẫn chỉ dẫn cho AI, nhãn trường hoặc placeholder chưa điền.
+- **Ngữ cảnh:** dùng brief, ngôn ngữ, chủ đề/phong cách Workspace và nội dung video/sản phẩm đã cung cấp; mặc định tiếng Việt nếu chưa chọn ngôn ngữ. Không tự bịa thông tin sản phẩm, giá, ưu đãi hay trải nghiệm sử dụng. Nếu đề xuất nhiều ý tưởng, mỗi phương án có bài đăng riêng; chỉ phương án người dùng chọn mới được áp dụng.
+- **Phạm vi:** bài đăng thuộc project/video cuối cùng, không nhân thành một bài cho mỗi scene. Khi tạo/tối ưu prompt ở scene, AI trả kèm phương án cập nhật bài đăng dựa trên ngữ cảnh project; người dùng review trước khi thay bản hiện hành. Render preview template thuần túy và tác vụ sinh ảnh/video không tự tạo thêm lượt AI viết bài đăng.
+- **Provider và template:** tạo bài đăng ngay trong kết quả text của tác vụ đang chạy, dùng provider/template snapshot hiện hành. Giữ ba purpose Script/Image/VideoPrompt và routing đã chốt; không thêm provider, queue hay bước AI riêng chỉ để viết caption. Template lưu nội dung hiện hành, có thể chỉnh giọng văn/CTA/hashtag; job giữ snapshot nội dung đã dùng.
+- **Lưu và review:** giữ bản AI trong kết quả job/run đúng Workspace/project cùng provenance và revision. Người dùng sửa, lưu, áp dụng hoặc giữ bản cũ; kết quả đến muộn không ghi đè draft. Bản bài đăng đã áp dụng được lưu bền vững cấp project và có thể mở lại sau restart. Đổi prompt/kịch bản sau đó đánh dấu bài đăng cần review; không tự gửi lại AI.
+- **UI và xuất:** vùng “Nội dung đăng TikTok” tại review ý tưởng/kịch bản và review kết quả prompt, có caption, hashtag, Sửa/Lưu/Áp dụng, “Sao chép bài đăng” và xuất TXT UTF-8. Bản sao chép/xuất dùng nội dung đã chọn/lưu; draft chưa lưu cần lưu hoặc xác nhận bản muốn dùng. Đây là soạn nội dung để người dùng tự đăng, không thêm chức năng tự đăng TikTok.
+- **Validation và tương thích:** text output mới thiếu caption, hashtag hoặc sai kiểu phải báo chưa đủ kết quả, giữ phần hợp lệ để sửa/nhập thủ công; không báo hoàn tất chỉ vì đã có prompt. Quy tắc này áp dụng cả automation và manual import. Job/kết quả lịch sử giữ schema/snapshot cũ, hiện “Chưa có nội dung đăng TikTok”; không tự chạy lại hay làm mất dữ liệu cũ. Giới hạn độ dài là validation của app do coordinator chốt, không gán thành giới hạn TikTok khi chưa xác minh.
+
+**Nghiệm thu:** tạo ý tưởng/kịch bản và tạo/tối ưu prompt đều trả kèm bài đăng; nhiều ý tưởng không lẫn caption; nhiều scene chỉ áp một bản bài đăng cấp project. Kiểm tra cả ChatGPT/Gemini và manual import; thiếu trường, sai Workspace, sửa tay khi job đang chạy, apply lặp, restart và job schema cũ. Copy/TXT giữ đúng dấu tiếng Việt, xuống dòng và hashtag; không có thao tác tự đăng hoặc lượt AI phụ chỉ để tạo caption.
 
 ## 8. Provider plugin & prompt không hardcode
 
@@ -278,7 +295,7 @@ public interface IProviderAdapter
 ```
 
 - `ProviderCapabilities`: supportsText, supportsImage, supportsVideo, supportsAudioUpload, supportsFileDownload, supportsAutomation, manualHandoffMode.
-- Prompt templates có `scope` global hoặc workspace override, versioning, biến đã khai báo, preview render, edit và rollback.
+- Prompt templates có `scope` global hoặc workspace override, biến đã khai báo, preview render và edit. Chỉ lưu nội dung hiện hành; không lưu lịch sử version hoặc rollback. Job snapshot giữ nguyên rendered prompt đã enqueue.
 - Không đồng nhất “cấu hình provider” với “automation không cần code”: thêm website mới thường vẫn phải viết adapter/selector riêng, kiểm thử và cập nhật khi UI đổi.
 - Tách logic browser automation khỏi UI để có thể thay nhà cung cấp mà không ảnh hưởng Job Scheduler và DB.
 
@@ -333,6 +350,7 @@ public interface IProviderAdapter
 - Dùng được 1 browser AI với nhiều tab và các MuseAI/TikTok profile riêng.
 - Xử lý hàng đợi, restart không mất job; không gửi trùng khi không biết trạng thái.
 - Input video job gồm ảnh + prompt tùy chỉnh + file audio gốc (không audio worker).
+- AI tạo ý tưởng/kịch bản hoặc prompt trả kèm bài đăng TikTok; người dùng sửa, lưu, sao chép/xuất đúng bản cấp project theo §7.4.
 - Có SQLite backup/restore, migrations, đầy đủ logs và dữ liệu không lẫn tài khoản.
 - Website nào không cho phép hoặc không hỗ trợ automation phải có chế độ thao tác thủ công rõ ràng.
 

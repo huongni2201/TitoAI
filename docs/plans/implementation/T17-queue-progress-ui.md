@@ -1,5 +1,7 @@
 # Hàng đợi, tiến độ và thao tác cần người dùng
 
+> **Delta hiện hành:** [plan queue/Settings 1.2](../QUEUE_EXECUTION_SETTINGS_PLAN.md) thay popup Settings, nhóm account shared/private, connect tại Workspace và round-robin Workspace. Dùng [TASKS](../../agents/TASKS.md) cho trạng thái/gate; Baseline/checkbox dưới không là evidence đã chạy.
+
 - Task gốc: **T17** · Ưu tiên: **P0 / G2**.
 - Điều kiện mở: T16 DONE.
 - Baseline 2026-10-26: QueueDrawer hiện chỉ hiển thị chưa kết nối.

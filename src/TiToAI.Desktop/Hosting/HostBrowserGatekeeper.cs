@@ -20,24 +20,32 @@ public sealed class HostBrowserGatekeeper : IBrowserGatekeeper, IDisposable
     private readonly ProfileRegistry _profileRegistry;
     private readonly LoginCoordinator _loginCoordinator;
     private readonly ITabPool _tabPool;
+    private readonly IBrowserProcessController? _processController;
+    private readonly BrowserSessionCheckpointCoordinator? _checkpointCoordinator;
 
     private readonly ConcurrentDictionary<string, string> _profileVisibility = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> _profileOperational = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> _knownProfileIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly Func<BrowserProfileStateChangedPayload, Task> _profileStateChangedHandler;
 
     public HostBrowserGatekeeper(
         ProfileRegistry profileRegistry,
         LoginCoordinator loginCoordinator,
-        ITabPool tabPool)
+        ITabPool tabPool,
+        IBrowserProcessController? processController = null,
+        BrowserSessionCheckpointCoordinator? checkpointCoordinator = null)
     {
         _profileRegistry = profileRegistry ?? throw new ArgumentNullException(nameof(profileRegistry));
         _loginCoordinator = loginCoordinator ?? throw new ArgumentNullException(nameof(loginCoordinator));
         _tabPool = tabPool ?? throw new ArgumentNullException(nameof(tabPool));
+        _processController = processController;
+        _checkpointCoordinator = checkpointCoordinator;
 
         _profileStateChangedHandler = payload =>
         {
             if (!string.IsNullOrWhiteSpace(payload.ProfileId))
             {
+                _knownProfileIds.TryAdd(payload.ProfileId, 0);
                 if (!string.IsNullOrWhiteSpace(payload.VisibilityState))
                 {
                     _profileVisibility[payload.ProfileId] = payload.VisibilityState;
@@ -57,9 +65,10 @@ public sealed class HostBrowserGatekeeper : IBrowserGatekeeper, IDisposable
     {
         if (string.IsNullOrWhiteSpace(profileId)) return false;
 
-        // Nếu profile đang trong quy trình Quiescing: Tạm dừng dispatch để rút cạn tab
+        // Nếu profile đang trong quy trình Quiescing hoặc Closing: Tạm dừng dispatch để rút cạn/bảo vệ tài nguyên
         if (_profileOperational.TryGetValue(profileId, out var opState) &&
-            string.Equals(opState, BrowserOperationalState.Quiescing, StringComparison.OrdinalIgnoreCase))
+            (string.Equals(opState, BrowserOperationalState.Quiescing, StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(opState, "Closing", StringComparison.OrdinalIgnoreCase)))
         {
             return true;
         }
@@ -71,13 +80,13 @@ public sealed class HostBrowserGatekeeper : IBrowserGatekeeper, IDisposable
     {
         if (string.IsNullOrWhiteSpace(profileId)) return false;
 
-        // 1. Kiểm tra Semaphore/CurrentVisible của LoginCoordinator
-        if (string.Equals(_loginCoordinator.CurrentVisibleProfileId, profileId, StringComparison.OrdinalIgnoreCase))
+        // 1. Kiểm tra trạng thái hiển thị của LoginCoordinator cho profileId
+        if (_loginCoordinator.IsProfileVisible(profileId))
         {
             return true;
         }
 
-        // 2. Kiểm tra visibility state (VisibleActive hoặc VisibleWaiting)
+        // 2. Kiểm tra visibility state (VisibleActive hoặc VisibleWaiting cũ)
         if (_profileVisibility.TryGetValue(profileId, out var visState))
         {
             if (string.Equals(visState, BrowserVisibilityState.VisibleActive, StringComparison.OrdinalIgnoreCase) ||
@@ -103,6 +112,19 @@ public sealed class HostBrowserGatekeeper : IBrowserGatekeeper, IDisposable
     {
         try
         {
+            // Chỉ mở browser automation khi đã reserve được job đủ điều kiện. Browser chạy ẩn trong lúc xử lý job.
+            if (_processController != null && !_processController.IsRunning(profileId))
+            {
+                try
+                {
+                    await _processController.LaunchPersistentContextAsync(profileId, isHeadless: true, cancellationToken: cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[HostBrowserGatekeeper] Không thể mở browser automation cho profile {profileId}: {ex.Message}");
+                }
+            }
+
             var handle = await _tabPool.AcquireTabAsync(profileId, role, jobId, cancellationToken).ConfigureAwait(false);
             return new TabLeaseDisposable(async () =>
             {
@@ -123,12 +145,114 @@ public sealed class HostBrowserGatekeeper : IBrowserGatekeeper, IDisposable
 
     public bool IsProfileIdle(string profileId)
     {
-        return _tabPool.GetActiveJobCount(profileId) == 0;
+        // 1. Kiểm tra số tab đang hoạt động trong TabPool
+        if (_tabPool.GetActiveJobCount(profileId) > 0)
+        {
+            return false;
+        }
+
+        // 2. Không đóng browser khi còn job chạy hoặc job chưa rõ kết quả cần đối soát
+        if (_checkpointCoordinator != null && _checkpointCoordinator.HasUncertainOrActiveJobs(profileId))
+        {
+            return false;
+        }
+
+        return true;
     }
 
     public void CloseProfileIfIdle(string profileId)
     {
-        // Khi idle: việc đóng browser context sẽ do PlaywrightBrowserController quản lý khi cần
+        if (string.IsNullOrWhiteSpace(profileId)) return;
+
+        if (IsProfileIdle(profileId) && _processController != null && _processController.IsRunning(profileId))
+        {
+            _profileOperational[profileId] = "Closing";
+
+            // Thực hiện đóng browser context và nhả single-instance lock an toàn khi profile đã hoàn toàn idle
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await _processController.CloseContextAsync(profileId, CancellationToken.None).ConfigureAwait(false);
+                    _profileOperational[profileId] = BrowserOperationalState.Stopped;
+                }
+                catch (Exception ex)
+                {
+                    _profileOperational[profileId] = BrowserOperationalState.Error;
+                    System.Diagnostics.Debug.WriteLine($"[HostBrowserGatekeeper] Lỗi khi đóng idle browser context cho profile {profileId}: {ex.Message}");
+                }
+            });
+        }
+    }
+
+    public IReadOnlySet<string> GetActiveOrBusyProfileIds()
+    {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // 1. Toàn bộ các profile đang hiển thị cửa sổ từ login coordinator
+        foreach (var visibleProfileId in _loginCoordinator.ActiveVisibleProfileIds)
+        {
+            if (!string.IsNullOrWhiteSpace(visibleProfileId))
+            {
+                set.Add(visibleProfileId);
+            }
+        }
+
+        // 2. Profile đang VisibleActive hoặc VisibleWaiting
+        foreach (var kvp in _profileVisibility)
+        {
+            if (string.Equals(kvp.Value, BrowserVisibilityState.VisibleActive, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(kvp.Value, BrowserVisibilityState.VisibleWaiting, StringComparison.OrdinalIgnoreCase))
+            {
+                set.Add(kvp.Key);
+            }
+        }
+
+        // 3. Profile đang Quiescing, Closing hoặc Running
+        foreach (var kvp in _profileOperational)
+        {
+            if (string.Equals(kvp.Value, BrowserOperationalState.Quiescing, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(kvp.Value, "Closing", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(kvp.Value, BrowserOperationalState.Running, StringComparison.OrdinalIgnoreCase))
+            {
+                set.Add(kvp.Key);
+            }
+        }
+
+        // 4. Profile đang có tiến trình Playwright persistent context chạy hoặc tab pool đang hoạt động
+        foreach (var profileId in _knownProfileIds.Keys)
+        {
+            if (_processController != null && _processController.IsRunning(profileId))
+            {
+                set.Add(profileId);
+            }
+            if (_tabPool.GetActiveJobCount(profileId) > 0)
+            {
+                set.Add(profileId);
+            }
+        }
+
+        return set;
+    }
+
+    public void TrackJob(string profileId, string jobId, bool sideEffectSubmitted = false, string state = "Running")
+    {
+        _checkpointCoordinator?.TrackJob(profileId, jobId, sideEffectSubmitted, state);
+    }
+
+    public void SetJobSideEffectSubmitted(string profileId, string jobId, bool submitted = true)
+    {
+        _checkpointCoordinator?.SetJobSideEffectSubmitted(profileId, jobId, submitted);
+    }
+
+    public void UntrackJob(string profileId, string jobId)
+    {
+        _checkpointCoordinator?.UntrackJob(profileId, jobId);
+    }
+
+    public bool CanResumeJob(string profileId, string jobId, bool sideEffectSubmitted)
+    {
+        return _checkpointCoordinator?.CanResumeJob(profileId, jobId, sideEffectSubmitted) ?? true;
     }
 
     public void Dispose()

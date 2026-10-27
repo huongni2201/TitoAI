@@ -1,7 +1,20 @@
 import React, { useState, useEffect, useRef } from "react";
 import { projectApi, type SceneDto } from "./projectApi";
 import type { ErrorDto } from "../../contracts/bridge";
-import { IconClose, IconRefresh } from "../../components/Icons";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
+import { AlertTriangle, Loader2, RefreshCw } from "lucide-react";
 
 export interface SceneFormProps {
   isOpen: boolean;
@@ -64,20 +77,6 @@ export function SceneForm({
     }
   }, [isOpen, mode, scene]);
 
-  // Phím Escape
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !isSubmitting && !isReloading) {
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, isSubmitting, isReloading, onClose]);
-
-  if (!isOpen) return null;
-
   const validate = (): boolean => {
     const errors: Record<string, string> = {};
     const trimmed = name.trim();
@@ -87,8 +86,8 @@ export function SceneForm({
       errors.name = "Tên phân cảnh không được vượt quá 100 ký tự.";
     }
 
-    if (!targetDurationSeconds || targetDurationSeconds < 1 || targetDurationSeconds > 600) {
-      errors.duration = "Thời lượng phân cảnh hợp lệ từ 1 đến 600 giây.";
+    if (!targetDurationSeconds || ![10, 15].includes(Number(targetDurationSeconds))) {
+      errors.duration = "Vui lòng chọn thời lượng được nhà cung cấp hỗ trợ (10 giây hoặc 15 giây).";
     }
 
     setFieldErrors(errors);
@@ -163,7 +162,6 @@ export function SceneForm({
       // Cập nhật lại initialRevision thành revision mới nhất từ server
       setInitialRevision(latestScene.revision);
       setIsConflict(false);
-      // Hiển thị thông báo hướng dẫn người dùng
       setErrorMessage(null);
     } catch (err: unknown) {
       const errorDto = err as ErrorDto;
@@ -176,225 +174,201 @@ export function SceneForm({
   };
 
   return (
-    <div
-      className="modal-backdrop"
-      role="presentation"
-      onClick={(e) => {
-        if (e.target === e.currentTarget && !isSubmitting && !isReloading) {
+    <Dialog
+      open={isOpen}
+      onOpenChange={(open) => {
+        if (!open && !isSubmitting && !isReloading) {
           onClose();
         }
       }}
     >
-      <div
-        className="modal-container"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="scene-form-title"
-        style={{ maxWidth: 580 }}
+      <DialogContent
+        className="sm:max-w-[580px]"
+        onPointerDownOutside={(e) => {
+          if (isSubmitting || isReloading) e.preventDefault();
+        }}
+        onEscapeKeyDown={(e) => {
+          if (isSubmitting || isReloading) e.preventDefault();
+        }}
       >
-        <div className="modal-header">
-          <div className="modal-title-group">
-            <h2 id="scene-form-title">
-              {mode === "create" ? "Thêm Phân Cảnh Mới" : `Chỉnh Sửa Phân Cảnh #${scene?.sceneSequence || ""}`}
-            </h2>
-            <p className="modal-subtitle">
-              {mode === "create"
-                ? "Thiết lập kịch bản lời dẫn, thời lượng và prompt tạo video."
-                : `Revision hiện thời: ${initialRevision || "—"}`}
-            </p>
-          </div>
-          <button
-            type="button"
-            className="btn-icon"
-            onClick={onClose}
-            disabled={isSubmitting || isReloading}
-            aria-label="Đóng"
-          >
-            <IconClose size={18} />
-          </button>
-        </div>
+        <DialogHeader>
+          <DialogTitle id="scene-form-title">
+            {mode === "create" ? "Thêm Phân Cảnh Mới" : `Chỉnh Sửa Phân Cảnh #${scene?.sceneSequence || ""}`}
+          </DialogTitle>
+          <DialogDescription>
+            {mode === "create"
+              ? "Thiết lập kịch bản lời dẫn, thời lượng và prompt tạo video."
+              : `Revision hiện thời: ${initialRevision || "—"}`}
+          </DialogDescription>
+        </DialogHeader>
 
-        <form onSubmit={handleSubmit}>
-          <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-            {/* Banner Cảnh Báo Xung Đột Đồng Thời (CONCURRENCY_CONFLICT) */}
-            {isConflict && (
-              <div
-                className="notice-box"
-                style={{
-                  backgroundColor: "rgba(239, 68, 68, 0.15)",
-                  border: "1px solid var(--status-error)",
-                  color: "var(--status-error)",
-                  flexDirection: "column",
-                  gap: "0.5rem",
-                }}
-                role="alert"
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 700 }}>
-                  <span>⚠️</span> Xung đột phiên chỉnh sửa đồng thời (Concurrency Conflict)!
-                </div>
-                <div style={{ fontSize: "0.85rem", lineHeight: 1.4 }}>
-                  Cảnh này đã bị chỉnh sửa bởi một phiên khác. Vui lòng tải lại dữ liệu mới nhất trước khi lưu.
-                  (Nội dung bạn vừa nhập ở dưới vẫn được giữ nguyên đầy đủ).
-                </div>
-                <div>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    style={{ backgroundColor: "var(--surface-card)", color: "var(--text-primary)" }}
-                    onClick={handleReloadLatest}
-                    disabled={isReloading}
-                  >
-                    <IconRefresh size={14} className={isReloading ? "spin" : ""} /> Tải lại dữ liệu mới nhất từ máy chủ
-                  </button>
-                </div>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Banner Cảnh Báo Xung Đột Đồng Thời (CONCURRENCY_CONFLICT) */}
+          {isConflict && (
+            <Alert variant="destructive" className="space-y-2">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertTitle className="font-semibold">
+                  Xung đột phiên chỉnh sửa đồng thời (Concurrency Conflict)!
+                </AlertTitle>
               </div>
-            )}
-
-            {/* Thông báo lỗi thông thường */}
-            {errorMessage && !isConflict && (
-              <div
-                className="notice-box"
-                style={{
-                  backgroundColor: "rgba(239, 68, 68, 0.12)",
-                  border: "1px solid var(--status-error)",
-                  color: "var(--status-error)",
-                }}
-                role="alert"
-              >
-                <span>⚠️</span>
-                <div>{errorMessage}</div>
-              </div>
-            )}
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: "0.75rem" }}>
-              <div className="form-group">
-                <label htmlFor="scene-name">
-                  Tiêu đề phân cảnh <span style={{ color: "var(--status-error)" }}>*</span>
-                </label>
-                <input
-                  id="scene-name"
-                  ref={nameInputRef}
-                  type="text"
-                  className="form-control"
-                  placeholder="Ví dụ: Giới thiệu sản phẩm, Cận cảnh áo len…"
-                  value={name}
-                  maxLength={100}
-                  disabled={isSubmitting || isReloading}
-                  onChange={(e) => {
-                    setName(e.target.value);
-                    if (fieldErrors.name) setFieldErrors((prev) => ({ ...prev, name: "" }));
-                  }}
-                  aria-invalid={!!fieldErrors.name}
-                />
-                {fieldErrors.name && (
-                  <span className="field-hint" style={{ color: "var(--status-error)" }}>
-                    {fieldErrors.name}
-                  </span>
-                )}
-              </div>
-
-              <div className="form-group">
-                <label htmlFor="scene-duration">
-                  Thời lượng (giây) <span style={{ color: "var(--status-error)" }}>*</span>
-                </label>
-                <input
-                  id="scene-duration"
-                  type="number"
-                  min={1}
-                  max={600}
-                  className="form-control"
-                  placeholder="15"
-                  value={targetDurationSeconds}
-                  disabled={isSubmitting || isReloading}
-                  onChange={(e) => {
-                    setTargetDurationSeconds(Number(e.target.value));
-                    if (fieldErrors.duration) setFieldErrors((prev) => ({ ...prev, duration: "" }));
-                  }}
-                  aria-invalid={!!fieldErrors.duration}
-                />
-                {fieldErrors.duration && (
-                  <span className="field-hint" style={{ color: "var(--status-error)" }}>
-                    {fieldErrors.duration}
-                  </span>
-                )}
-              </div>
-            </div>
-
-            <div className="form-group">
-              <label htmlFor="scene-prompt">
-                Lời dẫn (Narration) / Prompt nháp cho cảnh
-              </label>
-              <textarea
-                id="scene-prompt"
-                className="form-control"
-                style={{ height: 110, padding: "0.5rem 0.75rem", resize: "vertical" }}
-                placeholder="Nhập lời dẫn thu âm hoặc mô tả hành động nhân vật cho AI sinh prompt video…"
-                value={promptText}
-                maxLength={2000}
-                disabled={isSubmitting || isReloading}
-                onChange={(e) => setPromptText(e.target.value)}
-              />
-              <div style={{ display: "flex", justifyContent: "space-between", marginTop: "0.25rem" }}>
-                <span className="field-hint">Mô tả càng chi tiết sẽ giúp sinh video chuyển động mượt mà hơn.</span>
-                <span className="field-hint">{promptText.length} / 2000</span>
-              </div>
-            </div>
-
-            {mode === "edit" && (
-              <div className="form-group">
-                <label htmlFor="scene-status">Trạng thái phân cảnh</label>
-                <select
-                  id="scene-status"
-                  className="form-control"
-                  value={status}
-                  onChange={(e) => setStatus(e.target.value)}
-                  disabled={isSubmitting || isReloading}
+              <AlertDescription className="text-xs leading-relaxed">
+                Cảnh này đã bị chỉnh sửa bởi một phiên khác. Vui lòng tải lại dữ liệu mới nhất trước khi lưu.
+                (Nội dung bạn vừa nhập ở dưới vẫn được giữ nguyên đầy đủ).
+              </AlertDescription>
+              <div className="pt-1">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="bg-background text-foreground hover:bg-accent"
+                  onClick={handleReloadLatest}
+                  disabled={isReloading}
                 >
-                  <option value="Draft">Chưa bắt đầu (Draft)</option>
-                  <option value="PromptReady">Đã có Prompt (PromptReady)</option>
-                  <option value="Generating">Đang tạo video (Generating)</option>
-                  <option value="Completed">Hoàn thành (Completed)</option>
-                </select>
+                  <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${isReloading ? "animate-spin" : ""}`} />
+                  Tải lại dữ liệu mới nhất từ máy chủ
+                </Button>
               </div>
-            )}
+            </Alert>
+          )}
+
+          {/* Thông báo lỗi thông thường */}
+          {errorMessage && !isConflict && (
+            <Alert variant="destructive">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertDescription>{errorMessage}</AlertDescription>
+            </Alert>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-[1fr_140px] gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="scene-name" className="text-sm font-medium">
+                Tiêu đề phân cảnh <span className="text-destructive">*</span>
+              </Label>
+              <Input
+                id="scene-name"
+                ref={nameInputRef}
+                type="text"
+                placeholder="Ví dụ: Giới thiệu sản phẩm, Cận cảnh áo len…"
+                value={name}
+                maxLength={100}
+                disabled={isSubmitting || isReloading}
+                onChange={(e) => {
+                  setName(e.target.value);
+                  if (fieldErrors.name) setFieldErrors((prev) => ({ ...prev, name: "" }));
+                }}
+                aria-invalid={!!fieldErrors.name}
+              />
+              {fieldErrors.name && (
+                <p className="text-xs text-destructive">{fieldErrors.name}</p>
+              )}
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="scene-duration" className="text-sm font-medium">
+                Thời lượng clip <span className="text-destructive">*</span>
+              </Label>
+              <select
+                id="scene-duration"
+                className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                value={targetDurationSeconds}
+                disabled={isSubmitting || isReloading}
+                onChange={(e) => {
+                  setTargetDurationSeconds(Number(e.target.value));
+                  if (fieldErrors.duration) setFieldErrors((prev) => ({ ...prev, duration: "" }));
+                }}
+                aria-invalid={!!fieldErrors.duration}
+              >
+                <option value={15}>15 giây (Ưu tiên)</option>
+                <option value={10}>10 giây</option>
+                {![10, 15].includes(targetDurationSeconds) && (
+                  <option value={targetDurationSeconds}>
+                    {targetDurationSeconds} giây (Cần chọn lại thời lượng được hỗ trợ)
+                  </option>
+                )}
+              </select>
+              {fieldErrors.duration && (
+                <p className="text-xs text-destructive">{fieldErrors.duration}</p>
+              )}
+            </div>
           </div>
 
-          <div className="modal-footer">
-            <span className="footer-status">
+          <div className="space-y-1.5">
+            <Label htmlFor="scene-prompt" className="text-sm font-medium">
+              Lời dẫn (Narration) / Prompt nháp cho cảnh
+            </Label>
+            <Textarea
+              id="scene-prompt"
+              rows={4}
+              className="resize-y"
+              placeholder="Nhập lời dẫn thu âm hoặc mô tả hành động nhân vật cho AI sinh prompt video…"
+              value={promptText}
+              maxLength={2000}
+              disabled={isSubmitting || isReloading}
+              onChange={(e) => setPromptText(e.target.value)}
+            />
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span>Mô tả càng chi tiết sẽ giúp sinh video chuyển động mượt mà hơn.</span>
+              <span>{promptText.length} / 2000</span>
+            </div>
+          </div>
+
+          {mode === "edit" && (
+            <div className="space-y-1.5">
+              <Label htmlFor="scene-status" className="text-sm font-medium">
+                Trạng thái phân cảnh
+              </Label>
+              <select
+                id="scene-status"
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 text-foreground"
+                value={status}
+                onChange={(e) => setStatus(e.target.value)}
+                disabled={isSubmitting || isReloading}
+              >
+                <option value="Draft">Chưa bắt đầu (Draft)</option>
+                <option value="PromptReady">Đã có Prompt (PromptReady)</option>
+                <option value="Generating">Đang tạo video (Generating)</option>
+                <option value="Completed">Hoàn thành (Completed)</option>
+              </select>
+            </div>
+          )}
+
+          <DialogFooter className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-2 pt-2 border-t border-border">
+            <span className="text-xs text-muted-foreground">
               {isSubmitting
                 ? "Đang lưu cảnh…"
                 : isReloading
                 ? "Đang nạp dữ liệu mới…"
                 : "Bảo vệ xung đột đồng thời an toàn."}
             </span>
-            <div style={{ display: "flex", gap: "0.5rem" }}>
-              <button
+            <div className="flex items-center gap-2">
+              <Button
                 type="button"
-                className="btn btn-secondary"
+                variant="outline"
                 onClick={onClose}
                 disabled={isSubmitting || isReloading}
               >
                 Hủy
-              </button>
-              <button
+              </Button>
+              <Button
                 type="submit"
-                className="btn btn-primary"
                 disabled={isSubmitting || isReloading}
               >
                 {isSubmitting ? (
                   <>
-                    <IconRefresh size={16} className="spin" /> Đang lưu…
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Đang lưu…
                   </>
                 ) : mode === "create" ? (
                   "Thêm Phân Cảnh"
                 ) : (
                   "Lưu Phân Cảnh"
                 )}
-              </button>
+              </Button>
             </div>
-          </div>
+          </DialogFooter>
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

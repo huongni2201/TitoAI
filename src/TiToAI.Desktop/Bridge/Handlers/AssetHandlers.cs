@@ -50,11 +50,17 @@ public sealed class AssetHandlers
         dispatcher.AllowCommand("asset.select_reference_image");
         dispatcher.AllowCommand("asset.get_metadata");
         dispatcher.AllowCommand("asset.open_folder");
+        dispatcher.AllowCommand("asset.list");
+        dispatcher.AllowCommand("asset.get_preview");
+        dispatcher.AllowCommand("asset.upload");
 
         dispatcher.RegisterHandler("asset.import_audio", HandleImportAudioAsync);
         dispatcher.RegisterHandler("asset.select_reference_image", HandleSelectReferenceImageAsync);
         dispatcher.RegisterHandler("asset.get_metadata", HandleGetMetadataAsync);
         dispatcher.RegisterHandler("asset.open_folder", HandleOpenFolderAsync);
+        dispatcher.RegisterHandler("asset.list", HandleListAssetsAsync);
+        dispatcher.RegisterHandler("asset.get_preview", HandleGetAssetPreviewAsync);
+        dispatcher.RegisterHandler("asset.upload", HandleUploadAssetAsync);
     }
 
     /// <summary>
@@ -68,6 +74,9 @@ public sealed class AssetHandlers
         dispatcher.UnregisterHandler("asset.select_reference_image");
         dispatcher.UnregisterHandler("asset.get_metadata");
         dispatcher.UnregisterHandler("asset.open_folder");
+        dispatcher.UnregisterHandler("asset.list");
+        dispatcher.UnregisterHandler("asset.get_preview");
+        dispatcher.UnregisterHandler("asset.upload");
     }
 
     public async Task<ResponseEnvelope> HandleImportAudioAsync(RequestEnvelope request, CancellationToken cancellationToken)
@@ -230,6 +239,131 @@ public sealed class AssetHandlers
             }
 
             var result = await _assetService.OpenFolderAsync(payload, cancellationToken);
+            return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return MapExceptionToError(request.Id, ex);
+        }
+    }
+
+    public async Task<ResponseEnvelope> HandleListAssetsAsync(RequestEnvelope request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        try
+        {
+            var payload = ParsePayload<ListAssetsRequest>(request);
+            if (payload is null || string.IsNullOrWhiteSpace(payload.WorkspaceId))
+            {
+                return ResponseEnvelopeHelper.CreateError(
+                    request.Id,
+                    "INVALID_ARGUMENT",
+                    "Payload thiếu trường 'workspaceId'.",
+                    retryable: false);
+            }
+
+            var result = await _assetService.ListAssetsAsync(payload, cancellationToken);
+            return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return MapExceptionToError(request.Id, ex);
+        }
+    }
+
+    public async Task<ResponseEnvelope> HandleGetAssetPreviewAsync(RequestEnvelope request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        try
+        {
+            var payload = ParsePayload<GetAssetPreviewRequest>(request);
+            if (payload is null ||
+                string.IsNullOrWhiteSpace(payload.AssetId) ||
+                string.IsNullOrWhiteSpace(payload.WorkspaceId))
+            {
+                return ResponseEnvelopeHelper.CreateError(
+                    request.Id,
+                    "INVALID_ARGUMENT",
+                    "Payload thiếu trường 'assetId' hoặc 'workspaceId'.",
+                    retryable: false);
+            }
+
+            var result = await _assetService.GetAssetPreviewAsync(payload, cancellationToken);
+            return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return MapExceptionToError(request.Id, ex);
+        }
+    }
+
+    public async Task<ResponseEnvelope> HandleUploadAssetAsync(RequestEnvelope request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        try
+        {
+            var payload = ParsePayload<UploadAssetRequest>(request);
+            if (payload is null || string.IsNullOrWhiteSpace(payload.WorkspaceId))
+            {
+                return ResponseEnvelopeHelper.CreateError(
+                    request.Id,
+                    "INVALID_ARGUMENT",
+                    "Payload thiếu trường 'workspaceId'.",
+                    retryable: false);
+            }
+
+            string? sourceFilePath = null;
+            if (_allowExplicitPath && !string.IsNullOrWhiteSpace(payload.SourceFilePath))
+            {
+                sourceFilePath = payload.SourceFilePath;
+            }
+            else if (!string.IsNullOrWhiteSpace(payload.Base64Data))
+            {
+                sourceFilePath = null;
+            }
+            else
+            {
+                bool isAudio = string.Equals(payload.AssetType, "Audio", StringComparison.OrdinalIgnoreCase);
+                if (isAudio)
+                {
+                    sourceFilePath = _audioPicker != null ? _audioPicker() : ShowAudioOpenFileDialog();
+                }
+                else
+                {
+                    sourceFilePath = _imagePicker != null ? _imagePicker() : ShowImageOpenFileDialog();
+                }
+
+                if (string.IsNullOrWhiteSpace(sourceFilePath))
+                {
+                    return ResponseEnvelopeHelper.CreateSuccess(request.Id, new UploadAssetResponse(null, Canceled: true));
+                }
+            }
+
+            var uploadRequest = new UploadAssetRequest(
+                WorkspaceId: payload.WorkspaceId,
+                ProjectId: payload.ProjectId,
+                AssetType: string.IsNullOrWhiteSpace(payload.AssetType) ? "Image" : payload.AssetType,
+                FileName: payload.FileName,
+                Base64Data: payload.Base64Data,
+                SourceFilePath: sourceFilePath
+            );
+
+            var result = await _assetService.UploadAssetAsync(uploadRequest, cancellationToken);
             return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
         }
         catch (OperationCanceledException)

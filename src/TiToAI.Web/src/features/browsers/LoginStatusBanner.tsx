@@ -1,6 +1,9 @@
-import React from "react";
+import React, { useState } from "react";
 import type { BrowserProfileDto } from "./browserManagerApi";
 import { browserManagerApi } from "./browserManagerApi";
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { ExternalLink, AlertTriangle, X } from "lucide-react";
 
 interface LoginStatusBannerProps {
   profiles: BrowserProfileDto[];
@@ -11,181 +14,171 @@ export const LoginStatusBanner: React.FC<LoginStatusBannerProps> = ({
   profiles,
   onActionComplete,
 }) => {
-  const [isProcessing, setIsProcessing] = React.useState(false);
+  const [processingProfileId, setProcessingProfileId] = useState<string | null>(null);
 
-  // Tìm profile đang mở cửa sổ đăng nhập (VisibleActive)
-  const activeLoginProfile = profiles.find(
-    (p) => p.visibilityState === "VisibleActive",
-  );
-
-  // Danh sách các profile đang xếp hàng chờ (VisibleWaiting)
-  const waitingProfiles = profiles.filter(
-    (p) => p.visibilityState === "VisibleWaiting",
+  // Danh sách các profile đang mở cửa sổ đăng nhập (VisibleActive)
+  const activeLoginProfiles = profiles.filter(
+    (p) => p.visibilityState === "VisibleActive"
   );
 
   // Kiểm tra Shared AI có bị hết hạn phiên không
   const sharedAiExpired = profiles.find(
-    (p) => p.kind === "SharedAI" && p.sessionStatus === "SessionExpired",
+    (p) => p.kind === "SharedAI" && p.sessionStatus === "SessionExpired"
   );
 
-  const handleCancelActive = async () => {
-    if (!activeLoginProfile) return;
-    setIsProcessing(true);
-    try {
-      await browserManagerApi.cancelLogin(activeLoginProfile.profileId);
-      onActionComplete?.();
-    } catch (err) {
-      console.error("[LoginStatusBanner] Lỗi khi hủy đăng nhập:", err);
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  const handleCancelWaiting = async (profileId: string) => {
-    setIsProcessing(true);
+  const handleCancel = async (profileId: string) => {
+    setProcessingProfileId(profileId);
     try {
       await browserManagerApi.cancelLogin(profileId);
       onActionComplete?.();
     } catch (err) {
-      console.error("[LoginStatusBanner] Lỗi khi hủy hàng chờ:", err);
+      console.error(`[LoginStatusBanner] Lỗi khi đóng cửa sổ profile ${profileId}:`, err);
     } finally {
-      setIsProcessing(false);
+      setProcessingProfileId(null);
     }
   };
 
   const handleReLoginSharedAi = async () => {
     if (!sharedAiExpired) return;
-    setIsProcessing(true);
+    setProcessingProfileId(sharedAiExpired.profileId);
     try {
       await browserManagerApi.requestLogin(sharedAiExpired.profileId);
       onActionComplete?.();
     } catch (err) {
       console.error("[LoginStatusBanner] Lỗi yêu cầu đăng nhập Shared AI:", err);
     } finally {
-      setIsProcessing(false);
+      setProcessingProfileId(null);
     }
   };
 
   const getProfileDisplayName = (profile: BrowserProfileDto): string => {
     switch (profile.kind) {
       case "SharedAI":
-        return "AI dùng chung (ChatGPT / Gemini)";
+        return profile.displayName || "Tài khoản AI (ChatGPT / Gemini)";
       case "MuseAI":
-        return `MuseAI (${profile.accountIdentity ?? "Kênh chưa đặt tên"})`;
+        return `MuseAI (${profile.accountIdentity ?? profile.displayName ?? "Kênh chưa đặt tên"})`;
       case "TikTok":
-        return `TikTok (${profile.accountIdentity ?? "Kênh chưa đặt tên"})`;
+        return `TikTok (${profile.accountIdentity ?? profile.displayName ?? "Kênh chưa đặt tên"})`;
       default:
-        return profile.profileId;
+        return profile.displayName || profile.profileId;
     }
   };
 
   // Nếu không có trạng thái đặc biệt nào cần banner, không render
-  if (!activeLoginProfile && waitingProfiles.length === 0 && !sharedAiExpired) {
+  if (activeLoginProfiles.length === 0 && !sharedAiExpired) {
     return null;
   }
 
   return (
-    <div className="login-status-banner-container" role="region" aria-label="Thông báo trạng thái đăng nhập trình duyệt">
+    <div
+      className="flex flex-col gap-3 my-2"
+      role="region"
+      aria-label="Thông báo trạng thái đăng nhập trình duyệt"
+    >
       {/* 1. BANNER KHI CỬA SỔ ĐĂNG NHẬP ĐANG MỞ (VisibleActive) */}
-      {activeLoginProfile && (
-        <div
-          className="login-banner banner-active"
+      {activeLoginProfiles.length > 0 && (
+        <Alert
+          className="border-primary/50 bg-primary/5 p-4 relative flex flex-col justify-between gap-4 shadow-xs"
           role="status"
           aria-live="polite"
         >
-          <div className="banner-icon-col">
-            <span className="pulse-indicator" aria-hidden="true" />
-          </div>
-          <div className="banner-content-col">
-            <div className="banner-title">
-              Đang mở cửa sổ đăng nhập: <strong>{getProfileDisplayName(activeLoginProfile)}</strong>
+          <div className="flex gap-3">
+            <div className="h-8 w-8 rounded-full bg-primary/20 text-primary flex items-center justify-center shrink-0 mt-0.5">
+              <span className="h-2.5 w-2.5 rounded-full bg-primary animate-ping" aria-hidden="true" />
             </div>
-            <p className="banner-desc">
-              Cửa sổ trình duyệt đang hiển thị để bạn thao tác. Vui lòng tự nhập tài khoản, mật khẩu và mã xác minh (OTP/MFA) trực tiếp trên trang web. TiToAI <strong>tuyệt đối không can thiệp, không đọc hoặc lưu trữ mật khẩu</strong> của bạn.
-            </p>
-            <div className="banner-notes">
-              Sau khi bạn đăng nhập thành công và đóng cửa sổ, trình duyệt sẽ tự động chuyển về trạng thái <strong>chạy ẩn</strong> để tiếp tục phục vụ các tác vụ AI.
+            <div className="space-y-1 flex-1">
+              <AlertTitle className="text-sm font-bold text-foreground">
+                {activeLoginProfiles.length === 1 ? (
+                  <>Đang mở cửa sổ đăng nhập: <span>{getProfileDisplayName(activeLoginProfiles[0])}</span></>
+                ) : (
+                  <>Đang mở {activeLoginProfiles.length} cửa sổ đăng nhập đồng thời</>
+                )}
+              </AlertTitle>
+              <AlertDescription className="text-xs text-muted-foreground leading-relaxed">
+                Cửa sổ trình duyệt đang hiển thị để bạn thao tác. Vui lòng tự nhập tài khoản, mật khẩu và mã xác minh (OTP/MFA) trực tiếp trên trang web. TiToAI <strong className="text-foreground">tuyệt đối không can thiệp, không đọc hoặc lưu trữ mật khẩu</strong> của bạn.
+              </AlertDescription>
+              <p className="text-[11px] text-muted-foreground/80 mt-1">
+                Sau khi bạn đăng nhập thành công và đóng cửa sổ, trình duyệt sẽ tự động chuyển về trạng thái <strong className="text-foreground">chạy ẩn</strong> để tiếp tục phục vụ các tác vụ AI.
+              </p>
             </div>
+            {activeLoginProfiles.length === 1 && (
+              <div className="shrink-0">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleCancel(activeLoginProfiles[0].profileId)}
+                  disabled={processingProfileId === activeLoginProfiles[0].profileId}
+                  className="gap-1.5"
+                >
+                  <X className="h-3.5 w-3.5" />
+                  Hủy / Đóng cửa sổ
+                </Button>
+              </div>
+            )}
           </div>
-          <div className="banner-actions-col">
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={handleCancelActive}
-              disabled={isProcessing}
-              title="Đóng cửa sổ hoặc hủy phiên đăng nhập này"
-            >
-              Hủy / Đóng cửa sổ
-            </button>
-          </div>
-        </div>
-      )}
 
-      {/* 2. BANNER KHI CÓ PROFILE ĐANG XẾP HÀNG CHỜ (VisibleWaiting) */}
-      {waitingProfiles.length > 0 && (
-        <div
-          className="login-banner banner-waiting"
-          role="status"
-          aria-live="polite"
-        >
-          <div className="banner-icon-col">
-            <span className="queue-clock-icon" aria-hidden="true">⏳</span>
-          </div>
-          <div className="banner-content-col">
-            <div className="banner-title">
-              Đang xếp hàng chờ lượt đăng nhập ({waitingProfiles.length} trình duyệt)
-            </div>
-            <p className="banner-desc">
-              Ứng dụng tuân thủ quy tắc <strong>chỉ mở 1 cửa sổ đăng nhập tại một thời điểm</strong> để tránh xung đột cửa sổ và bảo vệ luồng xác thực tài khoản. Các trình duyệt dưới đây sẽ lần lượt được mở khi lượt trước kết thúc:
-            </p>
-            <ul className="waiting-list">
-              {waitingProfiles.map((p) => (
-                <li key={p.profileId} className="waiting-item">
-                  <span className="waiting-name">{getProfileDisplayName(p)}</span>
-                  <button
-                    type="button"
-                    className="btn-link-cancel"
-                    onClick={() => handleCancelWaiting(p.profileId)}
-                    disabled={isProcessing}
+          {activeLoginProfiles.length > 1 && (
+            <div className="pt-2 border-t border-border/40">
+              <ul className="space-y-1.5">
+                {activeLoginProfiles.map((p) => (
+                  <li
+                    key={p.profileId}
+                    className="flex items-center justify-between gap-2 p-2 rounded-md bg-background/60 border border-border/40 text-xs"
                   >
-                    Hủy chờ
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </div>
+                    <span className="font-medium text-foreground">{getProfileDisplayName(p)}</span>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleCancel(p.profileId)}
+                      disabled={processingProfileId === p.profileId}
+                      className="h-7 text-xs gap-1"
+                    >
+                      <X className="h-3 w-3" />
+                      Đóng cửa sổ
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </Alert>
       )}
 
-      {/* 3. CẢNH BÁO KHI PHIÊN SHARED AI BỊ HẾT HẠN */}
-      {sharedAiExpired && !activeLoginProfile && (
-        <div
-          className="login-banner banner-warning"
+      {/* 2. CẢNH BÁO KHI PHIÊN SHARED AI BỊ HẾT HẠN */}
+      {sharedAiExpired && activeLoginProfiles.length === 0 && (
+        <Alert
+          variant="destructive"
+          className="p-4 flex flex-col md:flex-row md:items-start justify-between gap-4"
           role="alert"
           aria-live="assertive"
         >
-          <div className="banner-icon-col">
-            <span className="warning-icon" aria-hidden="true">⚠️</span>
-          </div>
-          <div className="banner-content-col">
-            <div className="banner-title">
-              Phiên làm việc của AI dùng chung (ChatGPT / Gemini) đã hết hạn
+          <div className="flex gap-3">
+            <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <AlertTitle className="text-sm font-bold">
+                Phiên làm việc của AI ({getProfileDisplayName(sharedAiExpired)}) đã hết hạn
+              </AlertTitle>
+              <AlertDescription className="text-xs leading-relaxed">
+                Vì đây là profile điều phối hệ thống, toàn bộ tác vụ tạo kịch bản, ảnh và video prompt sẽ tạm dừng cho đến khi phiên được kết nối lại. Các tác vụ đã gửi thành công trước đó vẫn được bảo toàn.
+              </AlertDescription>
             </div>
-            <p className="banner-desc">
-              Vì đây là profile dùng chung toàn hệ thống, toàn bộ tác vụ tạo kịch bản, ảnh và video prompt sẽ tạm dừng cho đến khi phiên được kết nối lại. Các tác vụ đã gửi thành công trước đó vẫn được bảo toàn.
-            </p>
           </div>
-          <div className="banner-actions-col">
-            <button
+          <div className="shrink-0">
+            <Button
               type="button"
-              className="btn btn-primary btn-sm"
+              variant="default"
+              size="sm"
               onClick={handleReLoginSharedAi}
-              disabled={isProcessing}
+              disabled={processingProfileId === sharedAiExpired.profileId}
+              className="gap-1.5"
             >
+              <ExternalLink className="h-3.5 w-3.5" />
               Đăng nhập lại ngay
-            </button>
+            </Button>
           </div>
-        </div>
+        </Alert>
       )}
     </div>
   );

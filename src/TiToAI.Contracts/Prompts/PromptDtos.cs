@@ -51,7 +51,11 @@ public sealed record PromptCreateVersionRequest(
 
 public sealed record PromptCreateVersionResponseData(
     [property: JsonPropertyName("template")] PromptTemplateDto Template,
-    [property: JsonPropertyName("version")] PromptVersionDto Version);
+    [property: JsonPropertyName("prompt")] PromptVersionDto Prompt)
+{
+    [System.Text.Json.Serialization.JsonIgnore]
+    public PromptVersionDto Version => Prompt;
+}
 
 public sealed record PromptPreviewRequest(
     [property: JsonPropertyName("templateId")] string? TemplateId,

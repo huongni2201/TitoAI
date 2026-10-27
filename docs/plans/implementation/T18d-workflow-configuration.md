@@ -1,5 +1,7 @@
 # Cấu hình workflow và phiên bản áp dụng cho job mới
 
+> **Delta hiện hành:** [plan queue/Settings 1.2](../QUEUE_EXECUTION_SETTINGS_PLAN.md) thay popup Settings, nhóm account shared/private, connect tại Workspace và round-robin Workspace. Dùng [TASKS](../../agents/TASKS.md) cho trạng thái/gate; Baseline/checkbox dưới không là evidence đã chạy.
+
 - Task gốc: **T18 (workflow config); T22 sử dụng** · Ưu tiên: **P0 / G3**.
 - Điều kiện mở: T09,T10,T16 DONE; registry T18a đã chốt.
 - Baseline 2026-10-26: Chưa có Workflow entity/service hoặc màn chỉnh workflow.

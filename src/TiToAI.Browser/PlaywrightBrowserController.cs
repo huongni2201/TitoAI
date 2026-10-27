@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Microsoft.Playwright;
 using TiToAI.Browser.Abstractions;
 using TiToAI.Browser.Models;
+using TiToAI.Contracts.Browser;
 
 namespace TiToAI.Browser;
 
@@ -18,9 +19,12 @@ public sealed class PlaywrightBrowserController : IBrowserProcessController
     private readonly Func<string, BrowserTypeLaunchPersistentContextOptions, Task<IBrowserContext>>? _customPersistentLauncher;
 
     private readonly ConcurrentDictionary<string, PlaywrightBrowserContextHandle> _activeContexts = new();
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _profileLaunchCloseLocks = new(StringComparer.OrdinalIgnoreCase);
     private IPlaywright? _playwright;
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private bool _disposed;
+
+    public event EventHandler<string>? ContextClosed;
 
     public PlaywrightBrowserController(
         IProfileRegistry profileRegistry,
@@ -37,47 +41,88 @@ public sealed class PlaywrightBrowserController : IBrowserProcessController
     public bool IsRunning(string profileId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(profileId);
-        return _activeContexts.ContainsKey(profileId);
+        return _activeContexts.TryGetValue(profileId, out var handle) && !handle.IsDisposed;
+    }
+
+    public IBrowserContextHandle? TryGetContext(string profileId)
+    {
+        if (string.IsNullOrWhiteSpace(profileId)) return null;
+        return _activeContexts.TryGetValue(profileId, out var handle) && !handle.IsDisposed ? handle : null;
+    }
+
+    public async Task PrewarmAsync(CancellationToken cancellationToken = default)
+    {
+        if (_playwright != null || _disposed || _customPersistentLauncher != null) return;
+
+        await _initLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (_playwright == null && !_disposed && _customPersistentLauncher == null)
+            {
+                _playwright = _playwrightFactory != null
+                    ? await _playwrightFactory()
+                    : await Playwright.CreateAsync();
+            }
+        }
+        finally
+        {
+            _initLock.Release();
+        }
+    }
+
+    public Task<IBrowserContextHandle> LaunchPersistentContextAsync(
+        string profileId,
+        bool isHeadless,
+        CancellationToken cancellationToken = default)
+    {
+        return LaunchPersistentContextAsync(profileId, isHeadless, initialUrl: null, cancellationToken);
     }
 
     public async Task<IBrowserContextHandle> LaunchPersistentContextAsync(
         string profileId,
         bool isHeadless,
+        string? initialUrl,
         CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentException.ThrowIfNullOrWhiteSpace(profileId);
 
-        if (IsRunning(profileId))
-        {
-            throw new InvalidOperationException($"Hồ sơ trình duyệt '{profileId}' hiện đang có tiến trình Playwright hoạt động.");
-        }
-
-        var profile = await _profileRegistry.GetProfileAsync(profileId, cancellationToken);
-        if (profile == null)
-        {
-            throw new InvalidOperationException($"Không tìm thấy hồ sơ trình duyệt '{profileId}' trong hệ thống.");
-        }
-
-        string userDataDir = _profileRegistry.GetUserDataDir(profileId, profile.Kind);
-        Directory.CreateDirectory(userDataDir);
-
-        // Chiếm Single-Instance Lock (.titoai_lock) trước khi khởi chạy Playwright persistent context
-        var ownerLock = await _profileOwner.AcquireOwnerLockAsync(
-            profileId,
-            $"PlaywrightProcess-{Guid.NewGuid():N}",
-            TimeSpan.FromSeconds(5),
-            cancellationToken);
-
+        var profileLock = _profileLaunchCloseLocks.GetOrAdd(profileId, _ => new SemaphoreSlim(1, 1));
+        await profileLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var launchOptions = new BrowserTypeLaunchPersistentContextOptions
+            if (IsRunning(profileId))
             {
-                Headless = isHeadless,
-                Args = ["--disable-blink-features=AutomationControlled"]
-            };
+                throw new InvalidOperationException($"Hồ sơ trình duyệt '{profileId}' hiện đang có tiến trình Playwright hoạt động.");
+            }
+
+            var profile = await _profileRegistry.GetProfileAsync(profileId, cancellationToken);
+            if (profile == null)
+            {
+                throw new InvalidOperationException($"Không tìm thấy hồ sơ trình duyệt '{profileId}' trong hệ thống.");
+            }
+
+            string userDataDir = _profileRegistry.GetUserDataDir(profileId, profile.Kind);
+            Directory.CreateDirectory(userDataDir);
+
+            // Chiếm Single-Instance Lock (.titoai_lock) trước khi khởi chạy Playwright persistent context
+            var ownerLock = await _profileOwner.AcquireOwnerLockAsync(
+                profileId,
+                $"PlaywrightProcess-{Guid.NewGuid():N}",
+                TimeSpan.FromSeconds(5),
+                cancellationToken);
+
+            PlaywrightBrowserContextHandle? handle = null;
+
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var launchOptions = new BrowserTypeLaunchPersistentContextOptions
+                {
+                    Headless = isHeadless,
+                    Args = ["--disable-blink-features=AutomationControlled"]
+                };
 
             IBrowserContext browserContext;
 
@@ -107,7 +152,7 @@ public sealed class PlaywrightBrowserController : IBrowserProcessController
                     launchOptions);
             }
 
-            var handle = new PlaywrightBrowserContextHandle(
+            handle = new PlaywrightBrowserContextHandle(
                 this,
                 profileId,
                 browserContext,
@@ -116,11 +161,129 @@ public sealed class PlaywrightBrowserController : IBrowserProcessController
 
             _activeContexts[profileId] = handle;
 
+            // Bắt sự kiện Close trên Persistent Browser Context
+            browserContext.Close += (_, _) =>
+            {
+                _ = HandleContextClosedAsync(profileId, handle);
+            };
+
+            // Bắt sự kiện Close trên từng Page để xử lý an toàn khi toàn bộ tab bị đóng
+            void HookPage(IPage? page)
+            {
+                if (page == null) return;
+                page.Close += (_, _) =>
+                {
+                    try
+                    {
+                        if (browserContext.Pages != null && browserContext.Pages.All(p => p == null || p.IsClosed))
+                        {
+                            _ = Task.Run(async () =>
+                            {
+                                try
+                                {
+                                    await browserContext.CloseAsync();
+                                }
+                                catch
+                                {
+                                }
+                            });
+                        }
+                    }
+                    catch
+                    {
+                    }
+                };
+            }
+
+            try
+            {
+                if (browserContext.Pages != null)
+                {
+                    foreach (var p in browserContext.Pages)
+                    {
+                        HookPage(p);
+                    }
+                }
+                browserContext.Page += (_, p) => HookPage(p);
+            }
+            catch
+            {
+                // Bỏ qua lỗi hook pages nếu mock context không hỗ trợ Pages hoặc Page event
+            }
+
             await _profileRegistry.UpdateProfileStateAsync(
                 profileId,
                 operationalState: BrowserOperationalState.Running,
                 visibilityState: isHeadless ? BrowserVisibilityState.Hidden : BrowserVisibilityState.VisibleActive,
                 cancellationToken: cancellationToken);
+
+            if (!string.IsNullOrWhiteSpace(initialUrl))
+            {
+                try
+                {
+                    IPage? page = null;
+                    try
+                    {
+                        if (browserContext.Pages != null)
+                        {
+                            page = browserContext.Pages.FirstOrDefault(p => p != null && !p.IsClosed && p.Url == "about:blank")
+                                   ?? browserContext.Pages.FirstOrDefault(p => p != null && !p.IsClosed);
+                        }
+                    }
+                    catch
+                    {
+                        // Bỏ qua lỗi truy cập collection nếu là mock proxy
+                    }
+
+                    if (page == null)
+                    {
+                        try
+                        {
+                            page = await browserContext.NewPageAsync();
+                        }
+                        catch
+                        {
+                            // Mock proxy không hỗ trợ NewPageAsync
+                        }
+                    }
+
+                    if (page != null)
+                    {
+                        await page.GotoAsync(initialUrl, new PageGotoOptions
+                        {
+                            WaitUntil = WaitUntilState.Commit,
+                            Timeout = 15000
+                        });
+
+                        try
+                        {
+                            await page.BringToFrontAsync();
+                        }
+                        catch
+                        {
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Kiểm tra nếu cửa sổ bị người dùng đóng trong lúc đang tải trang
+                    bool isClosed = handle.IsDisposed
+                        || !IsRunning(profileId)
+                        || ex.Message.Contains("closed", StringComparison.OrdinalIgnoreCase)
+                        || ex.GetType().Name.Contains("TargetClosed", StringComparison.OrdinalIgnoreCase);
+
+                    if (isClosed)
+                    {
+                        await handle.DisposeAsync();
+                        RemoveActiveContext(profileId, handle);
+
+                        throw new OperationCanceledException(
+                            $"Phiên trình duyệt cho profile '{profileId}' đã bị đóng trước khi hoàn tất tải trang.", ex);
+                    }
+
+                    // Lỗi timeout mạng nhẹ không làm fail quá trình mở browser; Chromium sẽ tiếp tục tải trang
+                }
+            }
 
             return handle;
         }
@@ -128,7 +291,16 @@ public sealed class PlaywrightBrowserController : IBrowserProcessController
         {
             // Bắt lỗi Playwright (ví dụ driver/chromium chưa được cài đặt)
             // Giải phóng lock .titoai_lock ngay lập tức để không rò rỉ tài nguyên
-            await ownerLock.DisposeAsync();
+            if (handle != null)
+            {
+                RemoveActiveContext(profileId, handle);
+                await handle.DisposeAsync();
+            }
+            else
+            {
+                RemoveActiveContext(profileId);
+                await ownerLock.DisposeAsync();
+            }
 
             await _profileRegistry.UpdateProfileStateAsync(
                 profileId,
@@ -144,8 +316,82 @@ public sealed class PlaywrightBrowserController : IBrowserProcessController
         catch (Exception)
         {
             // Đảm bảo luôn giải phóng lock nếu có bất kỳ ngoại lệ nào xảy ra khi khởi chạy
-            await ownerLock.DisposeAsync();
+            if (handle != null)
+            {
+                RemoveActiveContext(profileId, handle);
+                await handle.DisposeAsync();
+            }
+            else
+            {
+                RemoveActiveContext(profileId);
+                await ownerLock.DisposeAsync();
+            }
             throw;
+        }
+    }
+    finally
+    {
+        profileLock.Release();
+    }
+}
+
+    public async Task NavigateAsync(
+        string profileId,
+        string url,
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentException.ThrowIfNullOrWhiteSpace(profileId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(url);
+
+        if (_activeContexts.TryGetValue(profileId, out var handle) && !handle.IsDisposed)
+        {
+            if (handle.Context.Pages != null)
+            {
+                try
+                {
+                    IPage? page = null;
+                    try
+                    {
+                        page = handle.Context.Pages.FirstOrDefault(p => p != null && !p.IsClosed && p.Url == "about:blank")
+                               ?? handle.Context.Pages.FirstOrDefault(p => p != null && !p.IsClosed);
+                    }
+                    catch
+                    {
+                    }
+
+                    if (page == null)
+                    {
+                        try
+                        {
+                            page = await handle.Context.NewPageAsync();
+                        }
+                        catch
+                        {
+                        }
+                    }
+
+                    if (page != null)
+                    {
+                        await page.GotoAsync(url, new PageGotoOptions
+                        {
+                            WaitUntil = WaitUntilState.Commit,
+                            Timeout = 15000
+                        });
+
+                        try
+                        {
+                            await page.BringToFrontAsync();
+                        }
+                        catch
+                        {
+                        }
+                    }
+                }
+                catch (Exception)
+                {
+                }
+            }
         }
     }
 
@@ -156,21 +402,90 @@ public sealed class PlaywrightBrowserController : IBrowserProcessController
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentException.ThrowIfNullOrWhiteSpace(profileId);
 
-        if (_activeContexts.TryRemove(profileId, out var handle))
+        var profileLock = _profileLaunchCloseLocks.GetOrAdd(profileId, _ => new SemaphoreSlim(1, 1));
+        await profileLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_activeContexts.TryRemove(profileId, out var handle))
+            {
+                await handle.DisposeAsync();
+
+                await _profileRegistry.UpdateProfileStateAsync(
+                    profileId,
+                    operationalState: BrowserOperationalState.Stopped,
+                    visibilityState: BrowserVisibilityState.Hidden,
+                    reasonCode: BrowserReasonCode.AuthClosed,
+                    cancellationToken: cancellationToken);
+
+                try
+                {
+                    ContextClosed?.Invoke(this, profileId);
+                }
+                catch
+                {
+                }
+            }
+        }
+        finally
+        {
+            profileLock.Release();
+        }
+    }
+
+    private async Task HandleContextClosedAsync(string profileId, PlaywrightBrowserContextHandle handle)
+    {
+        // 1. Luôn dispose handle để giải phóng owner lock (.titoai_lock)
+        try
         {
             await handle.DisposeAsync();
+        }
+        catch
+        {
+        }
 
+        // 2. Kiểm tra xem handle này có còn là active handle hiện tại của profileId không
+        // Nếu profileId đã mở phiên mới, handle này là stale từ phiên cũ -> KHÔNG phát event hoặc cập nhật DB
+        if (_activeContexts.TryGetValue(profileId, out var currentHandle) && !ReferenceEquals(currentHandle, handle))
+        {
+            return;
+        }
+
+        RemoveActiveContext(profileId, handle);
+
+        // 3. Cập nhật ProfileRegistry về Stopped/Hidden trước khi phát sự kiện
+        try
+        {
             await _profileRegistry.UpdateProfileStateAsync(
                 profileId,
                 operationalState: BrowserOperationalState.Stopped,
                 visibilityState: BrowserVisibilityState.Hidden,
-                cancellationToken: cancellationToken);
+                reasonCode: BrowserReasonCode.AuthClosed);
+        }
+        catch
+        {
+        }
+
+        // 4. Phát sự kiện ContextClosed ra ngoài sau khi DB đã cập nhật xong
+        try
+        {
+            ContextClosed?.Invoke(this, profileId);
+        }
+        catch
+        {
         }
     }
 
-    private void RemoveActiveContext(string profileId)
+    private void RemoveActiveContext(string profileId, PlaywrightBrowserContextHandle? handle = null)
     {
-        _activeContexts.TryRemove(profileId, out _);
+        if (handle == null)
+        {
+            _activeContexts.TryRemove(profileId, out _);
+        }
+        else
+        {
+            var kvp = new KeyValuePair<string, PlaywrightBrowserContextHandle>(profileId, handle);
+            ((ICollection<KeyValuePair<string, PlaywrightBrowserContextHandle>>)_activeContexts).Remove(kvp);
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -214,10 +529,12 @@ public sealed class PlaywrightBrowserController : IBrowserProcessController
         private readonly PlaywrightBrowserController _controller;
         private int _isDisposed;
 
+        public Guid SessionId { get; } = Guid.NewGuid();
         public string ProfileId { get; }
         public IBrowserContext Context { get; }
         public IProfileOwnerLock OwnerLock { get; }
         public bool IsHeadless { get; }
+        public bool IsDisposed => Volatile.Read(ref _isDisposed) == 1;
 
         public PlaywrightBrowserContextHandle(
             PlaywrightBrowserController controller,
@@ -237,7 +554,7 @@ public sealed class PlaywrightBrowserController : IBrowserProcessController
         {
             if (Interlocked.Exchange(ref _isDisposed, 1) == 0)
             {
-                _controller.RemoveActiveContext(ProfileId);
+                _controller.RemoveActiveContext(ProfileId, this);
 
                 try
                 {

@@ -1,4 +1,6 @@
-import React from "react";
+import { useMemo } from "react";
+import { Info } from "lucide-react";
+import { cn } from "../../lib/utils.ts";
 import type { PromptVariableDefinition } from "./promptApi.ts";
 
 export interface PromptVariableEditorProps {
@@ -16,7 +18,7 @@ export function PromptVariableEditor({
   onChange,
   disabled = false,
 }: PromptVariableEditorProps) {
-  const definitionsMap = React.useMemo(() => {
+  const definitionsMap = useMemo(() => {
     const map = new Map<string, PromptVariableDefinition>();
     if (definitions) {
       for (const def of definitions) {
@@ -29,29 +31,41 @@ export function PromptVariableEditor({
   if (variables.length === 0) {
     return (
       <div
-        className="prompt-alert prompt-alert-info"
-        style={{ fontSize: "0.8rem" }}
+        className="relative w-full rounded-lg border border-border/80 bg-muted/40 p-3.5 text-xs text-muted-foreground shadow-xs flex items-start gap-2.5"
+        role="status"
       >
-        <div>ℹ️</div>
-        <div>
+        <Info className="h-4 w-4 shrink-0 text-primary mt-0.5" />
+        <div className="leading-relaxed">
           Template hiện không chứa biến số nào. Thêm biến vào nội dung theo định dạng{" "}
-          <code>&#123;tên_biến&#125;</code> (ví dụ: <code>&#123;chủ_đề&#125;</code>,{" "}
-          <code>&#123;phong_cách&#125;</code>).
+          <code className="inline-flex items-center rounded-md border border-border bg-background px-1.5 py-0.5 font-mono text-[11px] font-medium text-foreground shadow-2xs">
+            &#123;tên_biến&#125;
+          </code>{" "}
+          (ví dụ:{" "}
+          <code className="inline-flex items-center rounded-md border border-border bg-background px-1.5 py-0.5 font-mono text-[11px] font-medium text-foreground shadow-2xs">
+            &#123;chủ_đề&#125;
+          </code>
+          ,{" "}
+          <code className="inline-flex items-center rounded-md border border-border bg-background px-1.5 py-0.5 font-mono text-[11px] font-medium text-foreground shadow-2xs">
+            &#123;phong_cách&#125;
+          </code>
+          ).
         </div>
       </div>
     );
   }
 
   return (
-    <div className="prompt-form-group">
-      <div className="prompt-form-label">
-        <span>Danh sách biến số ({variables.length})</span>
-        <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+    <div className="flex flex-col gap-2.5">
+      <div className="flex items-center justify-between pb-0.5">
+        <span className="text-xs font-semibold text-foreground">
+          Danh sách biến số ({variables.length})
+        </span>
+        <span className="text-[11px] text-muted-foreground">
           Giá trị truyền vào khi render preview
         </span>
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem" }}>
+      <div className="flex flex-col gap-2">
         {variables.map((varName) => {
           const def = definitionsMap.get(varName);
           const val = values[varName] ?? "";
@@ -61,38 +75,21 @@ export function PromptVariableEditor({
           return (
             <div
               key={varName}
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: "0.25rem",
-                padding: "0.5rem 0.65rem",
-                backgroundColor: "var(--surface-card)",
-                border: `1px solid ${isMissing ? "var(--status-warning)" : "var(--border-subtle)"}`,
-                borderRadius: "var(--radius-md)",
-              }}
+              className={cn(
+                "flex flex-col gap-1.5 rounded-lg border p-3 transition-colors bg-card shadow-xs",
+                isMissing
+                  ? "border-amber-500/60 bg-amber-500/5 dark:bg-amber-500/10"
+                  : "border-border/80 hover:border-border"
+              )}
             >
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  fontSize: "0.8rem",
-                }}
-              >
+              <div className="flex items-center justify-between text-xs">
                 <label
                   htmlFor={`var-input-${varName}`}
-                  style={{
-                    fontFamily: "monospace",
-                    fontWeight: 600,
-                    color: "var(--text-primary)",
-                  }}
+                  className="font-mono font-semibold text-foreground flex items-center gap-1 cursor-pointer"
                 >
                   &#123;{varName}&#125;
                   {isRequired && (
-                    <span
-                      style={{ color: "var(--status-error)", marginLeft: "0.25rem" }}
-                      title="Biến bắt buộc"
-                    >
+                    <span className="text-destructive font-bold text-xs" title="Biến bắt buộc">
                       *
                     </span>
                   )}
@@ -100,14 +97,7 @@ export function PromptVariableEditor({
 
                 {def?.description && (
                   <span
-                    style={{
-                      fontSize: "0.7rem",
-                      color: "var(--text-muted)",
-                      maxWidth: "200px",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
+                    className="text-[11px] text-muted-foreground max-w-[200px] truncate"
                     title={def.description}
                   >
                     {def.description}
@@ -118,8 +108,7 @@ export function PromptVariableEditor({
               <input
                 id={`var-input-${varName}`}
                 type="text"
-                className="prompt-input"
-                style={{ height: "32px", fontSize: "0.8rem" }}
+                className="flex h-8 w-full rounded-md border border-input bg-background px-3 py-1 text-xs font-mono text-foreground shadow-xs transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                 value={val}
                 placeholder={
                   def?.example

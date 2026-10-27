@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Linq;
 using TiToAI.Browser.Abstractions;
 using TiToAI.Browser.Models;
 
@@ -6,12 +7,13 @@ namespace TiToAI.Browser;
 
 /// <summary>
 /// Quản lý Tab Pool cho profile trình duyệt.
-/// Với Shared AI: Giới hạn tối đa 3 role tabs ("Script", "Image", "VideoPrompt").
-/// Mỗi tab tách biệt hoàn toàn ngữ cảnh hội thoại và tối đa 1 active job/tab.
+/// Nguyên tắc: mỗi job chạy trên một tab riêng biệt, cùng profile chia sẻ context.
+/// Tối đa N job chạy đồng thời trên N tab riêng tương ứng.
 /// </summary>
 public sealed class TabPool : ITabPool
 {
-    private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, BrowserTabHandle>> _profileTabs = new();
+    // ProfileId -> (JobId -> BrowserTabHandle)
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, BrowserTabHandle>> _profileTabs = new(StringComparer.OrdinalIgnoreCase);
 
     public Task<IBrowserTabHandle> AcquireTabAsync(
         string profileId,
@@ -23,7 +25,7 @@ public sealed class TabPool : ITabPool
         ArgumentException.ThrowIfNullOrWhiteSpace(role);
         ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
 
-        // Quy tắc Shared AI: chỉ cho phép 3 role tab hợp lệ
+        // Quy tắc Shared AI: chỉ cho phép 3 role tab hợp lệ và mỗi role tối đa 1 tab
         if (string.Equals(profileId, "shared_ai", StringComparison.OrdinalIgnoreCase))
         {
             if (!SharedAiTabRole.IsValid(role))
@@ -32,16 +34,21 @@ public sealed class TabPool : ITabPool
                     $"Role '{role}' không hợp lệ cho Shared AI. Chỉ chấp nhận: {string.Join(", ", SharedAiTabRole.AllRoles)}.",
                     nameof(role));
             }
+
+            var existingTabs = _profileTabs.GetOrAdd(profileId, _ => new ConcurrentDictionary<string, BrowserTabHandle>(StringComparer.OrdinalIgnoreCase));
+            if (existingTabs.Values.Any(h => string.Equals(h.Role, role, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new InvalidOperationException($"Không được phép cấp phát 2 job đồng thời trên cùng một tab.");
+            }
         }
 
-        var tabs = _profileTabs.GetOrAdd(profileId, _ => new ConcurrentDictionary<string, BrowserTabHandle>());
+        var tabs = _profileTabs.GetOrAdd(profileId, _ => new ConcurrentDictionary<string, BrowserTabHandle>(StringComparer.OrdinalIgnoreCase));
 
         var newHandle = new BrowserTabHandle(this, profileId, role, jobId);
-        if (!tabs.TryAdd(role, newHandle))
+        if (!tabs.TryAdd(jobId, newHandle))
         {
-            var existing = tabs[role];
             throw new InvalidOperationException(
-                $"Role tab '{role}' của profile '{profileId}' đang được sử dụng bởi job '{existing.JobId}'.");
+                $"Tác vụ '{jobId}' đã chiếm một tab trong profile '{profileId}'.");
         }
 
         return Task.FromResult<IBrowserTabHandle>(newHandle);
@@ -51,7 +58,7 @@ public sealed class TabPool : ITabPool
     {
         if (_profileTabs.TryGetValue(profileId, out var tabs))
         {
-            return tabs.Keys.ToList();
+            return tabs.Values.Select(h => h.Role).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         }
         return [];
     }
@@ -69,7 +76,7 @@ public sealed class TabPool : ITabPool
     {
         if (_profileTabs.TryGetValue(profileId, out var tabs))
         {
-            return tabs.ContainsKey(role);
+            return tabs.Values.Any(h => string.Equals(h.Role, role, StringComparison.OrdinalIgnoreCase));
         }
         return false;
     }
@@ -90,7 +97,11 @@ public sealed class TabPool : ITabPool
 
         if (_profileTabs.TryGetValue(profileId, out var tabs))
         {
-            tabs.TryRemove(role, out _);
+            var matching = tabs.Where(kv => string.Equals(kv.Value.Role, role, StringComparison.OrdinalIgnoreCase)).ToList();
+            foreach (var kv in matching)
+            {
+                tabs.TryRemove(kv.Key, out _);
+            }
         }
 
         return Task.CompletedTask;
@@ -104,10 +115,7 @@ public sealed class TabPool : ITabPool
 
         if (_profileTabs.TryGetValue(profileId, out var tabs))
         {
-            if (tabs.TryGetValue(role, out var handle) && string.Equals(handle.JobId, jobId, StringComparison.Ordinal))
-            {
-                tabs.TryRemove(new KeyValuePair<string, BrowserTabHandle>(role, handle));
-            }
+            tabs.TryRemove(jobId, out _);
         }
 
         return Task.CompletedTask;
@@ -118,10 +126,10 @@ public sealed class TabPool : ITabPool
         ArgumentException.ThrowIfNullOrWhiteSpace(profileId);
         ArgumentException.ThrowIfNullOrWhiteSpace(role);
 
-        // Xóa context nghiệp vụ trong tab pool
+        // Xóa context nghiệp vụ trong tab pool cho các tab có role tương ứng
         if (_profileTabs.TryGetValue(profileId, out var tabs))
         {
-            if (tabs.TryGetValue(role, out var handle))
+            foreach (var handle in tabs.Values.Where(h => string.Equals(h.Role, role, StringComparison.OrdinalIgnoreCase)))
             {
                 handle.IsSideEffectSubmitted = false;
             }
@@ -154,7 +162,7 @@ public sealed class TabPool : ITabPool
         {
             if (Interlocked.Exchange(ref _isDisposed, 1) == 0)
             {
-                await _pool.ReleaseTabAsync(ProfileId, Role, JobId);
+                await _pool.ReleaseTabAsync(ProfileId, Role, JobId).ConfigureAwait(false);
             }
         }
     }

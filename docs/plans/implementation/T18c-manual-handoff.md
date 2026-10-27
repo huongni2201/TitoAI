@@ -1,5 +1,7 @@
 # Manual handoff trong app và nhập kết quả đúng job
 
+> **Delta hiện hành:** [plan queue/Settings 1.2](../QUEUE_EXECUTION_SETTINGS_PLAN.md) thay popup Settings, nhóm account shared/private, connect tại Workspace và round-robin Workspace. Dùng [TASKS](../../agents/TASKS.md) cho trạng thái/gate; Baseline/checkbox dưới không là evidence đã chạy.
+
 - Task gốc: **T18 (manual mode)** · Ưu tiên: **P0 / G3**.
 - Điều kiện mở: T09,T10,T16 DONE; registry/mode T18a đã chốt.
 - Baseline 2026-10-26: Chưa có màn/handlers copy-export-import kết quả gắn job.
@@ -20,6 +22,7 @@ Khi automation chưa hỗ trợ hoặc bị chặn ngoài login, job AwaitingUse
 - [ ] Tạo handoff view model từ job snapshot: provider/task/input/scene/reason và bước thao tác; không lấy prompt mới từ editor thay snapshot.
 - [ ] Copy/export có scope guard, file tên an toàn; không xuất secret/cookie/profile.
 - [ ] Nhập text cho script/prompt hoặc file cho ảnh/video; validate type/size/hash/scope và đúng output task.
+- [ ] Text nhập thủ công cho ý tưởng/kịch bản/prompt dùng cùng hợp đồng bài đăng [SOURCE §7.4](../SOURCE_PLAN.md#74-tạo-ý-tưởngprompt-kèm-nội-dung-đăng-tiktok--p0): có caption/hashtag, thiếu thì giữ draft và yêu cầu bổ sung, không finalize như kết quả đầy đủ. Job lịch sử validate theo schema snapshot cũ.
 - [ ] Với request có thể đã submit, giữ intent/result reference và yêu cầu đối soát; import không đồng nghĩa được phép gửi lại.
 - [ ] Finalize bằng boundary chung, idempotent theo job/output; submit import hai lần không tạo asset trùng.
 - [ ] Cancel/late import theo T16; manual không được gắn kết quả vào scene đã đổi revision mà không review.

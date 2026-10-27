@@ -69,6 +69,44 @@ namespace TiToAI.Infrastructure.Persistence.Migrations
                     b.ToTable("Account", (string)null);
                 });
 
+            modelBuilder.Entity("TiToAI.Infrastructure.Persistence.Entities.ActiveSlotOccupancy", b =>
+                {
+                    b.Property<string>("ProviderAccountId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("provider_account_id");
+
+                    b.Property<string>("TabSlotId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("tab_slot_id");
+
+                    b.Property<string>("AcquiredAtUtc")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("acquired_at_utc");
+
+                    b.Property<string>("JobId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("job_id");
+
+                    b.Property<string>("LeaseOwnerId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("lease_owner_id");
+
+                    b.Property<long>("LeaseToken")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("lease_token");
+
+                    b.HasKey("ProviderAccountId", "TabSlotId");
+
+                    b.HasIndex("JobId")
+                        .IsUnique()
+                        .HasDatabaseName("uq_active_slot_occupancy_job");
+
+                    b.ToTable("ActiveSlotOccupancy", (string)null);
+                });
+
             modelBuilder.Entity("TiToAI.Infrastructure.Persistence.Entities.AppSetting", b =>
                 {
                     b.Property<string>("Key")
@@ -368,6 +406,7 @@ namespace TiToAI.Infrastructure.Persistence.Migrations
                         .HasColumnName("created_at_utc");
 
                     b.Property<long>("FencingToken")
+                        .IsConcurrencyToken()
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER")
                         .HasDefaultValue(0L)
@@ -539,19 +578,27 @@ namespace TiToAI.Infrastructure.Persistence.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("created_at_utc");
 
-                    b.Property<string>("CurrentVersionId")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("current_version_id");
-
                     b.Property<string>("Purpose")
                         .IsRequired()
                         .HasColumnType("TEXT")
                         .HasColumnName("purpose");
 
+                    b.Property<string>("TemplateText")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("template_text");
+
                     b.Property<string>("UpdatedAtUtc")
                         .IsRequired()
                         .HasColumnType("TEXT")
                         .HasColumnName("updated_at_utc");
+
+                    b.Property<string>("VariableDefinitionsJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("[]")
+                        .HasColumnName("variable_definitions_json");
 
                     b.Property<string>("WorkspaceId")
                         .HasColumnType("TEXT")
@@ -564,63 +611,12 @@ namespace TiToAI.Infrastructure.Persistence.Migrations
                         .HasDatabaseName("uq_prompt_template_global_purpose")
                         .HasFilter("workspace_id IS NULL");
 
-                    b.HasIndex("CurrentVersionId", "Id");
-
                     b.HasIndex("WorkspaceId", "Purpose")
                         .IsUnique()
                         .HasDatabaseName("uq_prompt_template_workspace_purpose")
                         .HasFilter("workspace_id IS NOT NULL");
 
                     b.ToTable("PromptTemplate", (string)null);
-                });
-
-            modelBuilder.Entity("TiToAI.Infrastructure.Persistence.Entities.PromptVersion", b =>
-                {
-                    b.Property<string>("Id")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("id");
-
-                    b.Property<string>("ChangeDescription")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("change_description");
-
-                    b.Property<string>("CreatedAtUtc")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("created_at_utc");
-
-                    b.Property<string>("TemplateId")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("template_id");
-
-                    b.Property<string>("TemplateText")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("template_text");
-
-                    b.Property<string>("VariableDefinitionsJson")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValue("[]")
-                        .HasColumnName("variable_definitions_json");
-
-                    b.Property<int>("VersionNumber")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("version_number");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Id", "TemplateId")
-                        .IsUnique()
-                        .HasDatabaseName("uq_prompt_version_id_template");
-
-                    b.HasIndex("TemplateId", "VersionNumber")
-                        .IsUnique()
-                        .HasDatabaseName("uq_prompt_version_template_version");
-
-                    b.ToTable("PromptVersion", (string)null);
                 });
 
             modelBuilder.Entity("TiToAI.Infrastructure.Persistence.Entities.ProviderAccount", b =>
@@ -849,6 +845,25 @@ namespace TiToAI.Infrastructure.Persistence.Migrations
                     b.Navigation("Workspace");
                 });
 
+            modelBuilder.Entity("TiToAI.Infrastructure.Persistence.Entities.ActiveSlotOccupancy", b =>
+                {
+                    b.HasOne("TiToAI.Infrastructure.Persistence.Entities.Job", "Job")
+                        .WithMany()
+                        .HasForeignKey("JobId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("TiToAI.Infrastructure.Persistence.Entities.ProviderAccount", "ProviderAccount")
+                        .WithMany()
+                        .HasForeignKey("ProviderAccountId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Job");
+
+                    b.Navigation("ProviderAccount");
+                });
+
             modelBuilder.Entity("TiToAI.Infrastructure.Persistence.Entities.Asset", b =>
                 {
                     b.HasOne("TiToAI.Infrastructure.Persistence.Entities.Workspace", "Workspace")
@@ -954,26 +969,7 @@ namespace TiToAI.Infrastructure.Persistence.Migrations
                         .HasForeignKey("WorkspaceId")
                         .OnDelete(DeleteBehavior.Cascade);
 
-                    b.HasOne("TiToAI.Infrastructure.Persistence.Entities.PromptVersion", "CurrentVersion")
-                        .WithMany()
-                        .HasForeignKey("CurrentVersionId", "Id")
-                        .HasPrincipalKey("Id", "TemplateId")
-                        .OnDelete(DeleteBehavior.Restrict);
-
-                    b.Navigation("CurrentVersion");
-
                     b.Navigation("Workspace");
-                });
-
-            modelBuilder.Entity("TiToAI.Infrastructure.Persistence.Entities.PromptVersion", b =>
-                {
-                    b.HasOne("TiToAI.Infrastructure.Persistence.Entities.PromptTemplate", "Template")
-                        .WithMany("Versions")
-                        .HasForeignKey("TemplateId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Template");
                 });
 
             modelBuilder.Entity("TiToAI.Infrastructure.Persistence.Entities.ProviderAccount", b =>
@@ -1023,11 +1019,6 @@ namespace TiToAI.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("TiToAI.Infrastructure.Persistence.Entities.Job", b =>
                 {
                     b.Navigation("ExecutionBinding");
-                });
-
-            modelBuilder.Entity("TiToAI.Infrastructure.Persistence.Entities.PromptTemplate", b =>
-                {
-                    b.Navigation("Versions");
                 });
 #pragma warning restore 612, 618
         }

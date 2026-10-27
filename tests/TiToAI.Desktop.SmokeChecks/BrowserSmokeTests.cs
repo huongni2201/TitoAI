@@ -11,6 +11,7 @@ using TiToAI.Contracts.Accounts;
 using TiToAI.Contracts.Browser;
 using TiToAI.Infrastructure.Persistence;
 using TiToAI.Infrastructure.Persistence.Entities;
+using TiToAI.Infrastructure.Persistence.Interceptors;
 
 namespace TiToAI.Desktop.SmokeChecks;
 
@@ -23,11 +24,12 @@ public static class BrowserSmokeTests
 {
     private static async Task<(SqliteConnection Connection, Func<TiToAIDbContext> Factory)> CreateInMemoryDbContextFactoryAsync()
     {
-        var connection = new SqliteConnection("DataSource=:memory:");
+        var connection = new SqliteConnection("DataSource=:memory:;Default Timeout=5");
         await connection.OpenAsync();
 
         var options = new DbContextOptionsBuilder<TiToAIDbContext>()
             .UseSqlite(connection)
+            .AddInterceptors(new SqlitePragmaInterceptor())
             .Options;
 
         using (var initialDb = new TiToAIDbContext(options))
@@ -213,9 +215,9 @@ public static class BrowserSmokeTests
     }
 
     /// <summary>
-    /// Test 4: Global One-Visible-Login Rule và hàng đợi VisibleWaiting.
+    /// Test 4: Mở đăng nhập đồng thời nhiều profile độc lập, Single-Instance Lock theo profile và kiểm tra ngân sách tài nguyên.
     /// </summary>
-    public static async Task Test_LoginCoordinator_OneVisibleLoginRule_AndQueue()
+    public static async Task Test_LoginCoordinator_ConcurrentLogins_IndependentProfiles_AndResourceBudget()
     {
         var (connection, factory) = await CreateInMemoryDbContextFactoryAsync();
         await using (connection)
@@ -223,30 +225,76 @@ public static class BrowserSmokeTests
             var registry = new ProfileRegistry(factory);
             await registry.EnsureProfileAsync("shared_ai", BrowserProfileKind.SharedAI);
             await registry.EnsureProfileAsync("museai_channel1", BrowserProfileKind.MuseAI);
+            await registry.EnsureProfileAsync("museai_channel2", BrowserProfileKind.MuseAI);
 
             using var coordinator = new LoginCoordinator(registry);
 
-            // Profile 1 yêu cầu login -> nhận slot hiển thị
+            // 1. Profile 1 yêu cầu login -> nhận VisibleActive
             var res1 = await coordinator.RequestLoginAsync("shared_ai");
             Assert(!res1.Queued, "Profile 1 không bị xếp hàng.");
             Assert(res1.VisibilityState == BrowserVisibilityState.VisibleActive, "Profile 1 phải nhận VisibleActive.");
             Assert(res1.CurrentHolder == "shared_ai", "CurrentHolder phải là shared_ai.");
             Assert(coordinator.IsVisibleLoginActive, "IsVisibleLoginActive phải là true.");
+            Assert(coordinator.IsProfileVisible("shared_ai"), "shared_ai phải đang visible.");
 
-            // Profile 2 yêu cầu login trong khi slot đang bận -> nhận VisibleWaiting
+            // 2. Profile 2 yêu cầu login đồng thời -> nhận ngay VisibleActive, không bị xếp hàng chờ profile 1
             var res2 = await coordinator.RequestLoginAsync("museai_channel1");
-            Assert(res2.Queued, "Profile 2 phải bị xếp hàng vào hàng đợi.");
-            Assert(res2.VisibilityState == BrowserVisibilityState.VisibleWaiting, "Profile 2 phải nhận VisibleWaiting.");
-            Assert(res2.CurrentHolder == "shared_ai", "CurrentHolder vẫn là shared_ai.");
+            Assert(!res2.Queued, "Profile 2 không bị xếp hàng.");
+            Assert(res2.VisibilityState == BrowserVisibilityState.VisibleActive, "Profile 2 phải nhận VisibleActive đồng thời.");
+            Assert(res2.CurrentHolder == "museai_channel1", "CurrentHolder phải là museai_channel1.");
+            Assert(coordinator.IsProfileVisible("museai_channel1"), "museai_channel1 phải đang visible.");
+            Assert(coordinator.ActiveVisibleProfileIds.Count == 2, "Cả hai profile phải cùng hiển thị.");
 
-            // Profile 1 đóng cửa sổ login
+            // 3. Bấm liên tiếp cùng một profile (shared_ai): không mở trùng
+            var res1Repeat = await coordinator.RequestLoginAsync("shared_ai");
+            Assert(!res1Repeat.Queued, "Lần bấm lặp lại không bị queued.");
+            Assert(res1Repeat.VisibilityState == BrowserVisibilityState.VisibleActive, "Vẫn là VisibleActive.");
+            Assert(coordinator.ActiveVisibleProfileIds.Count == 2, "Số lượng cửa sổ vẫn giữ nguyên là 2.");
+
+            // 4. Đóng cửa sổ Profile 1 -> Profile 2 vẫn hoạt động bình thường
             await coordinator.CloseLoginWindowAsync("shared_ai", BrowserReasonCode.AuthClosed);
-            Assert(!coordinator.IsVisibleLoginActive, "Slot hiển thị phải được giải phóng.");
+            Assert(!coordinator.IsProfileVisible("shared_ai"), "shared_ai phải không còn visible.");
+            Assert(coordinator.IsProfileVisible("museai_channel1"), "museai_channel1 vẫn phải đang visible!");
+            Assert(coordinator.IsVisibleLoginActive, "Vẫn còn cửa sổ hiển thị (museai_channel1).");
 
-            // Profile 2 có thể chiếm slot sau khi Profile 1 đóng
-            bool acquired = await coordinator.WaitForVisibleSlotAsync("museai_channel1", TimeSpan.FromSeconds(1));
-            Assert(acquired, "Profile 2 phải chiếm được slot hiển thị.");
-            Assert(coordinator.CurrentVisibleProfileId == "museai_channel1", "CurrentVisibleProfileId phải là museai_channel1.");
+            var p1 = await registry.GetProfileAsync("shared_ai");
+            Assert(p1?.VisibilityState == BrowserVisibilityState.Hidden, "shared_ai phải chuyển về Hidden.");
+            var p2 = await registry.GetProfileAsync("museai_channel1");
+            Assert(p2?.VisibilityState == BrowserVisibilityState.VisibleActive, "museai_channel1 phải giữ nguyên VisibleActive.");
+
+            // 5. Đóng tiếp cửa sổ Profile 2
+            await coordinator.CloseLoginWindowAsync("museai_channel1", BrowserReasonCode.AuthClosed);
+            Assert(!coordinator.IsVisibleLoginActive, "Toàn bộ cửa sổ hiển thị đã được đóng.");
+
+            // 6. Mở lại sau khi đóng: hoạt động bình thường, không kẹt khóa
+            var resReopen = await coordinator.RequestLoginAsync("shared_ai");
+            Assert(resReopen.VisibilityState == BrowserVisibilityState.VisibleActive, "Mở lại shared_ai thành công.");
+            await coordinator.CloseLoginWindowAsync("shared_ai", BrowserReasonCode.AuthClosed);
+
+            // 7. Kiểm tra ngân sách tài nguyên max_open_browsers
+            int budgetLimit = 2;
+            using var budgetCoordinator = new LoginCoordinator(
+                registry,
+                getMaxOpenBrowsers: () => budgetLimit);
+
+            var bRes1 = await budgetCoordinator.RequestLoginAsync("shared_ai");
+            Assert(bRes1.VisibilityState == BrowserVisibilityState.VisibleActive, "Profile 1 mở thành công trong budget.");
+
+            var bRes2 = await budgetCoordinator.RequestLoginAsync("museai_channel1");
+            Assert(bRes2.VisibilityState == BrowserVisibilityState.VisibleActive, "Profile 2 mở thành công trong budget.");
+
+            // Thử mở profile thứ 3 vượt budget (2) -> Phải ném ngoại lệ rõ ràng về tài nguyên
+            bool budgetExhaustedCaught = false;
+            try
+            {
+                await budgetCoordinator.RequestLoginAsync("museai_channel2");
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("ngân sách tài nguyên"))
+            {
+                budgetExhaustedCaught = true;
+            }
+
+            Assert(budgetExhaustedCaught, "Phải ném InvalidOperationException khi đạt giới hạn tài nguyên max_open_browsers.");
         }
     }
 
@@ -675,20 +723,666 @@ public static class BrowserSmokeTests
     }
 
     /// <summary>
+    /// Test 12: Mở login -> đóng X (mô phỏng browserContext.Close) -> mở lại, lặp ít nhất 5 vòng liên tiếp.
+    /// Đảm bảo mỗi vòng đóng đều dọn dẹp sạch sẽ .titoai_lock, nhả slot semaphore và cho phép mở lại ngay lập tức.
+    /// </summary>
+    public static async Task Test_LoginLifecycle_CloseWithX_Reopen_5ConsecutiveCycles()
+    {
+        var (connection, factory) = await CreateInMemoryDbContextFactoryAsync();
+        await using (connection)
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "titoai_pw_5cycles_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+
+            try
+            {
+                var registry = new ProfileRegistry(factory, tempDir);
+                string profileId = "shared_ai";
+                await registry.EnsureProfileAsync(profileId, BrowserProfileKind.SharedAI);
+
+                using var owner = new ProfileOwner(pid => registry.GetUserDataDir(pid, BrowserProfileKind.SharedAI));
+
+                MockBrowserContextProxy? currentMockContext = null;
+
+                var controller = new PlaywrightBrowserController(
+                    registry,
+                    owner,
+                    customPersistentLauncher: (userDataDir, options) =>
+                    {
+                        var mockContextProxy = DispatchProxy.Create<IBrowserContext, MockBrowserContextProxy>();
+                        var mockContext = (MockBrowserContextProxy)(object)mockContextProxy;
+                        currentMockContext = mockContext;
+                        return Task.FromResult(mockContextProxy);
+                    });
+
+                await using (controller)
+                {
+                    using var coordinator = new LoginCoordinator(registry, controller);
+
+                    // Lặp 5 vòng liên tiếp: Mở login -> Đóng X -> Mở lại
+                    for (int cycle = 1; cycle <= 5; cycle++)
+                    {
+                        // 1. Mở login
+                        var res = await coordinator.RequestLoginAsync(profileId);
+                        Assert(res.VisibilityState == BrowserVisibilityState.VisibleActive, $"Vòng {cycle}: VisibilityState phải là VisibleActive.");
+                        Assert(controller.IsRunning(profileId), $"Vòng {cycle}: Controller phải báo IsRunning = true.");
+                        Assert(owner.IsLocked(profileId), $"Vòng {cycle}: Profile phải bị lock .titoai_lock.");
+                        Assert(coordinator.CurrentVisibleProfileId == profileId, $"Vòng {cycle}: CurrentVisibleProfileId phải là profileId.");
+                        Assert(coordinator.IsVisibleLoginActive, $"Vòng {cycle}: IsVisibleLoginActive phải là true.");
+
+                        var runningProfile = await registry.GetProfileAsync(profileId);
+                        Assert(runningProfile?.OperationalState == BrowserOperationalState.Running, $"Vòng {cycle}: DB phải lưu Running.");
+                        Assert(runningProfile?.VisibilityState == BrowserVisibilityState.VisibleActive, $"Vòng {cycle}: DB phải lưu VisibleActive.");
+
+                        // 2. Người dùng nhấn nút X trên cửa sổ browser (mô phỏng browserContext.Close)
+                        Assert(currentMockContext != null, $"Vòng {cycle}: MockContext phải tồn tại.");
+                        currentMockContext!.SimulateClose();
+
+                        // Chờ event ContextClosed được xử lý bất đồng bộ
+                        for (int poll = 0; poll < 100 && (controller.IsRunning(profileId) || coordinator.IsVisibleLoginActive); poll++)
+                        {
+                            await Task.Delay(10);
+                        }
+
+                        // 3. Kiểm chứng toàn bộ trạng thái sau khi đóng bằng nút X
+                        Assert(!controller.IsRunning(profileId), $"Vòng {cycle}: Controller phải báo IsRunning = false sau khi đóng X.");
+                        Assert(!owner.IsLocked(profileId), $"Vòng {cycle}: Lock in-process phải được giải phóng.");
+                        Assert(coordinator.CurrentVisibleProfileId == null, $"Vòng {cycle}: CurrentVisibleProfileId phải reset về null.");
+                        Assert(!coordinator.IsVisibleLoginActive, $"Vòng {cycle}: IsVisibleLoginActive phải là false.");
+
+                        // Kiểm tra file lock cấp HĐH được giải phóng 100% (file bị xóa do DeleteOnClose hoặc mở được độc quyền)
+                        string lockFilePath = Path.Combine(registry.GetUserDataDir(profileId, BrowserProfileKind.SharedAI), ".titoai_lock");
+                        if (File.Exists(lockFilePath))
+                        {
+                            using var stream = new FileStream(lockFilePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                        }
+
+                        var closedProfile = await registry.GetProfileAsync(profileId);
+                        Assert(closedProfile?.OperationalState == BrowserOperationalState.Stopped, $"Vòng {cycle}: DB phải lưu Stopped.");
+                        Assert(closedProfile?.VisibilityState == BrowserVisibilityState.Hidden, $"Vòng {cycle}: DB phải lưu Hidden.");
+                    }
+                }
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir))
+                {
+                    try { Directory.Delete(tempDir, recursive: true); } catch { }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Test 13: Đóng trong lúc trang đang tải (GotoAsync) & đóng trước khi đăng nhập xong.
+    /// Ngoại lệ phải được bắt an toàn, lock và semaphore được giải phóng 100%, có thể mở lại bình thường ngay sau đó.
+    /// </summary>
+    public static async Task Test_LoginLifecycle_CloseDuringGoto_ReleasesLockAndRecovers()
+    {
+        var (connection, factory) = await CreateInMemoryDbContextFactoryAsync();
+        await using (connection)
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "titoai_pw_gotoclose_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+
+            try
+            {
+                var registry = new ProfileRegistry(factory, tempDir);
+                string profileId = "shared_ai";
+                await registry.EnsureProfileAsync(profileId, BrowserProfileKind.SharedAI);
+
+                using var owner = new ProfileOwner(pid => registry.GetUserDataDir(pid, BrowserProfileKind.SharedAI));
+
+                bool simulateCrashOnGoto = true;
+                MockBrowserContextProxy? currentMockContext = null;
+
+                var controller = new PlaywrightBrowserController(
+                    registry,
+                    owner,
+                    customPersistentLauncher: (userDataDir, options) =>
+                    {
+                        var mockContextProxy = DispatchProxy.Create<IBrowserContext, MockBrowserContextProxy>();
+                        var mockContext = (MockBrowserContextProxy)(object)mockContextProxy;
+                        currentMockContext = mockContext;
+
+                        var mockPageProxy = DispatchProxy.Create<IPage, MockPageProxy>();
+                        var mockPage = (MockPageProxy)(object)mockPageProxy;
+
+                        if (simulateCrashOnGoto)
+                        {
+                            mockPage.CustomGoto = async url =>
+                            {
+                                await Task.Yield();
+                                mockContext.SimulateClose();
+                                throw new PlaywrightException("Target page, context or browser has been closed");
+                            };
+                        }
+
+                        mockContext.AddPage(mockPageProxy);
+                        return Task.FromResult(mockContextProxy);
+                    });
+
+                await using (controller)
+                {
+                    using var coordinator = new LoginCoordinator(registry, controller);
+
+                    // 1. Mở login nhưng bị đóng đột ngột trong lúc tải trang
+                    bool caughtExpectedException = false;
+                    try
+                    {
+                        await coordinator.RequestLoginAsync(profileId, "https://chatgpt.com/login");
+                    }
+                    catch (Exception ex)
+                    {
+                        caughtExpectedException = ex is OperationCanceledException || ex is PlaywrightException;
+                    }
+                    Assert(caughtExpectedException, "Phải bắt được ngoại lệ an toàn khi đóng trong lúc tải trang.");
+
+                    // Chờ dọn dẹp
+                    for (int poll = 0; poll < 100 && (controller.IsRunning(profileId) || coordinator.IsVisibleLoginActive || owner.IsLocked(profileId)); poll++)
+                    {
+                        await Task.Delay(10);
+                    }
+
+                    // 2. Kiểm chứng: Lock và slot semaphore phải được giải phóng 100%
+                    Assert(!controller.IsRunning(profileId), "Controller không được giữ trạng thái Running.");
+                    Assert(!owner.IsLocked(profileId), "Lock ProfileOwner phải được giải phóng sau lỗi Goto.");
+                    Assert(!coordinator.IsVisibleLoginActive, "Slot hiển thị của coordinator phải được giải phóng.");
+                    Assert(coordinator.CurrentVisibleProfileId == null, "CurrentVisibleProfileId phải là null.");
+
+                    string lockFilePath = Path.Combine(registry.GetUserDataDir(profileId, BrowserProfileKind.SharedAI), ".titoai_lock");
+                    if (File.Exists(lockFilePath))
+                    {
+                        using var stream = new FileStream(lockFilePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                    }
+
+                    // 3. Mở lại ngay từ chính nút đăng nhập (lần này Goto thành công bình thường)
+                    simulateCrashOnGoto = false;
+                    var reopenResult = await coordinator.RequestLoginAsync(profileId, "https://chatgpt.com/login");
+                    Assert(reopenResult.VisibilityState == BrowserVisibilityState.VisibleActive, "Mở lại phải thành công nhận VisibleActive.");
+                    Assert(controller.IsRunning(profileId), "Controller phải báo IsRunning = true sau khi mở lại.");
+                    Assert(owner.IsLocked(profileId), "Lock phải được chiếm cho phiên mới.");
+
+                    // Dọn dẹp phiên mới
+                    currentMockContext?.SimulateClose();
+                }
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir))
+                {
+                    try { Directory.Delete(tempDir, recursive: true); } catch { }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Test 14: Double-click mở login và mở lại ngay sau khi đóng.
+    /// Không bị xung đột đồng thời, mở lại trơn tru không cần delay.
+    /// </summary>
+    public static async Task Test_LoginLifecycle_DoubleClickAndImmediateReopen()
+    {
+        var (connection, factory) = await CreateInMemoryDbContextFactoryAsync();
+        await using (connection)
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "titoai_pw_doubleclick_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+
+            try
+            {
+                var registry = new ProfileRegistry(factory, tempDir);
+                string profileId = "shared_ai";
+                await registry.EnsureProfileAsync(profileId, BrowserProfileKind.SharedAI);
+
+                using var owner = new ProfileOwner(pid => registry.GetUserDataDir(pid, BrowserProfileKind.SharedAI));
+
+                MockBrowserContextProxy? currentMockContext = null;
+
+                var controller = new PlaywrightBrowserController(
+                    registry,
+                    owner,
+                    customPersistentLauncher: (userDataDir, options) =>
+                    {
+                        var mockContextProxy = DispatchProxy.Create<IBrowserContext, MockBrowserContextProxy>();
+                        var mockContext = (MockBrowserContextProxy)(object)mockContextProxy;
+                        currentMockContext = mockContext;
+                        return Task.FromResult(mockContextProxy);
+                    });
+
+                await using (controller)
+                {
+                    using var coordinator = new LoginCoordinator(registry, controller);
+
+                    // 1. Double-click: 2 request đồng thời từ UI
+                    var task1 = coordinator.RequestLoginAsync(profileId);
+                    var task2 = coordinator.RequestLoginAsync(profileId);
+                    var results = await Task.WhenAll(task1, task2);
+
+                    Assert(results[0].VisibilityState == BrowserVisibilityState.VisibleActive, "Request 1 phải nhận VisibleActive.");
+                    Assert(results[1].VisibilityState == BrowserVisibilityState.VisibleActive, "Request 2 (double click) phải nhận VisibleActive.");
+                    Assert(coordinator.CurrentVisibleProfileId == profileId, "CurrentVisibleProfileId phải là profileId.");
+
+                    // 2. Người dùng đóng nút X
+                    currentMockContext!.SimulateClose();
+
+                    for (int poll = 0; poll < 100 && (controller.IsRunning(profileId) || coordinator.IsVisibleLoginActive); poll++)
+                    {
+                        await Task.Delay(10);
+                    }
+
+                    // 3. Mở lại NGAY LẬP TỨC từ chính nút đăng nhập
+                    var reopenResult = await coordinator.RequestLoginAsync(profileId);
+                    Assert(reopenResult.VisibilityState == BrowserVisibilityState.VisibleActive, "Mở lại ngay lập tức phải thành công.");
+                    Assert(coordinator.CurrentVisibleProfileId == profileId, "CurrentVisibleProfileId phải là profileId.");
+                    Assert(controller.IsRunning(profileId), "Controller phải đang chạy phiên mới.");
+
+                    // Dọn dẹp
+                    currentMockContext?.SimulateClose();
+                }
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir))
+                {
+                    try { Directory.Delete(tempDir, recursive: true); } catch { }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Test 15: Event đóng phiên cũ đến sau khi phiên mới đã được mở.
+    /// Sự kiện muộn của phiên 1 tuyệt đối KHÔNG làm mất trạng thái hay đóng nhầm phiên 2.
+    /// </summary>
+    public static async Task Test_LoginLifecycle_StaleCloseEventFromOldSession_DoesNotCorruptNewSession()
+    {
+        var (connection, factory) = await CreateInMemoryDbContextFactoryAsync();
+        await using (connection)
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "titoai_pw_staleclose_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+
+            try
+            {
+                var registry = new ProfileRegistry(factory, tempDir);
+                string profileId = "shared_ai";
+                await registry.EnsureProfileAsync(profileId, BrowserProfileKind.SharedAI);
+
+                using var owner = new ProfileOwner(pid => registry.GetUserDataDir(pid, BrowserProfileKind.SharedAI));
+
+                MockBrowserContextProxy? mockSession1 = null;
+                MockBrowserContextProxy? mockSession2 = null;
+                int launchCount = 0;
+
+                var controller = new PlaywrightBrowserController(
+                    registry,
+                    owner,
+                    customPersistentLauncher: (userDataDir, options) =>
+                    {
+                        launchCount++;
+                        var mockContextProxy = DispatchProxy.Create<IBrowserContext, MockBrowserContextProxy>();
+                        var mockContext = (MockBrowserContextProxy)(object)mockContextProxy;
+
+                        if (launchCount == 1) mockSession1 = mockContext;
+                        else mockSession2 = mockContext;
+
+                        return Task.FromResult(mockContextProxy);
+                    });
+
+                await using (controller)
+                {
+                    using var coordinator = new LoginCoordinator(registry, controller);
+
+                    // 1. Mở phiên 1
+                    await coordinator.RequestLoginAsync(profileId);
+                    Assert(launchCount == 1, "Phiên 1 đã khởi chạy.");
+                    Assert(controller.IsRunning(profileId), "Controller đang chạy phiên 1.");
+
+                    // 2. Giả lập đóng phiên 1 qua controller (chưa kích hoạt event SimulateClose của mockSession1)
+                    await controller.CloseContextAsync(profileId);
+                    Assert(!controller.IsRunning(profileId), "Controller đã dừng phiên 1.");
+
+                    // 3. Mở phiên 2 ngay sau đó
+                    coordinator.ReleaseVisibleSlot(profileId);
+                    await coordinator.RequestLoginAsync(profileId);
+                    Assert(launchCount == 2, "Phiên 2 đã khởi chạy.");
+                    Assert(controller.IsRunning(profileId), "Controller đang chạy phiên 2.");
+                    Assert(coordinator.CurrentVisibleProfileId == profileId, "CurrentVisibleProfileId là profileId.");
+
+                    // 4. Kích hoạt sự kiện Close muộn từ phiên 1
+                    Assert(mockSession1 != null, "MockSession1 phải tồn tại.");
+                    mockSession1!.SimulateClose();
+
+                    // Chờ một chút để event handler chạy xong
+                    await Task.Delay(50);
+
+                    // 5. Kiểm chứng: Phiên 2 VẪN ĐANG HOẠT ĐỘNG HOÀN TOÀN BÌNH THƯỜNG!
+                    Assert(controller.IsRunning(profileId), "Controller VẪN PHẢI BÁO IsRunning = true cho phiên 2.");
+                    Assert(owner.IsLocked(profileId), "Lock của phiên 2 không được bị giải phóng.");
+                    Assert(coordinator.CurrentVisibleProfileId == profileId, "CurrentVisibleProfileId vẫn phải là profileId.");
+
+                    var p = await registry.GetProfileAsync(profileId);
+                    Assert(p?.OperationalState == BrowserOperationalState.Running, "Profile trong DB vẫn phải là Running.");
+                    Assert(p?.VisibilityState == BrowserVisibilityState.VisibleActive, "Profile trong DB vẫn phải là VisibleActive.");
+
+                    // 6. Đóng phiên 2 thật sự
+                    Assert(mockSession2 != null, "MockSession2 phải tồn tại.");
+                    mockSession2!.SimulateClose();
+
+                    for (int poll = 0; poll < 100 && (controller.IsRunning(profileId) || coordinator.IsVisibleLoginActive); poll++)
+                    {
+                        await Task.Delay(10);
+                    }
+
+                    // Chờ ProfileRegistry hoàn tất cập nhật DB về Stopped
+                    for (int poll = 0; poll < 100; poll++)
+                    {
+                        var closedProfile = await registry.GetProfileAsync(profileId);
+                        if (closedProfile?.OperationalState == BrowserOperationalState.Stopped)
+                        {
+                            break;
+                        }
+                        await Task.Delay(10);
+                    }
+
+                    Assert(!controller.IsRunning(profileId), "Controller dừng hoàn toàn sau khi phiên 2 đóng.");
+                }
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir))
+                {
+                    try { Directory.Delete(tempDir, recursive: true); } catch { }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Test 16: Tách trạng thái browser mở khỏi trạng thái xác thực tài khoản (SessionStatus).
+    /// Đóng cửa sổ không làm mất phiên đăng nhập (không suy ra đã logout hay unlinked).
+    /// </summary>
+    public static async Task Test_LoginLifecycle_SessionStatusPreserved_NoUnintendedLogout()
+    {
+        var (connection, factory) = await CreateInMemoryDbContextFactoryAsync();
+        await using (connection)
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "titoai_pw_preserve_session_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+
+            try
+            {
+                var registry = new ProfileRegistry(factory, tempDir);
+                string profileId = "shared_ai";
+                await registry.EnsureProfileAsync(profileId, BrowserProfileKind.SharedAI);
+
+                // Giả lập tài khoản đã xác thực thành công trước đó
+                await registry.UpdateProfileStateAsync(profileId, sessionStatus: BrowserSessionStatus.Connected);
+
+                using var owner = new ProfileOwner(pid => registry.GetUserDataDir(pid, BrowserProfileKind.SharedAI));
+
+                MockBrowserContextProxy? currentMockContext = null;
+
+                var controller = new PlaywrightBrowserController(
+                    registry,
+                    owner,
+                    customPersistentLauncher: (userDataDir, options) =>
+                    {
+                        var mockContextProxy = DispatchProxy.Create<IBrowserContext, MockBrowserContextProxy>();
+                        var mockContext = (MockBrowserContextProxy)(object)mockContextProxy;
+                        currentMockContext = mockContext;
+                        return Task.FromResult(mockContextProxy);
+                    });
+
+                await using (controller)
+                {
+                    using var coordinator = new LoginCoordinator(registry, controller);
+
+                    // Mở cửa sổ đăng nhập
+                    await coordinator.RequestLoginAsync(profileId);
+
+                    // Người dùng đóng cửa sổ bằng nút X
+                    currentMockContext!.SimulateClose();
+
+                    for (int poll = 0; poll < 100 && (controller.IsRunning(profileId) || coordinator.IsVisibleLoginActive); poll++)
+                    {
+                        await Task.Delay(10);
+                    }
+
+                    // Kiểm tra: Trạng thái hiển thị về Hidden/Stopped, NHƯNG SessionStatus VẪN PHẢI LÀ Connected!
+                    var p = await registry.GetProfileAsync(profileId);
+                    Assert(p?.VisibilityState == BrowserVisibilityState.Hidden, "VisibilityState phải là Hidden.");
+                    Assert(p?.OperationalState == BrowserOperationalState.Stopped, "OperationalState phải là Stopped.");
+                    Assert(p?.SessionStatus == BrowserSessionStatus.Connected, "SessionStatus tuyệt đối KHÔNG được mất hoặc chuyển thành LoggedOut!");
+                }
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir))
+                {
+                    try { Directory.Delete(tempDir, recursive: true); } catch { }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Test 17: Phòng thủ Stale State trong LoginCoordinator.RequestLoginAsync.
+    /// Nếu _currentVisibleProfileId != null nhưng process controller không còn chạy (stale state),
+    /// tự động dọn dẹp và cho phép mở lại bình thường thay vì kẹt.
+    /// </summary>
+    public static async Task Test_LoginCoordinator_StaleStateSelfHealing()
+    {
+        var (connection, factory) = await CreateInMemoryDbContextFactoryAsync();
+        await using (connection)
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "titoai_pw_stale_defense_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+
+            try
+            {
+                var registry = new ProfileRegistry(factory, tempDir);
+                string profileId = "shared_ai";
+                await registry.EnsureProfileAsync(profileId, BrowserProfileKind.SharedAI);
+
+                using var owner = new ProfileOwner(pid => registry.GetUserDataDir(pid, BrowserProfileKind.SharedAI));
+
+                MockBrowserContextProxy? currentMockContext = null;
+
+                var controller = new PlaywrightBrowserController(
+                    registry,
+                    owner,
+                    customPersistentLauncher: (userDataDir, options) =>
+                    {
+                        var mockContextProxy = DispatchProxy.Create<IBrowserContext, MockBrowserContextProxy>();
+                        var mockContext = (MockBrowserContextProxy)(object)mockContextProxy;
+                        currentMockContext = mockContext;
+                        return Task.FromResult(mockContextProxy);
+                    });
+
+                await using (controller)
+                {
+                    using var coordinator = new LoginCoordinator(registry, controller);
+
+                    // Tạo Stale State nhân tạo: Slot hiển thị bị giữ bởi shared_ai nhưng controller không chạy
+                    bool slotAcquired = await coordinator.WaitForVisibleSlotAsync(profileId, TimeSpan.FromSeconds(1));
+                    Assert(slotAcquired, "Slot hiển thị đã bị chiếm trước.");
+                    Assert(coordinator.CurrentVisibleProfileId == profileId, "CurrentVisibleProfileId là shared_ai.");
+                    Assert(!controller.IsRunning(profileId), "Controller thực tế KHÔNG chạy (Stale State).");
+
+                    // Người dùng bấm nút Đăng nhập: Cơ chế self-healing phải tự dọn dẹp và mở persistent context mới
+                    var result = await coordinator.RequestLoginAsync(profileId);
+                    Assert(result.VisibilityState == BrowserVisibilityState.VisibleActive, "RequestLoginAsync phải thành công nhận VisibleActive.");
+                    Assert(controller.IsRunning(profileId), "Controller phải được khởi chạy thành công sau khi self-heal.");
+                    Assert(coordinator.CurrentVisibleProfileId == profileId, "CurrentVisibleProfileId là profileId.");
+
+                    // Dọn dẹp
+                    currentMockContext?.SimulateClose();
+                }
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir))
+                {
+                    try { Directory.Delete(tempDir, recursive: true); } catch { }
+                }
+            }
+        }
+    }
+
+    /// <summary>
     /// Mock Proxy tự động implement toàn bộ IBrowserContext thông qua BCL DispatchProxy.
+    /// Hỗ trợ đăng ký và kích hoạt sự kiện Close (SimulateClose), quản lý mock Pages.
     /// </summary>
     public class MockBrowserContextProxy : DispatchProxy
     {
         public bool WasClosed { get; private set; }
+        private readonly List<EventHandler<IBrowserContext>> _closeHandlers = new();
+        private readonly List<IPage> _pages = new();
+        private readonly object _lock = new();
+
+        public void AddPage(IPage page)
+        {
+            lock (_lock)
+            {
+                _pages.Add(page);
+            }
+        }
+
+        public void SimulateClose()
+        {
+            WasClosed = true;
+            List<EventHandler<IBrowserContext>> handlers;
+            lock (_lock)
+            {
+                handlers = [.. _closeHandlers];
+            }
+            foreach (var handler in handlers)
+            {
+                try
+                {
+                    handler.Invoke(this, (IBrowserContext)(object)this);
+                }
+                catch { }
+            }
+        }
 
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
         {
             if (targetMethod == null) return null;
 
+            if (targetMethod.Name == "add_Close" && args != null && args.Length > 0 && args[0] is EventHandler<IBrowserContext> addHandler)
+            {
+                lock (_lock)
+                {
+                    _closeHandlers.Add(addHandler);
+                }
+                return null;
+            }
+
+            if (targetMethod.Name == "remove_Close" && args != null && args.Length > 0 && args[0] is EventHandler<IBrowserContext> remHandler)
+            {
+                lock (_lock)
+                {
+                    _closeHandlers.Remove(remHandler);
+                }
+                return null;
+            }
+
+            if (targetMethod.Name == "get_Pages")
+            {
+                lock (_lock)
+                {
+                    return _pages.AsReadOnly();
+                }
+            }
+
             if (targetMethod.Name == "CloseAsync")
             {
-                WasClosed = true;
+                SimulateClose();
                 return Task.CompletedTask;
+            }
+
+            if (targetMethod.ReturnType == typeof(Task))
+            {
+                return Task.CompletedTask;
+            }
+
+            if (targetMethod.ReturnType.IsGenericType &&
+                targetMethod.ReturnType.GetGenericTypeDefinition() == typeof(Task<>))
+            {
+                var resultType = targetMethod.ReturnType.GetGenericArguments()[0];
+                var defaultVal = resultType.IsValueType ? Activator.CreateInstance(resultType) : null;
+                var fromResultMethod = typeof(Task).GetMethod(nameof(Task.FromResult))!.MakeGenericMethod(resultType);
+                return fromResultMethod.Invoke(null, [defaultVal]);
+            }
+
+            if (targetMethod.ReturnType.IsValueType)
+            {
+                return Activator.CreateInstance(targetMethod.ReturnType);
+            }
+
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Mock Proxy cho IPage để kiểm thử điều hướng và đóng trong lúc tải.
+    /// </summary>
+    public class MockPageProxy : DispatchProxy
+    {
+        public bool IsClosed { get; set; }
+        public string Url { get; set; } = "about:blank";
+        public Func<string, Task>? CustomGoto { get; set; }
+        private readonly List<EventHandler<IPage>> _closeHandlers = new();
+        private readonly object _lock = new();
+
+        public void SimulateClose()
+        {
+            IsClosed = true;
+            List<EventHandler<IPage>> handlers;
+            lock (_lock)
+            {
+                handlers = [.. _closeHandlers];
+            }
+            foreach (var handler in handlers)
+            {
+                try
+                {
+                    handler.Invoke(this, (IPage)(object)this);
+                }
+                catch { }
+            }
+        }
+
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+        {
+            if (targetMethod == null) return null;
+
+            if (targetMethod.Name == "get_IsClosed") return IsClosed;
+            if (targetMethod.Name == "get_Url") return Url;
+
+            if (targetMethod.Name == "add_Close" && args != null && args.Length > 0 && args[0] is EventHandler<IPage> addHandler)
+            {
+                lock (_lock) { _closeHandlers.Add(addHandler); }
+                return null;
+            }
+
+            if (targetMethod.Name == "remove_Close" && args != null && args.Length > 0 && args[0] is EventHandler<IPage> remHandler)
+            {
+                lock (_lock) { _closeHandlers.Remove(remHandler); }
+                return null;
+            }
+
+            if (targetMethod.Name == "GotoAsync" && args != null && args.Length > 0 && args[0] is string url)
+            {
+                Url = url;
+                if (CustomGoto != null)
+                {
+                    return CustomGoto(url);
+                }
+                return Task.FromResult<IResponse?>(null);
             }
 
             if (targetMethod.ReturnType == typeof(Task))
@@ -744,7 +1438,7 @@ public static class BrowserSmokeTests
         await RunAsync("Test 1: Profile Registry & Path Safety (No email, traversal blocked)", Test_ProfileRegistry_PathSafety_NoEmailOrTraversal);
         await RunAsync("Test 2: Single-Instance Profile Lock (In-process & Cross-process/FileLock)", Test_SingleInstanceProfileLock_InProcessAndCrossProcess);
         await RunAsync("Test 3: Tab Pool Shared AI 3 Roles, Isolation & Quota Limits", Test_TabPool_SharedAi_QuotaAndRoleIsolation);
-        await RunAsync("Test 4: Global One-Visible-Login Rule & VisibleWaiting Queue", Test_LoginCoordinator_OneVisibleLoginRule_AndQueue);
+        await RunAsync("Test 4: Concurrent Logins for Independent Profiles, Single-Instance Per-Profile & Resource Budget", Test_LoginCoordinator_ConcurrentLogins_IndependentProfiles_AndResourceBudget);
         await RunAsync("Test 5: User Closes Window -> auth_closed & No Auto-reopen", Test_LoginCoordinator_UserClosesWindow_AuthClosedReasonCode_NoAutoReopen);
         await RunAsync("Test 6: Quiescing & Drain Semantics for Shared AI", Test_QuiescingAndDrain_SharedAi_SafeRollbackPendingTabs);
         await RunAsync("Test 7: Crash Recovery at Startup (Reconcile Checkpoints & Dirty Profiles)", Test_CrashRecovery_ReconcileCheckpointsAtStartup);
@@ -752,6 +1446,12 @@ public static class BrowserSmokeTests
         await RunAsync("Test 9: CompleteLoginHandoff with Unverified SessionProbe does NOT resolve Checkpoint", Test_CompleteLoginHandoff_ProbeUnverified_CheckpointNotResolved);
         await RunAsync("Test 10: PlaywrightBrowserController Single-Instance Lock Lifecycle & Isolation", Test_PlaywrightBrowserController_SingleInstanceLock_LifecycleAndSafety);
         await RunAsync("Test 11: PlaywrightBrowserController Missing Driver Error Handling & Lock Release", Test_PlaywrightBrowserController_MissingDriverException_ReleasesLockSafely);
+        await RunAsync("Test 12: Login Lifecycle: Close with X & Reopen (5 consecutive cycles, clean lock release)", Test_LoginLifecycle_CloseWithX_Reopen_5ConsecutiveCycles);
+        await RunAsync("Test 13: Login Lifecycle: Close during GotoAsync (lock released & recovered)", Test_LoginLifecycle_CloseDuringGoto_ReleasesLockAndRecovers);
+        await RunAsync("Test 14: Login Lifecycle: Double-click & Immediate Reopen", Test_LoginLifecycle_DoubleClickAndImmediateReopen);
+        await RunAsync("Test 15: Login Lifecycle: Stale Close Event from Old Session ignored", Test_LoginLifecycle_StaleCloseEventFromOldSession_DoesNotCorruptNewSession);
+        await RunAsync("Test 16: Login Lifecycle: SessionStatus preserved across window closes", Test_LoginLifecycle_SessionStatusPreserved_NoUnintendedLogout);
+        await RunAsync("Test 17: Login Coordinator: Stale State Self-Healing", Test_LoginCoordinator_StaleStateSelfHealing);
     }
 
     private static void Assert(bool condition, string message)

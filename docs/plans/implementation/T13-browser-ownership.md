@@ -22,7 +22,7 @@ Một owner/userDataDir, một account một profile. ChatGPT/Gemini/MuseAI acco
 - [ ] Registry cấp profile ID/đường dẫn TiToAI an toàn; không chứa email/handle, không đọc profile Chrome cá nhân.
 - [ ] Khóa profile trong tiến trình và cơ chế chống hai app/process cùng mở profile; acquire/release có owner, phục hồi sau crash.
 - [ ] Tab pool tách hội thoại, xóa context nghiệp vụ trước tái sử dụng; một job/tab, quota theo account.
-- [ ] Login coordinator dùng một slot visible toàn app; request khác VisibleWaiting; user đóng không tự bật lại.
+- [x] Login coordinator cho phép người dùng chủ động mở đồng thời nhiều profile độc lập; mỗi profile giữ single-instance lock riêng, không mở trùng khi bấm nhiều lần; tuân thủ ngân sách tài nguyên max_open_browsers; user đóng không tự bật lại.
 - [ ] Pause dispatch các tab của đúng profile provider cần login, dừng tab chưa submit, đợi in-flight hữu hạn/checkpoint trước close hidden; profile khác không bị pause. Chuyển owner rồi mở login.
 - [ ] Probe identity/session theo adapter; chưa có adapter thật chỉ Unverified. Đóng login→mở hidden→xác minh lại→reconcile, không suy thành công từ việc đóng cửa sổ.
 - [ ] Chốt interface pause/drain/resume cho T15/T16 và persist handoff checkpoint; không giữ transaction trong lúc chờ user.

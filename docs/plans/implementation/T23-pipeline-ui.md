@@ -1,5 +1,15 @@
 # Giao diện chạy pipeline, review đầu ra và tiếp tục công việc
 
+> **Tối ưu đã chốt:** [Plan sản xuất từ ảnh §3–4](../PRODUCT_IMAGE_VIDEO_WORKFLOW_PLAN.md) dùng đầu vào chung cấp project, lập cảnh có mục đích, tái sử dụng ảnh nền tảng và chỉ tạo biến thể cần thiết. Cảnh đủ input chạy tiếp ngay qua queue chung; sửa/tạo lại chỉ tác động phần phụ thuộc. UI chính là Chuẩn bị → Đang chạy → Kết quả, chi tiết ảnh/prompt mở khi cần. Đây là yêu cầu triển khai, chưa phải evidence đã hỗ trợ.
+
+
+> **Đã chốt 2026-10-27:** [Luồng sản xuất từ ảnh](../PRODUCT_IMAGE_VIDEO_WORKFLOW_PLAN.md) tự chạy sau một lần Bắt đầu: lập nhiều cảnh theo prompt → ảnh → prompt chuyển động → video, không bắt duyệt trung gian. Audio tùy chọn; mẫu và sản phẩm dùng lại trong thư viện Workspace. Trong mode này, tự áp output hợp lệ bằng revision guard; yêu cầu audio bắt buộc/duyệt từng bước bên dưới là baseline cũ đã được thay trong phạm vi này. Contract/version/validator/adapter còn phải triển khai đồng bộ; chưa là evidence code hỗ trợ. Lỗi, capability không tương thích, login, xung đột hoặc uncertainty vẫn dừng đúng policy.
+
+
+> **Delta 2026-10-27 — sản xuất từ ảnh:** [Plan ảnh mẫu/sản phẩm → ảnh đã duyệt → prompt chuyển động → video](../PRODUCT_IMAGE_VIDEO_WORKFLOW_PLAN.md) thay bố cục Project/Scene dạng bảng làm luồng chính và bổ sung ba chế độ đầu vào. Luồng ảnh đi thẳng, không bắt tạo kịch bản trước; audio tùy chọn và tự động chạy theo quyết định mới. Đây là spec bàn giao, chưa nghiệm thu code.
+
+> **Delta hiện hành:** [plan queue/Settings 1.2](../QUEUE_EXECUTION_SETTINGS_PLAN.md) thay popup Settings, nhóm account shared/private, connect tại Workspace và round-robin Workspace. Dùng [TASKS](../../agents/TASKS.md) cho trạng thái/gate; Baseline/checkbox dưới không là evidence đã chạy.
+
 - Task gốc: **T23** · Ưu tiên: **P0 / G3**.
 - Điều kiện mở: T22 DONE.
 - Baseline 2026-10-26: Chưa có UI thao tác pipeline và review kết quả.
@@ -19,6 +29,7 @@ Tích hợp vào Overview/Project/Scene editor đã có: nhập brief, review sc
 ## Các bước triển khai
 
 - [ ] Brief lưu draft thật, review scenes trước apply; lỗi schema hiện nội dung để sửa, không tạo scene nửa chừng.
+- [ ] Review ý tưởng/kịch bản và kết quả prompt có vùng “Nội dung đăng TikTok” theo [SOURCE §7.4](../SOURCE_PLAN.md#74-tạo-ý-tưởngprompt-kèm-nội-dung-đăng-tiktok--p0): caption/hashtag, Sửa/Lưu/Áp dụng, Sao chép bài đăng và xuất TXT. Chọn ý tưởng đổi đúng candidate; bài đăng hiện hành thuộc project, sửa prompt scene chỉ đề xuất cập nhật. Thiếu nội dung hoặc bản cũ cần review phải hiện rõ, giữ draft khi chuyển trang/theme và xử lý conflict.
 - [ ] Step CTA thể hiện input/provider/account còn thiếu và dẫn tới đúng ô/Settings/login; không enqueue khi thiếu điều kiện.
 - [ ] Chọn scenes rõ cho batch, preview provider/root snapshot trước chạy nếu có thay đổi cần người dùng hiểu.
 - [ ] Tách prompt xem trước/kết quả khỏi prompt đã áp; dùng nút Áp dụng có conflict handling, không tự ghi đè draft.

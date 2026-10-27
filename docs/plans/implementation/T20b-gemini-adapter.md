@@ -1,5 +1,7 @@
 # Adapter Gemini Web cho kịch bản, ảnh và video prompt
 
+> **Delta hiện hành:** [plan queue/Settings 1.2](../QUEUE_EXECUTION_SETTINGS_PLAN.md) thay popup Settings, nhóm account shared/private, connect tại Workspace và round-robin Workspace. Dùng [TASKS](../../agents/TASKS.md) cho trạng thái/gate; Baseline/checkbox dưới không là evidence đã chạy.
+
 - Task gốc: **T20 (Gemini)** · Ưu tiên: **P0 / G3**.
 - Điều kiện mở: T19 DONE; capability tương ứng đủ bằng chứng hoặc manual.
 - Baseline 2026-10-26: Chưa có Gemini Web adapter; chưa có evidence automation.
@@ -22,6 +24,7 @@ Gemini nhận các task Script/Image/VideoPrompt theo Settings, giữ snapshot v
 - [ ] Validate task/input theo Gemini capability thật, kể cả ảnh tham chiếu nếu task hỗ trợ.
 - [ ] Gọi submit-intent boundary trước hành động gửi và persist result/conversation reference.
 - [ ] Nhận text/ảnh đủ hoàn chỉnh, validate typed output rồi finalize qua services chung; root/provider snapshot không đổi.
+- [ ] Text tạo ý tưởng/kịch bản và tạo/tối ưu prompt phải kèm `tiktokPost` theo [SOURCE §7.4](../SOURCE_PLAN.md#74-tạo-ý-tưởngprompt-kèm-nội-dung-đăng-tiktok--p0); dùng schema version được coordinator duyệt, không mở thêm job chỉ để viết caption. Fixture gồm output đủ bài đăng, thiếu caption/hashtag và job schema cũ; không finalize output mới thiếu trường bắt buộc.
 - [ ] Phân loại login/quota/network/UI changed/automation_blocked; login hiện đúng profile sau user CTA, còn lại manual trong app.
 - [ ] Reconcile/result download thử lại không gửi lại generation; job uncertain giữ AwaitingUser.
 - [ ] Đăng ký Gemini stable key/routing từ Settings, account/profile từ ExecutionBinding T15 của pool global; không pin Workspace hoặc tự chọn lại account. Nhiều kênh dùng cùng Gemini giữ conversation sạch; close context chỉ khi toàn profile idle.

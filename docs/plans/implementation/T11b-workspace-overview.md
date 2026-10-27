@@ -1,5 +1,7 @@
 # Tổng quan Workspace và dữ liệu tiến độ
 
+> **Delta hiện hành:** [plan queue/Settings 1.2](../QUEUE_EXECUTION_SETTINGS_PLAN.md) thay popup Settings, nhóm account shared/private, connect tại Workspace và round-robin Workspace. Dùng [TASKS](../../agents/TASKS.md) cho trạng thái/gate; Baseline/checkbox dưới không là evidence đã chạy.
+
 - Task gốc: **T11 (Overview)** · Ưu tiên: **P0 / G2**.
 - Điều kiện mở: T07,T08 DONE; KPI jobs nối T15–T17 khi hoàn tất.
 - Baseline 2026-10-26: Route overview mới là khung; chưa có read model tổng quan.

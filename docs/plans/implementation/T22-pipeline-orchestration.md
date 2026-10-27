@@ -1,5 +1,15 @@
 # Pipeline nội dung từ brief tới thư viện
 
+> **Tối ưu đã chốt:** [Plan sản xuất từ ảnh §3–4](../PRODUCT_IMAGE_VIDEO_WORKFLOW_PLAN.md) dùng đầu vào chung cấp project, lập cảnh có mục đích, tái sử dụng ảnh nền tảng và chỉ tạo biến thể cần thiết. Cảnh đủ input chạy tiếp ngay qua queue chung; sửa/tạo lại chỉ tác động phần phụ thuộc. UI chính là Chuẩn bị → Đang chạy → Kết quả, chi tiết ảnh/prompt mở khi cần. Đây là yêu cầu triển khai, chưa phải evidence đã hỗ trợ.
+
+
+> **Đã chốt 2026-10-27:** [Luồng sản xuất từ ảnh](../PRODUCT_IMAGE_VIDEO_WORKFLOW_PLAN.md) tự chạy sau một lần Bắt đầu: lập nhiều cảnh theo prompt → ảnh → prompt chuyển động → video, không bắt duyệt trung gian. Audio tùy chọn; mẫu và sản phẩm dùng lại trong thư viện Workspace. Trong mode này, tự áp output hợp lệ bằng revision guard; yêu cầu audio bắt buộc/duyệt từng bước bên dưới là baseline cũ đã được thay trong phạm vi này. Contract/version/validator/adapter còn phải triển khai đồng bộ; chưa là evidence code hỗ trợ. Lỗi, capability không tương thích, login, xung đột hoặc uncertainty vẫn dừng đúng policy.
+
+
+> Delta 2026-10-27: [hai luồng AI web](../AI_WEB_CONTENT_CREATION_PLAN.md) bổ sung đầu vào từ brief người dùng hoặc ý tưởng AI đề xuất dựa trên analytics. Chọn/duyệt ý tưởng trước khi tạo script; analytics P1 không chặn luồng brief. Contract mới do coordinator chốt trước code phụ thuộc.
+
+> **Delta hiện hành:** [plan queue/Settings 1.2](../QUEUE_EXECUTION_SETTINGS_PLAN.md) thay popup Settings, nhóm account shared/private, connect tại Workspace và round-robin Workspace. Dùng [TASKS](../../agents/TASKS.md) cho trạng thái/gate; Baseline/checkbox dưới không là evidence đã chạy.
+
 - Task gốc: **T22** · Ưu tiên: **P0 / G3**.
 - Điều kiện mở: T12,T17,T20,T21 DONE; workflow version T18d sẵn sàng.
 - Baseline 2026-10-26: Chưa có orchestration; Job hiện bắt buộc SceneId nên chưa hỗ trợ script cấp project.
@@ -18,10 +28,12 @@ Brief→script review/scenes→ảnh→video prompt chỉnh được→audio ng�
 ## Các bước triển khai
 
 - [ ] Lưu project brief/revision, tạo run giữ brief/workflow snapshot; validate Script payload theo v1.1 §4 (scene key/order/name/description/target duration/imagePrompt). Video prompt là bước riêng; output AI là dữ liệu không đáng tin.
+- [ ] Mở rộng text result theo [SOURCE §7.4](../SOURCE_PLAN.md#74-tạo-ý-tưởngprompt-kèm-nội-dung-đăng-tiktok--p0): ý tưởng/kịch bản và prompt trả kèm bài đăng, mỗi phương án gắn đúng nội dung. Lưu candidate trong JobResult/run và bản đã áp cấp project; không tạo bài đăng riêng cho mỗi scene hoặc thêm step/provider. Coordinator chốt schema version, snapshot ngữ cảnh project và lệnh lưu/apply/copy/export trước adapter/UI phụ thuộc.
+- [ ] Apply bài đăng kiểm ownership và expected project revision, idempotent; prompt per-scene còn kiểm scene revision. Cho giữ bản bài đăng đã sửa, đánh dấu cần review khi nội dung nguồn đổi; output stale vào lịch sử. Test thiếu trường, nhiều ý tưởng/scene, manual, restart và schema cũ theo §7.4.
 - [ ] Tạo run chốt workflow version; enqueue Script cấp project theo delta đã duyệt, user review scene drafts rồi apply trong transaction.
 - [ ] Lập kế hoạch per-scene bằng prerequisites, không auto chạy bước user phải review; batch chọn scene trả lỗi thiếu input theo từng scene.
 - [ ] Resolve ba provider từ Settings, VideoRender provider=museai pool global; enqueue chốt input/provider/config/root snapshot, T15 reserve mới chọn account/profile rảnh và tạo ExecutionBinding. Không account/TikTok mapping hoặc fallback provider.
-- [ ] Video chỉ đủ selected image+saved video prompt+scene audio; MVP không project audio fallback. Ảnh/prompt nhập tay vẫn hợp lệ nếu đúng scope/type, không buộc sinh AI.
+- [ ] Video đủ selected image+saved video prompt, scene audio tùy chọn theo capability; MVP không project audio fallback. Ảnh/prompt nhập tay vẫn hợp lệ nếu đúng scope/type, không buộc sinh AI.
 - [ ] Apply output kiểm scene revision; stale output vào lịch sử/chờ áp dụng, không ghi đè user đang chỉnh.
 - [ ] Persist step→job/output IDs để restart tiếp tục từ bước thiếu; không enqueue trùng step khi event lặp.
 - [ ] Success sau finalize thật; storage failure tiếp tục save result cũ, không chạy lại AI. Text output có boundary riêng đã chốt.

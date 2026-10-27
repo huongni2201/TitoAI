@@ -136,14 +136,66 @@ public sealed class JobSnapshotFactory
             throw new JobValidationException("Tác vụ yêu cầu phải có 'promptTemplateId' hoặc 'customPromptText'.", nameof(request.CustomPromptText));
         }
 
-        // 5. Đóng gói Config Snapshot JSON
+        // 5. Đóng gói Config Snapshot JSON (bất biến bao gồm ConfigVersion, WorkflowVersion và MediaSnapshot PV-R6)
+        JobMediaSnapshotDto? resolvedMediaSnapshot = request.MediaSnapshot;
+        if (request.MediaSnapshot != null && _dbOptions != null)
+        {
+            await using var dbContext = new TiToAIDbContext(_dbOptions);
+            var assetIds = new List<string>();
+            if (!string.IsNullOrWhiteSpace(request.MediaSnapshot.ModelAssetId)) assetIds.Add(request.MediaSnapshot.ModelAssetId);
+            if (!string.IsNullOrWhiteSpace(request.MediaSnapshot.ProductAssetId)) assetIds.Add(request.MediaSnapshot.ProductAssetId);
+            if (!string.IsNullOrWhiteSpace(request.MediaSnapshot.ReadyImageAssetId)) assetIds.Add(request.MediaSnapshot.ReadyImageAssetId);
+            if (!string.IsNullOrWhiteSpace(request.MediaSnapshot.SourceImageAssetId)) assetIds.Add(request.MediaSnapshot.SourceImageAssetId);
+            if (!string.IsNullOrWhiteSpace(request.MediaSnapshot.AudioAssetId)) assetIds.Add(request.MediaSnapshot.AudioAssetId);
+
+            if (assetIds.Count > 0)
+            {
+                var assets = await dbContext.Assets
+                    .AsNoTracking()
+                    .Where(a => assetIds.Contains(a.Id))
+                    .ToDictionaryAsync(a => a.Id, cancellationToken).ConfigureAwait(false);
+
+                foreach (var aId in assetIds)
+                {
+                    if (!assets.TryGetValue(aId, out var assetEntity))
+                    {
+                        throw new JobValidationException($"Không tìm thấy tệp tài nguyên '{aId}' được yêu cầu trong MediaSnapshot.", nameof(request.MediaSnapshot));
+                    }
+                    if (assetEntity.WorkspaceId != request.WorkspaceId)
+                    {
+                        throw new UnauthorizedAccessException($"Tài nguyên '{aId}' không thuộc Không gian làm việc '{request.WorkspaceId}'.");
+                    }
+                }
+
+                string? modelHash = request.MediaSnapshot.ModelAssetHash ?? (request.MediaSnapshot.ModelAssetId != null && assets.TryGetValue(request.MediaSnapshot.ModelAssetId, out var ma) ? ma.Sha256Hash : null);
+                string? prodHash = request.MediaSnapshot.ProductAssetHash ?? (request.MediaSnapshot.ProductAssetId != null && assets.TryGetValue(request.MediaSnapshot.ProductAssetId, out var pa) ? pa.Sha256Hash : null);
+                string? readyHash = request.MediaSnapshot.ReadyImageAssetHash ?? (request.MediaSnapshot.ReadyImageAssetId != null && assets.TryGetValue(request.MediaSnapshot.ReadyImageAssetId, out var ra) ? ra.Sha256Hash : null);
+                string? sourceHash = request.MediaSnapshot.SourceImageAssetHash ?? (request.MediaSnapshot.SourceImageAssetId != null && assets.TryGetValue(request.MediaSnapshot.SourceImageAssetId, out var sa) ? sa.Sha256Hash : null);
+                string? audioHash = request.MediaSnapshot.AudioAssetHash ?? (request.MediaSnapshot.AudioAssetId != null && assets.TryGetValue(request.MediaSnapshot.AudioAssetId, out var aa) ? aa.Sha256Hash : null);
+
+                resolvedMediaSnapshot = request.MediaSnapshot with
+                {
+                    ModelAssetHash = modelHash,
+                    ProductAssetHash = prodHash,
+                    ReadyImageAssetHash = readyHash,
+                    SourceImageAssetHash = sourceHash,
+                    AudioAssetHash = audioHash
+                };
+            }
+        }
+
         var configSnapshot = new
         {
+            ConfigVersion = 1,
+            WorkflowVersion = 1,
             TimeoutSeconds = 60,
             MaxAttempts = 3,
             LeaseDurationSeconds = 45,
             HeartbeatIntervalSeconds = 15,
-            CapturedAtUtc = DateTimeOffset.UtcNow.ToString("o")
+            CapturedAtUtc = DateTimeOffset.UtcNow.ToString("o"),
+            WorkflowRunId = request.WorkflowRunId,
+            WorkflowStepKey = request.WorkflowStepKey,
+            MediaSnapshot = resolvedMediaSnapshot
         };
         string configSnapshotJson = JsonSerializer.Serialize(configSnapshot, JsonOptions);
 

@@ -1,10 +1,17 @@
 # TiToAI — giao diện tham khảo và browser chạy ẩn
 
-**Phiên bản:** 1.0 — ngày 2026-10-26 (UTC+07).  
+> **Đã chốt 2026-10-27:** [Luồng sản xuất từ ảnh](PRODUCT_IMAGE_VIDEO_WORKFLOW_PLAN.md) tự chạy sau một lần Bắt đầu: lập nhiều cảnh theo prompt → ảnh → prompt chuyển động → video, không bắt duyệt trung gian. Audio tùy chọn; mẫu và sản phẩm dùng lại trong thư viện Workspace. Trong mode này, tự áp output hợp lệ bằng revision guard; yêu cầu audio bắt buộc/duyệt từng bước bên dưới là baseline cũ đã được thay trong phạm vi này. Contract/version/validator/adapter còn phải triển khai đồng bộ; chưa là evidence code hỗ trợ. Lỗi, capability không tương thích, login, xung đột hoặc uncertainty vẫn dừng đúng policy.
+
+
+> **Delta 2026-10-27 — sản xuất từ ảnh:** [Plan ảnh mẫu/sản phẩm → ảnh đã duyệt → prompt chuyển động → video](PRODUCT_IMAGE_VIDEO_WORKFLOW_PLAN.md) thay bố cục Project/Scene dạng bảng làm luồng chính và bổ sung ba chế độ đầu vào. Luồng ảnh đi thẳng, không bắt tạo kịch bản trước; audio tùy chọn và tự động chạy theo quyết định mới. Đây là spec bàn giao, chưa nghiệm thu code.
+
+**Phiên bản:** 1.2 — ngày 2026-10-26 (UTC+07).  
 **Ưu tiên:** UI sản xuất và browser chạy ẩn là P0; analytics/affiliate giữ P1.  
 **Trạng thái:** spec hiện hành; quyền triển khai có điều kiện và checkpoint theo [STATUS](../agents/STATUS.md). Xem [plan triển khai từng tính năng](implementation/README.md).
 
 Đọc cùng [plan nguồn](SOURCE_PLAN.md) và [plan sáng/tối](UI_THEME_PLAN.md). Tài liệu này bổ sung/thay thế các quyết định về bố cục UI, khả năng hiển thị browser, manual handoff và nghiệm thu liên quan tại SOURCE_PLAN §1, §3, §7–9, §11–12 và DoD. Các quyết định nghiệp vụ và stack khác giữ theo plan hiện hành.
+
+> **Delta hiện hành:** [queue/Settings 1.2](QUEUE_EXECUTION_SETTINGS_PLAN.md) thay popup, trang account riêng và cách phân nhóm account theo Workspace. Evidence baseline không nghiệm thu thay đổi mới.
 
 ## 1. Nguồn tham khảo và thứ tự ưu tiên
 
@@ -15,11 +22,12 @@
 - Nhãn AI Content Studio trong ảnh được thay bằng **TiToAI**. Avatar, tên kênh, số liệu, tỷ lệ tăng trưởng, quota và trạng thái trong ảnh chỉ minh họa; ứng dụng dùng dữ liệu thật hoặc trạng thái trống rõ ràng.
 - Yêu cầu trực tiếp mới nhất > plan bổ sung này trong phạm vi UI/browser > plan nguồn. Theme vẫn theo UI_THEME_PLAN: Light/Dark/System, mặc định System. Ảnh tối không thay mặc định thành Dark.
 - Không suy ra các chức năng như tự đăng TikTok, tạo giọng đọc hay catalog affiliate chỉ từ nút/nhãn trong ảnh. Mọi chức năng cần nằm trong phạm vi plan và capability đã xác minh.
+- Yêu cầu P0 bổ sung: review ý tưởng/kịch bản và kết quả prompt có vùng “Nội dung đăng TikTok” để sửa, lưu, áp dụng, sao chép hoặc xuất caption/hashtag theo [SOURCE §7.4](SOURCE_PLAN.md#74-tạo-ý-tưởngprompt-kèm-nội-dung-đăng-tiktok--p0). Bài đăng thuộc project; đây là nội dung để người dùng tự đăng.
 
 ## 2. App shell và điều hướng P0
 
 - Cửa sổ desktop gồm sidebar trái cố định, thanh ngữ cảnh trên và vùng nội dung chính. Giữ nền navy tối, surface phân lớp nhẹ, đường viền mảnh, bo góc vừa, accent tím và thumbnail nổi bật như ảnh.
-- Sidebar: **Tổng quan**, **Workspaces**, **Dự án**, **Trình duyệt AI**, **Thư viện**, **Cài đặt**. Cài đặt mở popup theo `SETTINGS_PLAN.md` (Lưu trữ, AI & Prompt, Giao diện). **TikTok Analytics** và **Affiliate** xuất hiện khi tính năng P1 khả dụng; không đặt nút dẫn tới trang trống không giải thích.
+- Sidebar: **Tổng quan**, **Workspaces**, **Dự án**, **Thư viện**, **Cài đặt**. Cài đặt mở trang bốn tab ngang: Tài khoản, Lưu trữ, AI & Prompt, Giao diện; quản lý browser/login nằm trong tab Tài khoản. **TikTok Analytics** và **Affiliate** xuất hiện khi tính năng P1 khả dụng; không đặt nút dẫn tới trang trống không giải thích.
 - Tổng quan toàn app chỉ tổng hợp dữ liệu hiện có: Workspace, job đang chạy/chờ người dùng và dự án gần đây. Tổng quan Workspace chỉ hiển thị một kênh. Phân biệt rõ hai ngữ cảnh.
 - Thanh trên có breadcrumb, Workspace hiện tại và tìm kiếm đúng phạm vi trang. Trạng thái job cần người dùng xuất hiện trong trung tâm tác vụ; không tạo biểu tượng thông báo/avatar tài khoản app không có chức năng.
 - Sidebar cuối trang hiển thị dung lượng local thực tế nếu đọc được. Không dùng quota cloud giả như `120 GB / 1 TB` trong ảnh; lỗi đọc hiển thị “Chưa xác định”.
@@ -33,13 +41,13 @@
 
 - Header “Danh sách Workspace”, mô tả ngắn một Workspace tương ứng một kênh TikTok; CTA “Tạo Workspace”.
 - Tìm theo tên/kênh, lọc Tất cả/Đang hoạt động/Tạm dừng, sắp xếp cập nhật gần đây hoặc tên. Tạm dừng Workspace là ngừng dispatch job mới của kênh; không tự hủy job đã gửi provider. T02 chốt hành vi này với scheduler.
-- Card gồm ảnh đại diện, tên, handle nếu có, chủ đề, trạng thái kênh, số dự án và liên kết TikTok. AI/MuseAI dùng pool toàn app; không hiển thị Thiếu liên kết MuseAI theo từng kênh. “Đã liên kết TikTok” khác “Phiên còn hiệu lực”.
-- CTA “Mở Workspace”, menu chỉnh sửa/liên kết/tạm dừng/xóa. Lưới khoảng ba cột ở vùng nội dung rộng; co xuống hai/một cột khi hẹp, giữ nút chính đọc được.
+- Card gồm ảnh đại diện, tên, handle nếu có, chủ đề, trạng thái kênh, số dự án và liên kết TikTok. AI thực thi qua queue độc lập; account không gắn với Workspace. “Đã liên kết TikTok” khác “Phiên còn hiệu lực”.
+- CTA “Mở Workspace”, menu chỉnh sửa/tạm dừng/xóa. Lưới khoảng ba cột ở vùng nội dung rộng; co xuống hai/một cột khi hẹp, giữ nút chính đọc được.
 - Empty state dẫn tới tạo Workspace; lỗi tải có thử lại; lần đầu chưa liên kết vẫn tạo dự án được và có hướng dẫn cho bước cần account.
 
 ### 3.2. Tổng quan Workspace — P0; chỉ số TikTok P1
 
-- Header có ảnh, tên kênh, mô tả và trạng thái; thao tác chỉnh sửa/liên kết account. Không đồng nhất “Mở TikTok” với mở browser tự động: mặc định xem thông tin account trong app, luồng đăng nhập theo §6.
+- Header có ảnh, tên kênh, mô tả và trạng thái; thao tác chỉnh sửa và lối đến Cài đặt khi cần quản lý tài khoản. Không đồng nhất “Mở TikTok” với mở browser tự động: mặc định xem thông tin account trong app, luồng đăng nhập theo §6.
 - KPI P0: số dự án, số cảnh, job đang chạy, job cần người dùng. Khi P1 có nguồn thật, bổ sung lượt xem/like/video/affiliate theo nguồn và khoảng thời gian; dữ liệu thiếu hiển thị “Chưa có dữ liệu”.
 - Nội dung dưới chia dự án hiện tại/gần đây bên trái và pipeline bên phải; “Tiếp tục làm việc” mở đúng cảnh/bước đang dở.
 - Pipeline hiển thị Kịch bản → Ảnh → Prompt video → Audio đầu vào → Video → Thư viện. Audio là tệp người dùng nhập; không tạo TTS/Audio Worker. “Đăng TikTok” trong ảnh không thuộc P0.
@@ -58,22 +66,21 @@
 - Header breadcrumb, tên cảnh, vị trí cảnh hiện tại, trước/sau và CTA “Tạo video”. Nếu thiếu input, CTA có giải thích và dẫn tới ô cần bổ sung.
 - Bố cục hai cột như ảnh: trái là thông tin cảnh và prompt editor; phải là ảnh tham chiếu, audio và preview/kết quả. Khi hẹp xếp dọc, giữ thứ tự nhập → kiểm tra → chạy.
 - Tên, mô tả, thời lượng mục tiêu; phân biệt mục tiêu với thời lượng media thực tế. Prompt có mục đích rõ: tạo ảnh hoặc chuyển động/video, template/version/biến, preview bản render và chỉnh sửa.
-- Provider theo capability thật cho từng loại job; ảnh/kịch bản/video prompt dùng lựa chọn từ popup Cài đặt theo `SETTINGS_PLAN.md`. Editor hiển thị provider hiệu lực và lối mở nhóm AI & Prompt để đổi cho job mới, không giữ một lựa chọn ngầm khác. Không coi MuseAI là provider sinh prompt chỉ vì tab trong ảnh; lựa chọn không hỗ trợ có lý do rõ.
+- Provider theo capability thật cho từng loại job; ảnh/kịch bản/video prompt dùng lựa chọn từ trang Cài đặt theo `SETTINGS_PLAN.md`. Editor hiển thị provider hiệu lực và lối mở nhóm AI & Prompt để đổi cho job mới, không giữ một lựa chọn ngầm khác. Không coi MuseAI là provider sinh prompt chỉ vì tab trong ảnh; lựa chọn không hỗ trợ có lý do rõ.
 - “Tối ưu prompt”/“Thử prompt” nếu khả dụng sẽ enqueue job chạy ẩn, hiển thị tiến trình/kết quả trong app. Kết quả tối ưu được xem và áp dụng, không tự ghi đè bản người dùng đang sửa.
 - Ảnh hỗ trợ thêm/chọn từ library, xem lớn, bỏ chọn/thay ảnh. Phân biệt ảnh tham chiếu, ảnh đã tạo và ảnh được chọn làm input video.
 - Audio chỉ import MP3/WAV nguyên bản; có tên tệp, thông tin đọc được, nghe thử, thay/bỏ liên kết. Không sinh giọng đọc, trộn hoặc cắt audio. Không giả định thời lượng audio bằng thời lượng mục tiêu.
 - Lưu nháp có trạng thái rõ; cảnh báo khi rời form chưa lưu. Job dùng snapshot đã lưu lúc enqueue; sửa scene sau đó không thay input của job đang chạy.
 - Kết quả ảnh/prompt/video, retry/cancel và lỗi hiển thị ngay theo scene. Retry phải tuân thủ reconcile, không gửi trùng yêu cầu đã có thể được provider nhận.
 
-### 3.5. Quản lý trình duyệt — P0
+### 3.5. Tài khoản và browser trong Cài đặt — P0
 
-- Nhóm ChatGPT/Gemini/MuseAI là pool tài khoản **Dùng chung toàn ứng dụng**; mỗi account một card/profile/cookie/session riêng, có slot rảnh/bận/capacity. TikTok vẫn theo Workspace. Không chia account AI theo kênh.
-- Thêm tài khoản AI → chọn provider/nhập nhãn → tạo profile Chưa xác minh → Đăng nhập → Kiểm tra identity/session → Bật nhận job. Không hỏi Workspace và không có bước link MuseAI với TikTok. Identity trùng/sai provider bị chặn theo [v1.1 §1](../decisions/execution-contract-v1.1.md).
-- Hiển thị pool capacity, maxTabs/maxConcurrentJobs/perTaskLimits và account enabled/quota/login; job chưa bind ghi Chờ slot, job đã bind hiển thị đúng account. UI cho tắt nhận job mới, không kill job đã chạy hoặc đổi binding.
-- Card AI có provider/account và nhãn Dùng chung toàn ứng dụng; card TikTok có Workspace. Hiển thị session, jobs/tabs/slots và **Đang chạy ẩn / Cần đăng nhập / Đang đăng nhập / Đang đóng / Đã dừng**; Đang đóng ánh xạ phase Closing, không giả Stopped trước close. Chưa probe hiển thị Chưa xác minh.
-- CTA profile là Đăng nhập/Đăng nhập lại/Kiểm tra phiên/Bật hoặc tắt nhận job mới; CTA job Tiếp tục/Đối soát/Hủy theo state. Không có nút Dừng kill browser bận hoặc Mở chung cho job/preview; xem chi tiết trong app.
-- “Thêm trình duyệt” được diễn đạt thành thêm/liên kết profile hoặc điều chỉnh tab pool theo loại; dùng đúng account và capability. Không hứa thêm browser sẽ tăng quota.
-- Login đang mở có banner cho biết profile, Workspace bị ảnh hưởng và các job đang chờ; user tự nhập mọi thông tin trên website. Trạng thái nền vẫn quan sát được trong app mà không cần xem browser.
+- Một danh sách tài khoản trong **Cài đặt → Tài khoản**; tìm/lọc provider hoặc trạng thái, không nhóm AI dùng chung/riêng hay theo Workspace. Mỗi card có provider, identity/session, enabled, capacity và trạng thái runtime thật.
+- Mọi thêm account/login/probe/enable/disable/capacity và liên kết kênh đi qua trang này. Account AI không hỏi Workspace. Job detail có thể dẫn đến đúng account cần login tại Settings.
+- Dispatcher lấy tài khoản đúng provider từ queue chung theo [plan 1.2](QUEUE_EXECUTION_SETTINGS_PLAN.md); Workspace chỉ là dữ liệu nguồn/đích. Card không gán account AI cho kênh.
+- Một login visible toàn app, quiesce đúng profile; chỉ hiện browser sau CTA login. Không có nút mở browser chung hoặc kill browser còn tác vụ.
+- Trạng thái account và job là hai đối tượng khác nhau; Hidden không chứng minh Stopped, Closing chưa phải đã đóng. Uncertain giữ reference/checkpoint; không tự nhả và resend.
+- TikTok nếu cần liên kết kênh thì quản lý trong cùng tab; việc định danh kênh không tạo queue hoặc mapping tài khoản AI. DTO/commands/lifecycle phải hoạt động thật, không chỉ seed DB trong smoke tests.
 
 ### 3.6. TikTok Analytics & Affiliate — P1
 
@@ -113,7 +120,7 @@
 - “Ẩn” là hành vi người dùng quan sát được, không đồng nghĩa chỉ thu nhỏ cửa sổ. Phương án kỹ thuật (headless hoặc cơ chế chạy ẩn được hỗ trợ) phải chứng minh không ló cửa sổ/giành focus trên Windows. Không mặc định đổi cờ launch là có thể hiện/ẩn phiên đang chạy.
 - Không có tùy chọn production “Luôn hiện browser khi chạy job”. Khi adapter không đáp ứng chạy ẩn, tắt automation cho capability đó và báo giới hạn; không âm thầm chuyển sang visible.
 - Session được lưu trong profile TiToAI đúng loại/account theo quyền dịch vụ. Login không đọc profile browser cá nhân; cookie/token không đưa vào UI/log/Git. Không tự điền/lưu mật khẩu trong form của app.
-- Hạn chế tự bật nhiều cửa sổ login: thông báo trong app và mở đúng profile khi user chọn “Đăng nhập”; tại một thời điểm chỉ một luồng login visible do app quản lý. Các yêu cầu khác chờ, không tạo hàng loạt popup.
+- Hạn chế tự bật nhiều cửa sổ login: thông báo trong app và chỉ mở khi user chủ động chọn “Đăng nhập”. Cho phép người dùng mở đồng thời nhiều profile độc lập; mỗi profile chỉ có 1 owner, không mở trùng khi bấm nhiều lần và tuân thủ ngân sách tài nguyên max_open_browsers.
 - Browser AI mở ẩn khi job lấy slot; xong nhận/lưu kết quả thì đóng nếu toàn profile idle, giữ userDataDir/session. Nhả slot/wake queue sau close/release owner; tab khác còn bận thì chỉ nhả tab, không đóng context. Full pool hiển thị Chờ slot. Uncertain/checkpoint chưa an toàn không bị idle-close. Chi tiết [v1.1 §1.3/§3](../decisions/execution-contract-v1.1.md).
 
 ## 6. Luồng login, tiếp tục và manual handoff
@@ -152,7 +159,7 @@
 2. Hoàn thành luồng tạo Workspace → dự án/cảnh → chỉnh prompt → chọn ảnh/audio → enqueue → nhận kết quả; không cần nhìn browser khi session còn hiệu lực. Thiếu input có chỉ dẫn cụ thể; job kết thúc cập nhật đúng scene.
 3. Test phiên hợp lệ cho prompt/ảnh/video: khởi chạy, xử lý, tải kết quả và lỗi không ló cửa sổ provider, không giành focus. Ghi build/Windows/DPI/provider và quan sát màn hình thật; fake không thay bằng chứng này.
 4. Test mất session giữa job: chờ đúng reason, chọn login hiện đúng profile để nhập tay, xác minh account, về ẩn trước resume; không rò dữ liệu giữa Workspace.
-5. Test user đóng login, login thất bại, sai account, hai profile cùng cần login: không lặp popup, không false success, không hai owner/profile; một cửa sổ login visible tại một thời điểm.
+5. Test user đóng login, login thất bại, sai account, hai profile cùng cần login: không lặp popup, không false success, không hai owner/profile; hai profile độc lập mở cửa sổ đồng thời trơn tru; ngân sách tài nguyên được thực thi đúng.
 6. Test shared AI nhiều tab và job đã submit lúc cần login: không mất checkpoint, không nhân đôi request/asset, không chuyển chế độ khi profile chưa nhường an toàn. Restart/crash trong handoff được phục hồi/reconcile đúng.
    Phạm vi shared ở đây là từng provider riêng: Gemini login không dừng ChatGPT; MuseAI A login không dừng B. Profile legacy không dispatch, vẫn giữ lịch sử theo v1.1 §2.
 7. CAPTCHA ngoài login/UI đổi/không hỗ trợ chạy ẩn: chờ/hướng dẫn manual trong app, không tự mở browser hoặc vượt bảo vệ, kết quả import kiểm tra đúng Workspace/scene.

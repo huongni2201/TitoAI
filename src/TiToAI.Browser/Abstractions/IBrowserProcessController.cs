@@ -44,6 +44,23 @@ public interface IBrowserProcessController : IAsyncDisposable, IDisposable
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Khởi chạy persistent context của Chromium cho profile được chỉ định và điều hướng tới initialUrl (nếu có).
+    /// </summary>
+    Task<IBrowserContextHandle> LaunchPersistentContextAsync(
+        string profileId,
+        bool isHeadless,
+        string? initialUrl,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Điều hướng cửa sổ trình duyệt đang hoạt động của profileId tới URL chỉ định.
+    /// </summary>
+    Task NavigateAsync(
+        string profileId,
+        string url,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Đóng persistent context của profile và giải phóng single-instance lock an toàn.
     /// </summary>
     Task CloseContextAsync(
@@ -54,4 +71,20 @@ public interface IBrowserProcessController : IAsyncDisposable, IDisposable
     /// Kiểm tra xem profileId hiện có đang chạy tiến trình Playwright persistent context hay không.
     /// </summary>
     bool IsRunning(string profileId);
+
+    /// <summary>
+    /// Lấy ngữ cảnh trình duyệt Playwright đang hoạt động của profileId (nếu đang chạy).
+    /// Trả về null nếu profile không có tiến trình đang hoạt động.
+    /// </summary>
+    IBrowserContextHandle? TryGetContext(string profileId);
+
+    /// <summary>
+    /// Khởi động ngầm runtime automation (Playwright process driver) để tối ưu hóa thời gian mở trình duyệt (loại bỏ cold start).
+    /// </summary>
+    Task PrewarmAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Sự kiện phát ra khi một persistent context của profile bị đóng (bởi người dùng nhấn X, tiến trình kết thúc hoặc đóng thủ công).
+    /// </summary>
+    event EventHandler<string>? ContextClosed;
 }

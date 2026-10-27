@@ -88,6 +88,7 @@ public class JobConfiguration : IEntityTypeConfiguration<Job>
             .HasColumnName("fencing_token")
             .HasColumnType("INTEGER")
             .HasDefaultValue(0L)
+            .IsConcurrencyToken()
             .IsRequired();
 
         builder.Property(j => j.LeaseExpiresAtUtc)

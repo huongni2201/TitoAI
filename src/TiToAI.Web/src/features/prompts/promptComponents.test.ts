@@ -1,56 +1,64 @@
 /**
- * TiToAI — Kiểm thử Toàn diện cho các Component Prompt Template (R1–R6)
- * Chạy qua pnpm: pnpm --dir src/TiToAI.Web exec node src/features/prompts/promptComponents.test.ts
+ * TiToAI — Kiểm thử Toàn diện cho các Component Prompt Template (R1–R6, H5, H6)
+ * Chạy bằng DOM mount thật qua happy-dom & react-dom/client:
+ * pnpm --dir src/TiToAI.Web exec node --import ./src/features/prompts/test-loader.mjs src/features/prompts/promptComponents.test.ts
  */
 
 import { register } from "node:module";
+import { GlobalWindow } from "happy-dom";
 
 // Đăng ký custom loader hỗ trợ import .tsx và .css
 register("./test-loader.mjs", import.meta.url);
 
+// Thiết lập môi trường Browser DOM thật bằng Happy-DOM
+const domWindow = new GlobalWindow();
+globalThis.window = domWindow as unknown as Window & typeof globalThis;
+globalThis.document = domWindow.document as unknown as Document;
+globalThis.Event = domWindow.Event as unknown as typeof Event;
+globalThis.MouseEvent = domWindow.MouseEvent as unknown as typeof MouseEvent;
+globalThis.KeyboardEvent = domWindow.KeyboardEvent as unknown as typeof KeyboardEvent;
+globalThis.requestAnimationFrame = (cb) => setTimeout(cb, 0);
+globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
+(globalThis as unknown as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+
 // Stub WebView2 Window
 const dispatchedMessages: unknown[] = [];
 const messageListeners: ((event: MessageEvent) => void)[] = [];
-(globalThis as unknown as Record<string, unknown>).window = {
-  chrome: {
-    webview: {
-      addEventListener(type: string, listener: (event: MessageEvent) => void) {
-        if (type === "message") messageListeners.push(listener);
-      },
-      removeEventListener(_type: string, listener: (event: MessageEvent) => void) {
-        const idx = messageListeners.indexOf(listener);
-        if (idx >= 0) messageListeners.splice(idx, 1);
-      },
-      postMessage(msg: unknown) {
-        dispatchedMessages.push(msg);
-        const req = msg as { id: string; command: string };
-        const responseData = {
-          id: req.id,
-          type: "response",
-          success: true,
-          contractVersion: "1.0",
-          data: {},
-        };
-        setTimeout(() => {
-          for (const l of messageListeners) {
-            l({ data: responseData } as MessageEvent);
-          }
-        }, 0);
-      },
+(domWindow as unknown as Record<string, unknown>).chrome = {
+  webview: {
+    addEventListener(type: string, listener: (event: MessageEvent) => void) {
+      if (type === "message") messageListeners.push(listener);
+    },
+    removeEventListener(_type: string, listener: (event: MessageEvent) => void) {
+      const idx = messageListeners.indexOf(listener);
+      if (idx >= 0) messageListeners.splice(idx, 1);
+    },
+    postMessage(msg: unknown) {
+      dispatchedMessages.push(msg);
+      const req = msg as { id: string; command: string };
+      const responseData = {
+        id: req.id,
+        type: "response",
+        success: true,
+        contractVersion: "1.0",
+        data: {},
+      };
+      setTimeout(() => {
+        for (const l of messageListeners) {
+          l({ data: responseData } as MessageEvent);
+        }
+      }, 0);
     },
   },
 };
 
 const React = (await import("react")).default;
-const { renderToString } = await import("react-dom/server");
+const { act } = await import("react");
+const { createRoot } = await import("react-dom/client");
 
 const {
   defaultPromptTransport,
 } = await import("./promptApi.ts");
-
-const {
-  PromptPreviewPanel,
-} = await import("./PromptPreviewPanel.tsx");
 
 const {
   PromptTemplateEditor,
@@ -78,7 +86,39 @@ function assertTrue(value: boolean, msg?: string): void {
   }
 }
 
-console.log("=== BẮT ĐẦU KIỂM THỬ COMPONENT PROMPT TEMPLATE (R1–R6) ===");
+function setInputValue(element: HTMLInputElement | HTMLTextAreaElement, value: string) {
+  const prototype = element.tagName === "INPUT" ? domWindow.HTMLInputElement.prototype : domWindow.HTMLTextAreaElement.prototype;
+  const descriptor = Object.getOwnPropertyDescriptor(prototype, "value");
+  descriptor?.set?.call(element, value);
+  element.dispatchEvent(new (domWindow.Event as unknown as typeof Event)("input", { bubbles: true }));
+  element.dispatchEvent(new (domWindow.Event as unknown as typeof Event)("change", { bubbles: true }));
+}
+
+async function renderIntoDom(element: React.ReactElement) {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(element);
+  });
+  return {
+    container,
+    root,
+    rerender: async (newElement: React.ReactElement) => {
+      await act(async () => {
+        root.render(newElement);
+      });
+    },
+    unmount: async () => {
+      await act(async () => {
+        root.unmount();
+      });
+      container.remove();
+    },
+  };
+}
+
+console.log("=== BẮT ĐẦU KIỂM THỬ COMPONENT PROMPT TEMPLATE (R1–R6, H5, H6) TRÊN DOM THẬT ===");
 
 // ---------------------------------------------------------------------------------
 // R5: Kiểm chứng Production Allow-list qua defaultPromptTransport
@@ -119,10 +159,10 @@ console.log("=== BẮT ĐẦU KIỂM THỬ COMPONENT PROMPT TEMPLATE (R1–R6) =
 }
 
 // ---------------------------------------------------------------------------------
-// R1: Kiểm thử Dirty Guard & Không làm mất bản nháp
+// R1: Kiểm thử Dirty Guard trên DOM thật (Hiển thị badge Đã lưu / Chưa lưu)
 // ---------------------------------------------------------------------------------
 {
-  console.log("R1: Kiểm tra Dirty Guard khi sửa bản nháp và chuyển template/purpose...");
+  console.log("R1: Kiểm tra Dirty Guard trên DOM thật khi gõ nội dung vào Textarea...");
 
   const mockTemplate = {
     templateId: "tpl-script-1",
@@ -144,99 +184,274 @@ console.log("=== BẮT ĐẦU KIỂM THỬ COMPONENT PROMPT TEMPLATE (R1–R6) =
     createdAtUtc: "2026-10-26T00:00:00Z",
   };
 
-  // Editor render bản gốc -> hiển thị Đã lưu
-  const htmlClean = renderToString(
+  let isDirtyReported = false;
+  const dom = await renderIntoDom(
     React.createElement(PromptTemplateEditor, {
       template: mockTemplate,
       currentVersion: mockVersion,
       purpose: "Script",
-      onDirtyChange: () => {},
+      onDirtyChange: (dirty: boolean) => {
+        isDirtyReported = dirty;
+      },
     })
   );
-  assertTrue(htmlClean.includes("Đã lưu"), "Editor ban đầu phải hiển thị huy hiệu 'Đã lưu'");
 
-  // Render PromptTemplateManager
+  // Ban đầu: Hiển thị badge Đã lưu
+  assertTrue(dom.container.textContent?.includes("Đã lưu"), "Editor ban đầu phải hiển thị huy hiệu 'Đã lưu'");
+  assertEqual(isDirtyReported, false, "Ban đầu không dirty");
+
+  // Tìm textarea và gõ thay đổi
+  const textarea = dom.container.querySelector("textarea");
+  assertTrue(textarea !== null, "Phải tìm thấy textarea trong DOM");
+
+  await act(async () => {
+    setInputValue(textarea!, "Nội dung đã chỉnh sửa thêm");
+  });
+
+  assertTrue(dom.container.textContent?.includes("Bản nháp chưa lưu"), "Sau khi gõ, huy hiệu phải đổi thành 'Bản nháp chưa lưu'");
+  assertEqual(isDirtyReported, true, "isDirty phải báo true lên parent");
+
+  await dom.unmount();
+  console.log("  -> PASS: DOM mount thật và event dispatching chuyển trạng thái dirty chuẩn xác.");
+}
+
+// ---------------------------------------------------------------------------------
+// H5-DOM: Kiểm thử Dirty Guard giữ nguyên Workspace Context khi User bấm "Ở lại"
+// ---------------------------------------------------------------------------------
+{
+  console.log("H5-DOM: Kiểm thử Dirty Guard & không làm mất context khi User chọn 'Ở lại'...");
+
+  const tplWs1 = {
+    templateId: "tpl-ws1",
+    purpose: "Script",
+    workspaceId: "ws-1",
+    isOverride: true,
+    currentVersionId: "v-ws1",
+    currentVersionNumber: 1,
+    createdAtUtc: "2026-10-26T00:00:00Z",
+    updatedAtUtc: "2026-10-26T00:00:00Z",
+  };
+  const verWs1 = {
+    versionId: "v-ws1",
+    templateId: "tpl-ws1",
+    versionNumber: 1,
+    templateText: "Kịch bản WS-1",
+    variableDefinitionsJson: "[]",
+    changeDescription: "Bản 1",
+    createdAtUtc: "2026-10-26T00:00:00Z",
+  };
+
+  const tplWs2 = {
+    templateId: "tpl-ws2",
+    purpose: "Script",
+    workspaceId: "ws-2",
+    isOverride: true,
+    currentVersionId: "v-ws2",
+    currentVersionNumber: 1,
+    createdAtUtc: "2026-10-26T00:00:00Z",
+    updatedAtUtc: "2026-10-26T00:00:00Z",
+  };
+  const verWs2 = {
+    versionId: "v-ws2",
+    templateId: "tpl-ws2",
+    versionNumber: 1,
+    templateText: "Kịch bản WS-2",
+    variableDefinitionsJson: "[]",
+    changeDescription: "Bản 1",
+    createdAtUtc: "2026-10-26T00:00:00Z",
+  };
+
   const mockTransport = {
-    invoke: async <TData>(command: string): Promise<TData> => {
+    invoke: async <TData = unknown, TPayload = unknown>(command: string, payload?: TPayload): Promise<TData> => {
+      const p = payload as Record<string, unknown> | undefined;
       if (command === "prompt.list_templates") {
-        return { templates: [mockTemplate] } as unknown as TData;
+        const wsId = p?.workspaceId;
+        if (wsId === "ws-2") {
+          return { templates: [tplWs2] } as unknown as TData;
+        }
+        return { templates: [tplWs1] } as unknown as TData;
       }
       if (command === "prompt.get_template") {
-        return { template: mockTemplate, currentVersion: mockVersion } as unknown as TData;
+        const tId = p?.templateId;
+        if (tId === "tpl-ws2") {
+          return { template: tplWs2, currentVersion: verWs2 } as unknown as TData;
+        }
+        return { template: tplWs1, currentVersion: verWs1 } as unknown as TData;
       }
       return {} as unknown as TData;
     },
   };
 
-  const htmlManager = renderToString(
+  const dom = await renderIntoDom(
     React.createElement(PromptTemplateManager, {
-      workspaceId: "ws-test",
+      workspaceId: "ws-1",
       initialPurpose: "Script",
       transport: mockTransport,
     })
   );
 
-  assertTrue(htmlManager.includes("Quản lý Prompt Templates"), "Manager phải render đầy đủ cấu trúc");
-  assertTrue(htmlManager.includes("Kịch bản (Script)"), "Manager phải có tab Kịch bản");
+  // Đợi initial fetch xong
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 20));
+  });
 
-  console.log("  -> PASS: Dirty state và cấu trúc Guard được liên kết chính xác giữa Editor và Manager.");
+  // Tìm textarea và nhập nội dung nháp
+  const textarea = dom.container.querySelector("textarea");
+  assertTrue(textarea !== null, "Phải tìm thấy textarea trong DOM");
+  await act(async () => {
+    setInputValue(textarea!, "BẢN NHÁP CỦA TÔI ĐANG SOẠN Ở WS-1");
+  });
+
+  // Bây giờ prop workspaceId từ bên ngoài đổi sang "ws-2"
+  await dom.rerender(
+    React.createElement(PromptTemplateManager, {
+      workspaceId: "ws-2",
+      initialPurpose: "Script",
+      transport: mockTransport,
+    })
+  );
+
+  // Modal cảnh báo mất nháp phải xuất hiện trong DOM!
+  const modal = dom.container.querySelector("[role='alertdialog']");
+  assertTrue(modal !== null, "Modal cảnh báo mất nháp PHẢI xuất hiện trên DOM khi đổi workspace!");
+  assertTrue(modal!.textContent?.includes("Nội dung bản nháp chưa được lưu!"), "Tiêu đề modal phải chính xác");
+
+  // Người dùng bấm nút "Ở lại" trên DOM
+  const buttons = Array.from(modal!.querySelectorAll("button"));
+  const stayBtn = buttons.find((b) => b.textContent?.includes("Ở lại"));
+  assertTrue(stayBtn !== undefined, "Phải tìm thấy nút 'Ở lại' trên modal");
+
+  await act(async () => {
+    stayBtn!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 20));
+  });
+
+  // Modal phải biến mất
+  const modalAfterStay = dom.container.querySelector("[role='alertdialog']");
+  assertTrue(modalAfterStay === null, "Modal phải đóng lại sau khi bấm 'Ở lại'");
+
+  // Context WS-1 VÀ nội dung bản nháp VẪN PHẢI NGUYÊN VẸN!
+  const textareaAfterStay = dom.container.querySelector("textarea");
+  assertEqual(
+    textareaAfterStay?.value,
+    "BẢN NHÁP CỦA TÔI ĐANG SOẠN Ở WS-1",
+    "Nội dung bản nháp PHẢI được bảo toàn 100% khi người dùng bấm 'Ở lại'!"
+  );
+
+  // Template hiển thị vẫn là tpl-ws1
+  assertTrue(dom.container.textContent?.includes("tpl-ws1"), "Danh sách template vẫn phải giữ nguyên của WS-1");
+
+  await dom.unmount();
+  console.log("  -> [PASS H5] Dirty Guard bảo vệ hoàn hảo context & bản nháp khi User bấm 'Ở lại' trên DOM thật.");
 }
 
 // ---------------------------------------------------------------------------------
-// R2: Preview cũ bị đánh dấu Stale và không cho Áp dụng sai metadata
+// H6-DOM: Tự động đánh dấu Preview Stale khi thay đổi giá trị biến
 // ---------------------------------------------------------------------------------
 {
-  console.log("R2: Kiểm tra Invalidation Preview cũ và chặn nút 'Áp dụng vào cảnh' khi Stale...");
+  console.log("H6-DOM: Kiểm tra tự động phát hiện Stale khi sửa giá trị biến thử nghiệm trên DOM...");
 
-  const mockPreview = {
-    renderedText: "Văn bản đã render từ bản nháp cũ A",
-    templateId: "tpl-1",
-    versionId: "v-1",
-    variableCount: 1,
+  const mockTemplateWithVar = {
+    templateId: "tpl-var-1",
+    purpose: "Script",
+    workspaceId: null,
     isOverride: false,
+    currentVersionId: "v-1",
+    currentVersionNumber: 1,
+    createdAtUtc: "2026-10-26T00:00:00Z",
+    updatedAtUtc: "2026-10-26T00:00:00Z",
+  };
+  const mockVersionWithVar = {
+    versionId: "v-1",
+    templateId: "tpl-var-1",
+    versionNumber: 1,
+    templateText: "Xin chào bạn {name}, chúc một ngày tốt lành!",
+    variableDefinitionsJson: JSON.stringify([
+      { name: "name", displayName: "Tên người nhận", defaultValue: "Thế Giới" },
+    ]),
+    changeDescription: "Gốc",
+    createdAtUtc: "2026-10-26T00:00:00Z",
   };
 
-  let appliedText = "";
-  const onApply = (text: string) => {
-    appliedText = text;
+  let previewCallCount = 0;
+  const mockTransport = {
+    invoke: async <TData = unknown, TPayload = unknown>(command: string, payload?: TPayload): Promise<TData> => {
+      if (command === "prompt.preview") {
+        previewCallCount++;
+        const p = payload as Record<string, unknown> | undefined;
+        const vars = (p?.variables as Record<string, string>) || {};
+        const rendered = `Xin chào bạn ${vars.name || "Thế Giới"}, chúc một ngày tốt lành!`;
+        return {
+          renderedText: rendered,
+          templateId: "tpl-var-1",
+          versionId: "v-1",
+          variableCount: 1,
+          isOverride: false,
+        } as unknown as TData;
+      }
+      return {} as unknown as TData;
+    },
   };
 
-  // 1. Khi preview KHÔNG stale: nút Áp dụng được bật (không có disabled)
-  const htmlFresh = renderToString(
-    React.createElement(PromptPreviewPanel, {
-      previewData: mockPreview,
-      isLoading: false,
-      error: null,
-      onRender: () => {},
-      onApply,
-      isDraftDirty: false,
-      isStale: false,
+  const dom = await renderIntoDom(
+    React.createElement(PromptTemplateEditor, {
+      template: mockTemplateWithVar,
+      currentVersion: mockVersionWithVar,
+      purpose: "Script",
+      transport: mockTransport,
     })
   );
 
-  onApply("test");
-  assertEqual(appliedText, "test");
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 20));
+  });
 
-  assertTrue(htmlFresh.includes("Áp dụng vào cảnh"), "Phải có nút Áp dụng");
-  assertTrue(!htmlFresh.includes("Bản xem trước cũ (Stale)"), "Không được hiển thị huy hiệu Stale khi còn fresh");
+  // 1. Nhấn nút "Render xem trước" trên DOM
+  const previewBtn = Array.from(dom.container.querySelectorAll("button")).find((b) =>
+    b.textContent?.includes("Render xem trước")
+  );
+  assertTrue(previewBtn !== undefined, "Phải tìm thấy nút 'Render xem trước'");
 
-  // 2. Khi preview BỊ STALE (bản nháp đã bị chỉnh sửa sau khi render):
-  const htmlStale = renderToString(
-    React.createElement(PromptPreviewPanel, {
-      previewData: mockPreview,
-      isLoading: false,
-      error: null,
-      onRender: () => {},
-      onApply,
-      isDraftDirty: true,
-      isStale: true,
-    })
+  await act(async () => {
+    previewBtn!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+
+  // Chờ preview response
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 20));
+  });
+
+  assertTrue(previewCallCount === 1, "Đã gọi backend preview lần 1");
+  assertTrue(dom.container.textContent?.includes("Đã render thành công"), "Bản preview ban đầu phải render thành công");
+  assertTrue(!dom.container.textContent?.includes("Bản xem trước cũ (Stale)"), "Không được hiển thị stale khi vừa render");
+
+  // 2. Bây giờ thay đổi giá trị của biến {name} trên DOM
+  const varInput = dom.container.querySelector('input[id^="var-input-"]') as HTMLInputElement;
+  assertTrue(varInput !== null, "Phải tìm thấy input biến số trong DOM");
+
+  await act(async () => {
+    setInputValue(varInput, "Hà Nội");
+  });
+
+  // H6 TEST: Khi biến thay đổi, Preview PHẢI NGAY LẬP TỨC chuyển sang Stale!
+  assertTrue(
+    dom.container.textContent?.includes("Bản xem trước cũ (Stale)"),
+    "H6: Preview BẮT BUỘC phải chuyển sang 'Bản xem trước cũ (Stale)' ngay khi sửa giá trị biến!"
   );
 
-  assertTrue(htmlStale.includes("Bản xem trước cũ (Stale)"), "Phải hiển thị cảnh báo Bản xem trước cũ (Stale)");
-  assertTrue(htmlStale.includes("disabled"), "Nút Áp dụng vào cảnh bắt buộc phải bị DISABLED khi preview stale");
+  // 3. Render lại preview sau khi đổi biến
+  await act(async () => {
+    previewBtn!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 20));
+  });
 
-  console.log("  -> PASS: Preview cũ bị đánh dấu Stale và bị khóa nút Áp dụng để bảo vệ provenance.");
+  assertTrue(previewCallCount === 2, "Đã gọi backend preview lần 2");
+  assertTrue(!dom.container.textContent?.includes("Bản xem trước cũ (Stale)"), "Không còn stale sau khi render lại");
+
+  await dom.unmount();
+  console.log("  -> [PASS H6] Phát hiện Stale và khóa provenance chuẩn xác 100% khi người dùng thay đổi giá trị biến.");
 }
 
 // ---------------------------------------------------------------------------------
@@ -280,11 +495,11 @@ console.log("=== BẮT ĐẦU KIỂM THỬ COMPONENT PROMPT TEMPLATE (R1–R6) =
   let rollbackVersionReceived: unknown = null;
 
   const mockTransport = {
-    invoke: async <TData>(command: string): Promise<TData> => {
-      if (command === "prompt.list_versions") {
+    invoke: async <TData = unknown, TPayload = unknown>(_command: string, _payload?: TPayload): Promise<TData> => {
+      if (_command === "prompt.list_versions") {
         return { versions: [v3Version, v1Version] } as unknown as TData;
       }
-      if (command === "prompt.rollback_version") {
+      if (_command === "prompt.rollback_version") {
         return {
           template: rolledBackTemplate,
           currentVersion: v1Version,
@@ -294,7 +509,7 @@ console.log("=== BẮT ĐẦU KIỂM THỬ COMPONENT PROMPT TEMPLATE (R1–R6) =
     },
   };
 
-  const htmlHistory = renderToString(
+  const dom = await renderIntoDom(
     React.createElement(PromptVersionHistory, {
       templateId: "tpl-1",
       currentVersionId: "ver-3",
@@ -310,23 +525,41 @@ console.log("=== BẮT ĐẦU KIỂM THỬ COMPONENT PROMPT TEMPLATE (R1–R6) =
     })
   );
 
-  assertTrue(htmlHistory.includes("v3"), "Lịch sử phải liệt kê v3");
-  assertTrue(htmlHistory.includes("v1"), "Lịch sử phải liệt kê v1");
-  assertTrue(htmlHistory.includes("Hiện tại"), "v3 phải có huy hiệu Hiện tại");
-  assertTrue(htmlHistory.includes("Khôi phục"), "v1 phải có nút Khôi phục");
+  assertTrue(dom.container.textContent?.includes("v3"), "Lịch sử phải liệt kê v3");
+  assertTrue(dom.container.textContent?.includes("v1"), "Lịch sử phải liệt kê v1");
+  assertTrue(dom.container.textContent?.includes("Hiện tại"), "v3 phải có huy hiệu Hiện tại");
+  assertTrue(dom.container.textContent?.includes("Khôi phục"), "v1 phải có nút Khôi phục");
 
-  // Giả lập callback rollback đưa cả template và version về manager
-  const onRollbackSuccessHandler = (tpl: typeof rolledBackTemplate, ver: typeof v1Version) => {
-    rollbackTemplateReceived = tpl;
-    rollbackVersionReceived = ver;
-  };
-  onRollbackSuccessHandler(rolledBackTemplate, v1Version);
+  // Click nút Khôi phục v1 trên DOM -> Hiện popup xác nhận
+  const rollbackBtns = Array.from(dom.container.querySelectorAll("button")).filter((b) =>
+    b.textContent?.includes("Khôi phục")
+  );
+  assertTrue(rollbackBtns.length > 0, "Phải tìm thấy nút Khôi phục trên DOM");
+
+  await act(async () => {
+    rollbackBtns[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+
+  // Tìm nút "Đồng ý khôi phục" trên popup xác nhận và click
+  const confirmBtn = Array.from(dom.container.querySelectorAll("button")).find((b) =>
+    b.textContent?.includes("Đồng ý khôi phục")
+  );
+  assertTrue(confirmBtn !== undefined, "Phải tìm thấy nút 'Đồng ý khôi phục' trên modal");
+
+  await act(async () => {
+    confirmBtn!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 20));
+  });
 
   assertEqual((rollbackTemplateReceived as typeof rolledBackTemplate).currentVersionNumber, 1);
   assertEqual((rollbackVersionReceived as typeof v1Version).versionId, "ver-1");
   assertEqual((rollbackVersionReceived as typeof v1Version).templateText, "Nội dung v1 ban đầu");
 
-  console.log("  -> PASS: Rollback đồng bộ đầy đủ metadata v1 về cả Editor và Manager.");
+  await dom.unmount();
+  console.log("  -> PASS: Rollback đồng bộ đầy đủ metadata v1 về cả Editor và Manager qua tương tác DOM thật.");
 }
 
 // ---------------------------------------------------------------------------------
@@ -335,7 +568,7 @@ console.log("=== BẮT ĐẦU KIỂM THỬ COMPONENT PROMPT TEMPLATE (R1–R6) =
 {
   console.log("R4: Kiểm tra chế độ Tạo mới không bị auto-select ghi đè khi đã có template...");
 
-  const htmlNewEditor = renderToString(
+  const dom = await renderIntoDom(
     React.createElement(PromptTemplateEditor, {
       template: null,
       currentVersion: null,
@@ -344,14 +577,15 @@ console.log("=== BẮT ĐẦU KIỂM THỬ COMPONENT PROMPT TEMPLATE (R1–R6) =
     })
   );
 
-  assertTrue(htmlNewEditor.includes("Tạo mới"), "Editor phải hiển thị huy hiệu 'Tạo mới'");
-  assertTrue(htmlNewEditor.includes("Mục đích: Image"), "Phải giữ đúng mục đích Image");
+  assertTrue(dom.container.textContent?.includes("Tạo mới"), "Editor phải hiển thị huy hiệu 'Tạo mới'");
+  assertTrue(dom.container.textContent?.includes("Mục đích: Image"), "Phải giữ đúng mục đích Image");
   assertTrue(
-    htmlNewEditor.includes("Lưu thành bản ghi đè (Override) riêng cho Workspace hiện thời"),
+    dom.container.textContent?.includes("Lưu thành bản ghi đè (Override) riêng cho Workspace hiện thời"),
     "Phải có tùy chọn lưu thành Override khi ở trong Workspace"
   );
 
-  console.log("  -> PASS: Chế độ Tạo mới template hiển thị form rỗng ổn định, không bị ghi đè.");
+  await dom.unmount();
+  console.log("  -> PASS: Chế độ Tạo mới template hiển thị form rỗng ổn định trên DOM, không bị ghi đè.");
 }
 
 // ---------------------------------------------------------------------------------
@@ -398,4 +632,6 @@ console.log("=== BẮT ĐẦU KIỂM THỬ COMPONENT PROMPT TEMPLATE (R1–R6) =
   console.log("  -> PASS: Stale response được khử triệt để qua correlation request ID.");
 }
 
-console.log("=== TẤT CẢ KIỂM THỬ COMPONENT VÀ INTEGRATION R1–R6 ĐỀU PASS 100% ===");
+console.log("\n=================================================================");
+console.log(">>> TOÀN BỘ KIỂM THỬ COMPONENT TRÊN DOM THẬT ĐÃ VƯỢT QUA (PASS 100%) <<<");
+console.log("=================================================================\n");

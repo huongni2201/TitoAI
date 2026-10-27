@@ -1,5 +1,6 @@
 import fs from "node:fs";
-import { fileURLToPath } from "node:url";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { transformWithOxc } from "vite";
 
 export async function resolve(specifier, context, nextResolve) {
@@ -9,6 +10,21 @@ export async function resolve(specifier, context, nextResolve) {
       format: "module",
       shortCircuit: true,
     };
+  }
+  if (specifier.startsWith("@/")) {
+    const srcDir = fileURLToPath(new URL("../../", import.meta.url));
+    const subPath = specifier.slice(2);
+    const resolvedPath = path.join(srcDir, subPath);
+    for (const ext of ["", ".ts", ".tsx", "/index.ts", "/index.tsx"]) {
+      const candidate = resolvedPath + ext;
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+        return {
+          url: pathToFileURL(candidate).href,
+          format: "module",
+          shortCircuit: true,
+        };
+      }
+    }
   }
   try {
     return await nextResolve(specifier, context);
@@ -32,7 +48,8 @@ export async function load(url, context, nextLoad) {
       jsx: { runtime: "classic" },
     });
     let code = transformed.code;
-    if (url.endsWith(".tsx") && !code.includes("import React")) {
+    const hasReactIdentifier = /import\s+(?:\*\s+as\s+React|React[\s,])/.test(code);
+    if (url.endsWith(".tsx") && !hasReactIdentifier) {
       code = 'import React from "react";\n' + code;
     }
     return {

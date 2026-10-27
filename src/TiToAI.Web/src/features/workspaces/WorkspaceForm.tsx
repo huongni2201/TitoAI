@@ -1,7 +1,19 @@
 import React, { useState, useEffect, useRef } from "react";
 import { workspaceApi, type WorkspaceSummaryDto, type WorkspaceDetailDto } from "./workspaceApi";
 import type { ErrorDto } from "../../contracts/bridge";
-import { IconClose, IconRefresh } from "../../components/Icons";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { AlertTriangle, Loader2 } from "lucide-react";
 
 export interface WorkspaceFormProps {
   isOpen: boolean;
@@ -26,7 +38,6 @@ export function WorkspaceForm({
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const nameInputRef = useRef<HTMLInputElement>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
 
   // Khởi tạo giá trị khi mở form
   useEffect(() => {
@@ -50,20 +61,6 @@ export function WorkspaceForm({
       }, 50);
     }
   }, [isOpen, mode, workspace]);
-
-  // Đóng bằng phím Escape
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !isSubmitting) {
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, isSubmitting, onClose]);
-
-  if (!isOpen) return null;
 
   // Xử lý tự động chuẩn hóa handle (@...)
   const handleHandleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -153,163 +150,124 @@ export function WorkspaceForm({
   };
 
   return (
-    <div
-      className="modal-backdrop"
-      role="presentation"
-      onClick={(e) => {
-        if (e.target === e.currentTarget && !isSubmitting) {
+    <Dialog
+      open={isOpen}
+      onOpenChange={(open) => {
+        if (!open && !isSubmitting) {
           onClose();
         }
       }}
     >
-      <div
-        className="modal-container"
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="workspace-form-title"
-        style={{ maxWidth: 520 }}
-      >
-        <div className="modal-header">
-          <div className="modal-title-group">
-            <h2 id="workspace-form-title">
-              {mode === "create" ? "Tạo Workspace Kênh Mới" : "Chỉnh Sửa Workspace"}
-            </h2>
-            <p className="modal-subtitle">
-              {mode === "create"
-                ? "Thiết lập kênh TikTok mới để quản lý dự án video và prompt."
-                : `Cập nhật thông tin nhận diện cho kênh ${workspace?.name || ""}.`}
+      <DialogContent className="sm:max-w-[520px]">
+        <DialogHeader>
+          <DialogTitle className="text-xl font-bold tracking-tight">
+            {mode === "create" ? "Tạo Workspace Kênh Mới" : "Chỉnh Sửa Workspace"}
+          </DialogTitle>
+          <DialogDescription className="text-sm text-muted-foreground">
+            {mode === "create"
+              ? "Thiết lập kênh TikTok mới để quản lý dự án video và prompt."
+              : `Cập nhật thông tin nhận diện cho kênh ${workspace?.name || ""}.`}
+          </DialogDescription>
+        </DialogHeader>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {errorMessage && (
+            <Alert variant="destructive">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertDescription>{errorMessage}</AlertDescription>
+            </Alert>
+          )}
+
+          <div className="space-y-2">
+            <Label htmlFor="ws-name">
+              Tên kênh hiển thị <span className="text-destructive">*</span>
+            </Label>
+            <Input
+              id="ws-name"
+              ref={nameInputRef}
+              type="text"
+              placeholder="Ví dụ: Thời Trang Nữ Xinh, Sức Khỏe & Đời Sống"
+              value={name}
+              maxLength={100}
+              disabled={isSubmitting}
+              onChange={handleNameChange}
+              aria-invalid={!!fieldErrors.name}
+            />
+            {fieldErrors.name ? (
+              <p className="text-xs text-destructive">{fieldErrors.name}</p>
+            ) : (
+              <p className="text-xs text-muted-foreground">Tối đa 100 ký tự.</p>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="ws-handle">
+              Handle kênh (@) <span className="text-destructive">*</span>
+            </Label>
+            <Input
+              id="ws-handle"
+              type="text"
+              placeholder="@thoitrangnuxinh"
+              value={channelHandle}
+              maxLength={60}
+              disabled={isSubmitting}
+              onChange={handleHandleChange}
+              aria-invalid={!!fieldErrors.channelHandle}
+            />
+            {fieldErrors.channelHandle ? (
+              <p className="text-xs text-destructive">{fieldErrors.channelHandle}</p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Định danh TikTok của kênh (tự động thêm tiền tố @ nếu thiếu).
+              </p>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="ws-topic">Chủ đề / Niche nội dung</Label>
+            <Input
+              id="ws-topic"
+              type="text"
+              placeholder="Ví dụ: Thời trang nữ, review đồ xinh, gia dụng tiện ích"
+              value={topic}
+              maxLength={150}
+              disabled={isSubmitting}
+              onChange={(e) => setTopic(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              Chủ đề định hướng để AI hỗ trợ gợi ý kịch bản và prompt phù hợp.
             </p>
           </div>
-          <button
-            type="button"
-            className="btn-icon"
-            onClick={onClose}
-            disabled={isSubmitting}
-            aria-label="Đóng hộp thoại"
-          >
-            <IconClose size={18} />
-          </button>
-        </div>
 
-        <form onSubmit={handleSubmit}>
-          <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-            {errorMessage && (
-              <div
-                className="notice-box"
-                style={{
-                  backgroundColor: "rgba(239, 68, 68, 0.12)",
-                  border: "1px solid var(--status-error)",
-                  color: "var(--status-error)",
-                }}
-                role="alert"
-              >
-                <span>⚠️</span>
-                <div>{errorMessage}</div>
-              </div>
-            )}
-
-            <div className="form-group">
-              <label htmlFor="ws-name">
-                Tên kênh hiển thị <span style={{ color: "var(--status-error)" }}>*</span>
-              </label>
-              <input
-                id="ws-name"
-                ref={nameInputRef}
-                type="text"
-                className="form-control"
-                placeholder="Ví dụ: Thời Trang Nữ Xinh, Sức Khỏe & Đời Sống"
-                value={name}
-                maxLength={100}
-                disabled={isSubmitting}
-                onChange={handleNameChange}
-                aria-invalid={!!fieldErrors.name}
-              />
-              {fieldErrors.name ? (
-                <span className="field-hint" style={{ color: "var(--status-error)" }}>
-                  {fieldErrors.name}
-                </span>
-              ) : (
-                <span className="field-hint">Tối đa 100 ký tự.</span>
-              )}
-            </div>
-
-            <div className="form-group">
-              <label htmlFor="ws-handle">
-                Handle kênh (@) <span style={{ color: "var(--status-error)" }}>*</span>
-              </label>
-              <input
-                id="ws-handle"
-                type="text"
-                className="form-control"
-                placeholder="@thoitrangnuxinh"
-                value={channelHandle}
-                maxLength={60}
-                disabled={isSubmitting}
-                onChange={handleHandleChange}
-                aria-invalid={!!fieldErrors.channelHandle}
-              />
-              {fieldErrors.channelHandle ? (
-                <span className="field-hint" style={{ color: "var(--status-error)" }}>
-                  {fieldErrors.channelHandle}
-                </span>
-              ) : (
-                <span className="field-hint">
-                  Định danh TikTok của kênh (tự động thêm tiền tố @ nếu thiếu).
-                </span>
-              )}
-            </div>
-
-            <div className="form-group">
-              <label htmlFor="ws-topic">Chủ đề / Niche nội dung</label>
-              <input
-                id="ws-topic"
-                type="text"
-                className="form-control"
-                placeholder="Ví dụ: Thời trang nữ, review đồ xinh, gia dụng tiện ích"
-                value={topic}
-                maxLength={150}
-                disabled={isSubmitting}
-                onChange={(e) => setTopic(e.target.value)}
-              />
-              <span className="field-hint">
-                Chủ đề định hướng để AI hỗ trợ gợi ý kịch bản và prompt phù hợp.
-              </span>
-            </div>
-          </div>
-
-          <div className="modal-footer">
-            <span className="footer-status">
+          <DialogFooter className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3 pt-2">
+            <span className="text-xs text-muted-foreground">
               {isSubmitting ? "Đang xử lý…" : "Dữ liệu được lưu trữ cục bộ."}
             </span>
-            <div style={{ display: "flex", gap: "0.5rem" }}>
-              <button
+            <div className="flex items-center justify-end gap-2">
+              <Button
                 type="button"
-                className="btn btn-secondary"
+                variant="outline"
                 onClick={onClose}
                 disabled={isSubmitting}
               >
                 Hủy
-              </button>
-              <button
-                type="submit"
-                className="btn btn-primary"
-                disabled={isSubmitting}
-              >
+              </Button>
+              <Button type="submit" disabled={isSubmitting}>
                 {isSubmitting ? (
                   <>
-                    <IconRefresh size={16} className="spin" /> Đang lưu…
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Đang lưu…
                   </>
                 ) : mode === "create" ? (
                   "Tạo Workspace"
                 ) : (
                   "Lưu thay đổi"
                 )}
-              </button>
+              </Button>
             </div>
-          </div>
+          </DialogFooter>
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

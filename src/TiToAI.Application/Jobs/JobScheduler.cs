@@ -26,19 +26,23 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
     private readonly IJobExecutor _executor;
     private readonly IBrowserGatekeeper _gatekeeper;
     private readonly Func<DateTimeOffset>? _clock;
+    private readonly JobCrashRecoveryService _crashRecoveryService;
 
     private readonly Channel<JobWakeupSignal> _wakeupChannel;
     private readonly CancellationTokenSource _cts = new();
     private readonly ConcurrentDictionary<string, Task> _runningWorkerTasks = new();
     private Task? _schedulerLoopTask;
+    private int _isDisposed;
 
-    private int _currentWorkspaceIndex = 0;
     private readonly string _schedulerId = $"scheduler-{Guid.NewGuid():N}";
 
     public TimeSpan LeaseDuration { get; set; } = TimeSpan.FromSeconds(45);
     public TimeSpan HeartbeatInterval { get; set; } = TimeSpan.FromSeconds(15);
     public TimeSpan FallbackPollInterval { get; set; } = TimeSpan.FromSeconds(5);
     public TimeSpan DrainTimeout { get; set; } = TimeSpan.FromSeconds(5);
+    public IBrowserGatekeeper Gatekeeper => _gatekeeper;
+    public ConcurrentDictionary<string, Task> RunningWorkerTasks => _runningWorkerTasks;
+    public Exception? LastWorkerException { get; private set; }
 
     public event Action<JobStateChangedPayload>? OnJobStateChanged;
     public event Action<JobProgressUpdatedPayload>? OnJobProgressUpdated;
@@ -55,6 +59,10 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
         _executor = executor ?? throw new ArgumentNullException(nameof(executor));
         _gatekeeper = gatekeeper ?? new DefaultBrowserGatekeeper();
         _clock = clock;
+        _crashRecoveryService = new JobCrashRecoveryService(_dbOptions, _clock, this, payload =>
+        {
+            OnJobStateChanged?.Invoke(payload);
+        });
 
         // Channel đánh thức dạng bounded, nếu đầy sẽ ghi đè signal cũ (DropOldest) để không bao giờ nghẽn bộ nhớ
         var channelOptions = new BoundedChannelOptions(100)
@@ -131,117 +139,82 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
     }
 
     /// <summary>
-    /// Thực hiện phân phối tuần tự đúng 1 Job tiếp theo theo thuật toán Round-Robin giữa các Workspace.
-    /// Giúp quan sát thứ tự phân phối công bằng hoặc điều phối tuần tự dưới giới hạn capacity 1 job.
+    /// Thực hiện điều phối tuần tự đúng 1 Job tiếp theo từ queue SQLite chung theo thứ tự FIFO (createdAtUtc rồi jobId).
     /// </summary>
     public async Task<bool> DispatchNextSingleJobAsync(CancellationToken cancellationToken = default)
     {
-        await using var dbContext = new TiToAIDbContext(_dbOptions);
-
-        var activeWorkspaces = await dbContext.Workspaces
-            .AsNoTracking()
-            .Where(w => w.Status == "Active")
-            .OrderBy(w => w.Id)
-            .Select(w => w.Id)
-            .ToListAsync(cancellationToken).ConfigureAwait(false);
-
-        if (activeWorkspaces.Count == 0)
-        {
-            return false;
-        }
-
-        int wsCount = activeWorkspaces.Count;
-        int initialIndex = _currentWorkspaceIndex % wsCount;
-
-        for (int i = 0; i < wsCount; i++)
-        {
-            int targetIndex = (initialIndex + i) % wsCount;
-            var targetWorkspaceId = activeWorkspaces[targetIndex];
-
-            bool dispatched = await TryDispatchOneJobForWorkspaceAsync(targetWorkspaceId, cancellationToken).ConfigureAwait(false);
-            if (dispatched)
-            {
-                _currentWorkspaceIndex = (targetIndex + 1) % wsCount;
-                return true;
-            }
-        }
-
-        return false;
+        return await TryDispatchNextJobAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
-    /// Thực hiện điều phối công bằng: Duyệt qua các Workspace theo thuật toán Round-Robin.
-    /// Mỗi chu kỳ lấy tối đa 1 job cho mỗi Workspace khả dụng.
+    /// Đợi tiến trình Worker hoàn tất thực thi tác vụ (nếu đang chạy) với khoảng thời gian timeout xác định.
+    /// Trả về true nếu worker đã hoàn thành hoặc không còn task đang chạy.
+    /// </summary>
+    public async Task<bool> WaitForWorkerCompletionAsync(string jobId, TimeSpan timeout)
+    {
+        if (_runningWorkerTasks.TryGetValue(jobId, out var task))
+        {
+            var completedTask = await Task.WhenAny(task, Task.Delay(timeout)).ConfigureAwait(false);
+            return completedTask == task;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Thực hiện điều phối độc lập từ queue SQLite chung theo plan 1.2 §2.2.
+    /// Chọn job đủ điều kiện cũ nhất (FIFO: createdAtUtc, jobId). Job chờ provider/quota không chặn job khác.
     /// </summary>
     public async Task<int> DispatchPendingJobsAsync(CancellationToken cancellationToken = default)
     {
         int totalDispatched = 0;
-
-        await using var dbContext = new TiToAIDbContext(_dbOptions);
-
-        // 1. Lấy danh sách toàn bộ Không gian làm việc đang Active
-        var activeWorkspaces = await dbContext.Workspaces
-            .AsNoTracking()
-            .Where(w => w.Status == "Active")
-            .OrderBy(w => w.Id)
-            .Select(w => w.Id)
-            .ToListAsync(cancellationToken).ConfigureAwait(false);
-
-        if (activeWorkspaces.Count == 0)
+        while (await TryDispatchNextJobAsync(cancellationToken).ConfigureAwait(false))
         {
-            return 0;
+            totalDispatched++;
         }
-
-        int wsCount = activeWorkspaces.Count;
-
-        // Vòng lặp Round-Robin công bằng: Duyệt tuần tự qua các workspace cho đến khi hết capacity
-        bool anyDispatchedInRound;
-        do
-        {
-            anyDispatchedInRound = false;
-            int initialIndex = _currentWorkspaceIndex % wsCount;
-
-            for (int i = 0; i < wsCount; i++)
-            {
-                int targetIndex = (initialIndex + i) % wsCount;
-                var targetWorkspaceId = activeWorkspaces[targetIndex];
-
-                bool dispatched = await TryDispatchOneJobForWorkspaceAsync(targetWorkspaceId, cancellationToken).ConfigureAwait(false);
-                if (dispatched)
-                {
-                    totalDispatched++;
-                    anyDispatchedInRound = true;
-                    _currentWorkspaceIndex = (targetIndex + 1) % wsCount;
-                }
-            }
-        } while (anyDispatchedInRound);
-
         return totalDispatched;
     }
 
     /// <summary>
-    /// Thử cấp quyền và khởi chạy đúng 1 Job hợp lệ cho một Workspace cụ thể.
+    /// Thử cấp quyền và khởi chạy 1 Job hợp lệ từ queue chung.
+    /// Bỏ qua các job thuộc Workspace bị Paused (eligibility check).
     /// </summary>
-    private async Task<bool> TryDispatchOneJobForWorkspaceAsync(
-        string workspaceId,
-        CancellationToken cancellationToken)
+    private async Task<bool> TryDispatchNextJobAsync(CancellationToken cancellationToken)
     {
         await using var dbContext = new TiToAIDbContext(_dbOptions);
         var nowIso = UtcNow.ToString("o");
 
-        // Tìm các ứng viên Queued của Workspace này
+        // Lấy danh sách các workspace đang bị Paused để loại trừ job của chúng (pause semantics)
+        var pausedWorkspaceIds = await dbContext.Workspaces
+            .AsNoTracking()
+            .Where(w => w.Status != "Active")
+            .Select(w => w.Id)
+            .ToListAsync(cancellationToken).ConfigureAwait(false);
+
+        // PV-R4: Lấy danh sách các dự án đang tạm dừng quy trình (runState == Paused) để loại trừ
+        var pausedWorkflowProjectSettings = await dbContext.AppSettings
+            .AsNoTracking()
+            .Where(s => s.Key.StartsWith("project.workflow.config.") && s.Value.Contains("\"runState\":\"Paused\""))
+            .Select(s => s.Key)
+            .ToListAsync(cancellationToken).ConfigureAwait(false);
+        var pausedWorkflowProjectIds = pausedWorkflowProjectSettings
+            .Select(k => k.Substring("project.workflow.config.".Length))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        // Lấy các ứng viên Queued cũ nhất từ queue chung
         var candidateJobs = await dbContext.Jobs
             .AsNoTracking()
-            .Where(j => j.WorkspaceId == workspaceId &&
-                        j.State == JobState.Queued &&
+            .Where(j => j.State == JobState.Queued &&
+                        !pausedWorkspaceIds.Contains(j.WorkspaceId) &&
+                        !pausedWorkflowProjectIds.Contains(j.ProjectId) &&
                         (j.RetryAfterUtc == null || string.Compare(j.RetryAfterUtc, nowIso) <= 0))
             .OrderBy(j => j.CreatedAtUtc)
-            .Take(5)
+            .ThenBy(j => j.Id)
+            .Take(15)
             .ToListAsync(cancellationToken).ConfigureAwait(false);
 
         foreach (var candidate in candidateJobs)
         {
-            // Thực hiện Atomic Reservation (BEGIN IMMEDIATE + CAS) từ Global AI Pool v1.1
+            // Thực hiện Atomic Reservation (BEGIN IMMEDIATE + CAS) với Slot Occupancy
             var reserveResult = await _reservation.TryReserveJobAsync(
                 candidate.Id,
                 _schedulerId,
@@ -250,6 +223,7 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
                     !_gatekeeper.IsDispatchPaused(profileId) &&
                     !_gatekeeper.IsProfileBusyWithLogin(profileId) &&
                     !_gatekeeper.IsRoleActive(profileId, candidate.TaskType),
+                getOpenProfileIds: () => _gatekeeper.GetActiveOrBusyProfileIds(),
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
             if (reserveResult.Acquired && reserveResult.Job is not null)
@@ -257,10 +231,8 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
                 var assignedProfileId = reserveResult.Binding?.ProfileId ?? "default_profile";
                 var assignedAccountId = reserveResult.Binding?.ProviderAccountId;
 
-                // Thông báo chuyển trạng thái Reserved
                 NotifyStateChanged(reserveResult.Job.Id, reserveResult.Job.WorkspaceId, reserveResult.Job.ProjectId, JobState.Queued, JobState.Reserved, null, null);
 
-                // Khởi chạy Worker xử lý nền và ghi nhận task vào danh sách quản lý
                 var workerJob = reserveResult.Job;
                 var workerTask = Task.Run(async () =>
                 {
@@ -277,6 +249,7 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
                 _runningWorkerTasks.TryAdd(workerJob.Id, workerTask);
                 return true;
             }
+            // Nếu không reserve được do provider/capacity của job này, loop tiếp tục thử job kế tiếp (không chặn job khác!)
         }
 
         return false;
@@ -284,123 +257,15 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
 
     /// <summary>
     /// Quy trình quét 3 cấp độ (3-Tier Crash Recovery Sweep) phục hồi sự cố và thu hồi Dead Worker:
-    /// 1. Ưu tiên 1 (Side-effect Guard): Job đã gửi side-effect -> Chuyển sang AwaitingUser (CẤM retry tự động!).
-    /// 2. Ưu tiên 2 (Safe Retry): Job chưa gửi side-effect & còn lượt thử -> Chuyển về Queued kèm retry_after.
-    /// 3. Ưu tiên 3 (Exceeded Attempts): Job chưa gửi side-effect & hết lượt -> Chuyển sang Failed.
-    /// Thực hiện phục hồi Atomic CAS trên SQLite IMMEDIATE để không ghi đè tiến trình heartbeat/commit đồng thời.
+    /// 1. Ưu tiên 1 (Side-effect Guard): Job đã gửi side-effect -> Chuyển sang AwaitingUser (CẤM retry tự động!) và bảo tồn occupancy.
+    /// 2. Ưu tiên 2 (Safe Retry): Job chưa gửi side-effect & còn lượt thử -> Chuyển về Queued kèm retry_after và giải phóng occupancy.
+    /// 3. Ưu tiên 3 (Exceeded Attempts): Job chưa gửi side-effect & hết lượt -> Chuyển sang Failed và giải phóng occupancy.
+    /// Ủy quyền cho JobCrashRecoveryService chuyên trách của Task T16.
     /// </summary>
     public async Task<int> RunCrashRecoverySweepAsync(CancellationToken cancellationToken = default)
     {
-        await using var dbContext = new TiToAIDbContext(_dbOptions);
-        var nowIso = UtcNow.ToString("o");
-
-        // 1. Tìm các job candidates đang Reserved hoặc Running nhưng lease đã quá hạn
-        var expiredCandidates = await dbContext.Jobs
-            .AsNoTracking()
-            .Where(j => (j.State == JobState.Reserved || j.State == JobState.Running) &&
-                        j.LeaseExpiresAtUtc != null &&
-                        string.Compare(j.LeaseExpiresAtUtc, nowIso) < 0)
-            .Select(j => new { j.Id, j.FencingToken })
-            .ToListAsync(cancellationToken).ConfigureAwait(false);
-
-        if (expiredCandidates.Count == 0)
-        {
-            return 0;
-        }
-
-        int recoveredCount = 0;
-
-        foreach (var candidate in expiredCandidates)
-        {
-            await using var txContext = new TiToAIDbContext(_dbOptions);
-            var dbConn = txContext.Database.GetDbConnection();
-            if (dbConn.State != ConnectionState.Open)
-            {
-                await dbConn.OpenAsync(cancellationToken).ConfigureAwait(false);
-            }
-
-            IDbContextTransaction transaction;
-            if (dbConn is SqliteConnection sqliteConn)
-            {
-                var sqliteTx = sqliteConn.BeginTransaction(deferred: false);
-                transaction = await txContext.Database.UseTransactionAsync(sqliteTx, cancellationToken).ConfigureAwait(false)
-                    ?? throw new InvalidOperationException("Không thể tạo SqliteTransaction cho crash recovery sweep.");
-            }
-            else
-            {
-                transaction = await txContext.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
-            }
-
-            await using (transaction)
-            {
-                var job = await txContext.Jobs
-                    .FirstOrDefaultAsync(j => j.Id == candidate.Id, cancellationToken).ConfigureAwait(false);
-
-                if (job == null || (job.State != JobState.Reserved && job.State != JobState.Running))
-                {
-                    await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
-                    continue;
-                }
-
-                // CAS Guard: Kiểm tra fencing token và lease expiration thực tế để ngăn race condition với heartbeat/submit
-                if (job.FencingToken != candidate.FencingToken ||
-                    job.LeaseExpiresAtUtc == null ||
-                    string.Compare(job.LeaseExpiresAtUtc, nowIso) >= 0)
-                {
-                    await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
-                    continue;
-                }
-
-                var prevState = job.State;
-                string newState;
-                string? reasonCode;
-
-                if (job.SideEffectSubmitted == 1)
-                {
-                    // Ưu tiên 1: Side-effect Guard (CẤM retry tự động!)
-                    newState = JobState.AwaitingUser;
-                    reasonCode = JobReasonCode.ReconcileRequired;
-                    job.State = newState;
-                    job.ReasonCode = reasonCode;
-                    job.LeaseExpiresAtUtc = null;
-                    job.LeaseOwnerId = null;
-                    job.UpdatedAtUtc = nowIso;
-                }
-                else if (job.Attempts < job.MaxAttempts)
-                {
-                    // Ưu tiên 2: Chưa gửi side effect và còn lượt thử -> Đưa về Queued kèm giãn cách lũy thừa
-                    newState = JobState.Queued;
-                    reasonCode = "lease_expired_retry";
-                    var retryDelaySeconds = Math.Pow(2, job.Attempts) * 5;
-                    job.State = newState;
-                    job.ReasonCode = null;
-                    job.LeaseExpiresAtUtc = null;
-                    job.LeaseOwnerId = null;
-                    job.RetryAfterUtc = UtcNow.AddSeconds(retryDelaySeconds).ToString("o");
-                    job.UpdatedAtUtc = nowIso;
-                }
-                else
-                {
-                    // Ưu tiên 3: Hết số lần thử cho phép -> Failed
-                    newState = JobState.Failed;
-                    reasonCode = JobReasonCode.LeaseExpiredMaxAttempts;
-                    job.State = newState;
-                    job.ReasonCode = reasonCode;
-                    job.LeaseExpiresAtUtc = null;
-                    job.LeaseOwnerId = null;
-                    job.UpdatedAtUtc = nowIso;
-                }
-
-                await txContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-                recoveredCount++;
-
-                // CHỈ PHÁT EVENT SAU KHI TRANSACTION COMMIT THÀNH CÔNG!
-                NotifyStateChanged(job.Id, job.WorkspaceId, job.ProjectId, prevState, newState, reasonCode, null);
-            }
-        }
-
-        return recoveredCount;
+        var sweepResult = await _crashRecoveryService.PerformRecoverySweepAsync(cancellationToken).ConfigureAwait(false);
+        return sweepResult.RecoveredCount;
     }
 
     /// <summary>
@@ -430,6 +295,9 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
                 return;
             }
 
+            // Đăng ký theo dõi job với browser checkpoint gatekeeper
+            _gatekeeper.TrackJob(profileId, jobId, sideEffectSubmitted: reservedJob.SideEffectSubmitted == 1, state: JobState.Running);
+
             // 2. Đã chiếm được lease -> Chuyển trạng thái từ Reserved sang Running
             await _reservation.TransitionToRunningAsync(jobId, fencingToken, workerCts.Token).ConfigureAwait(false);
             NotifyStateChanged(jobId, reservedJob.WorkspaceId, reservedJob.ProjectId, JobState.Reserved, JobState.Running, null, null);
@@ -457,7 +325,7 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
                 }
             }, null, HeartbeatInterval, HeartbeatInterval);
 
-            // 4. Chuẩn bị ngữ cảnh thực thi
+            // 4. Chuẩn bị ngữ cảnh thực thi (bao gồm checkpoint intermediate output nếu có từ lần chạy trước)
             var executionContext = new JobExecutionContext(
                 JobId: reservedJob.Id,
                 WorkspaceId: reservedJob.WorkspaceId,
@@ -471,7 +339,9 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
                 FencingToken: fencingToken,
                 Attempts: reservedJob.Attempts,
                 ProfileId: profileId,
-                ProviderAccountId: providerAccountId
+                ProviderAccountId: providerAccountId,
+                ExistingResultText: reservedJob.ResultText,
+                ExistingResultReference: reservedJob.ResultReference
             );
 
             // 5. Thực thi qua JobExecutor
@@ -482,6 +352,7 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
                     // CRITICAL BOUNDARY: Commit cờ side_effect_submitted = 1 TRƯỚC KHI web action click
                     await _reservation.CommitSideEffectAsync(jobId, fencingToken, workerCts.Token).ConfigureAwait(false);
                     sideEffectCommitted = true;
+                    _gatekeeper.SetJobSideEffectSubmitted(profileId, jobId, true);
                 },
                 onProgressAsync: (percent, step) =>
                 {
@@ -505,21 +376,45 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
                 heartbeatTimer = null;
             }
 
-            // 7. Commit kết quả thành công
+            // 7. Commit kết quả thành công (hoặc muộn sau khi bị hủy)
             if (result.Success)
             {
-                await _reservation.CommitSuccessAsync(
+                var commitResult = await _reservation.CommitSuccessAsync(
                     jobId,
                     fencingToken,
                     result.ResultReference,
                     result.ResultText,
                     workerCts.Token).ConfigureAwait(false);
 
-                NotifyStateChanged(jobId, reservedJob.WorkspaceId, reservedJob.ProjectId, JobState.Running, JobState.Succeeded, null, result.ResultReference);
+                NotifyStateChanged(jobId, reservedJob.WorkspaceId, reservedJob.ProjectId, JobState.Running, commitResult.State, commitResult.ReasonCode, result.ResultReference);
             }
             else
             {
-                await HandleExecutionFailureAsync(reservedJob, fencingToken, result.ReasonCode ?? "execution_failed", sideEffectCommitted).ConfigureAwait(false);
+                // T16 CHECKPOINT / FINALIZE:
+                // Nếu result có chứa intermediate result (ví dụ text hoặc file đã sinh nhưng lưu storage thất bại),
+                // checkpoint đệm ngay vào DB để lần retry sau chỉ finalize từ checkpoint mà không cần gọi lại AI!
+                if (!string.IsNullOrWhiteSpace(result.ResultText) || !string.IsNullOrWhiteSpace(result.ResultReference))
+                {
+                    await using var dbContext = new TiToAIDbContext(_dbOptions);
+                    var nowIso = UtcNow.ToString("o");
+                    await dbContext.Database.ExecuteSqlRawAsync(
+                        @"UPDATE Job
+                          SET result_text = COALESCE(@resText, result_text),
+                              result_reference = COALESCE(@resRef, result_reference),
+                              side_effect_submitted = 1,
+                              updated_at_utc = @now
+                          WHERE id = @id AND fencing_token = @token;",
+                        new object[]
+                        {
+                            new SqliteParameter("@resText", (object?)result.ResultText ?? DBNull.Value),
+                            new SqliteParameter("@resRef", (object?)result.ResultReference ?? DBNull.Value),
+                            new SqliteParameter("@now", nowIso),
+                            new SqliteParameter("@id", jobId),
+                            new SqliteParameter("@token", fencingToken)
+                        }).ConfigureAwait(false);
+                }
+
+                await HandleExecutionFailureAsync(reservedJob, fencingToken, result.ReasonCode ?? "execution_failed", sideEffectCommitted || result.SideEffectSubmitted).ConfigureAwait(false);
             }
         }
         catch (FencingTokenStaleException)
@@ -529,6 +424,7 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
         }
         catch (Exception ex)
         {
+            LastWorkerException = ex;
             await HandleExecutionFailureAsync(reservedJob, fencingToken, ex.Message, sideEffectCommitted).ConfigureAwait(false);
         }
         finally
@@ -538,6 +434,7 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
                 await heartbeatTimer.DisposeAsync().ConfigureAwait(false);
             }
 
+            _gatekeeper.UntrackJob(profileId, jobId);
             tabLease?.Dispose();
             _gatekeeper.ReleaseTabLease(profileId, role, jobId);
 
@@ -556,12 +453,12 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
     {
         try
         {
-            if (sideEffectCommitted || reason == "adapter_not_available")
+            var decision = JobRetryAndCancelPolicy.EvaluateFailure(job, reason, sideEffectCommitted);
+
+            if (decision.TargetState == JobState.AwaitingUser)
             {
-                // Đã commit side effect hoặc adapter chưa sẵn sàng: Tuyệt đối không retry mù, chuyển sang AwaitingUser
                 await using var dbContext = new TiToAIDbContext(_dbOptions);
                 var nowIso = UtcNow.ToString("o");
-                var code = sideEffectCommitted ? JobReasonCode.ReconcileRequired : reason;
 
                 await dbContext.Database.ExecuteSqlRawAsync(
                     @"UPDATE Job
@@ -572,29 +469,35 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
                       WHERE id = @id AND fencing_token = @token;",
                     new object[]
                     {
-                        new SqliteParameter("@reason", code),
+                        new SqliteParameter("@reason", decision.FinalReasonCode),
                         new SqliteParameter("@now", nowIso),
                         new SqliteParameter("@id", job.Id),
                         new SqliteParameter("@token", fencingToken)
                     }).ConfigureAwait(false);
 
-                NotifyStateChanged(job.Id, job.WorkspaceId, job.ProjectId, JobState.Running, JobState.AwaitingUser, code, null);
+                NotifyStateChanged(job.Id, job.WorkspaceId, job.ProjectId, JobState.Running, JobState.AwaitingUser, decision.FinalReasonCode, null);
+            }
+            else if (decision.ShouldRollbackAttempts)
+            {
+                // Hạn ngạch tab/capacity: bảo toàn attempts
+                await _reservation.ReleaseReservationDueToNoCapacityAsync(job.Id, fencingToken, CancellationToken.None).ConfigureAwait(false);
+                NotifyStateChanged(job.Id, job.WorkspaceId, job.ProjectId, JobState.Running, JobState.Queued, decision.FinalReasonCode, null);
             }
             else
             {
-                bool canRetry = job.Attempts < job.MaxAttempts;
-                var retryDelay = canRetry ? TimeSpan.FromSeconds(Math.Pow(2, job.Attempts) * 5) : (TimeSpan?)null;
+                bool canRetry = decision.CanRetry;
+                var retryDelay = decision.RetryDelay;
 
                 await _reservation.CommitFailureAsync(
                     job.Id,
                     fencingToken,
-                    reason,
+                    decision.FinalReasonCode,
                     canRetry,
                     retryDelay,
                     CancellationToken.None).ConfigureAwait(false);
 
                 var newState = canRetry ? JobState.Queued : JobState.Failed;
-                NotifyStateChanged(job.Id, job.WorkspaceId, job.ProjectId, JobState.Running, newState, reason, null);
+                NotifyStateChanged(job.Id, job.WorkspaceId, job.ProjectId, JobState.Running, newState, decision.FinalReasonCode, null);
             }
         }
         catch (FencingTokenStaleException)
@@ -603,6 +506,7 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
         }
         catch (Exception ex)
         {
+            LastWorkerException = ex;
             System.Diagnostics.Debug.WriteLine($"[JobScheduler] Lỗi khi xử lý execution failure: {ex.Message}");
         }
     }
@@ -623,7 +527,19 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        _cts.Cancel();
+        if (Interlocked.Exchange(ref _isDisposed, 1) != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            _cts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
         _wakeupChannel.Writer.TryComplete();
 
         if (_schedulerLoopTask is not null)

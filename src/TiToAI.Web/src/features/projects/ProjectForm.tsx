@@ -5,7 +5,20 @@ import {
   type ProjectSummaryDto,
 } from "./projectApi";
 import type { ErrorDto } from "../../contracts/bridge";
-import { IconClose, IconRefresh } from "../../components/Icons";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Loader2, AlertCircle } from "lucide-react";
 
 export interface ProjectFormProps {
   isOpen: boolean;
@@ -53,20 +66,6 @@ export function ProjectForm({
       }, 50);
     }
   }, [isOpen, mode, project]);
-
-  // Đóng bằng phím Escape
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !isSubmitting) {
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, isSubmitting, onClose]);
-
-  if (!isOpen) return null;
 
   const validate = (): boolean => {
     const errors: Record<string, string> = {};
@@ -123,154 +122,132 @@ export function ProjectForm({
   };
 
   return (
-    <div
-      className="modal-backdrop"
-      role="presentation"
-      onClick={(e) => {
-        if (e.target === e.currentTarget && !isSubmitting) {
+    <Dialog
+      open={isOpen}
+      onOpenChange={(open) => {
+        if (!open && !isSubmitting) {
           onClose();
         }
       }}
     >
-      <div
-        className="modal-container"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="project-form-title"
-        style={{ maxWidth: 540 }}
+      <DialogContent
+        className="sm:max-w-[540px]"
+        onPointerDownOutside={(e) => {
+          if (isSubmitting) e.preventDefault();
+        }}
+        onEscapeKeyDown={(e) => {
+          if (isSubmitting) e.preventDefault();
+        }}
       >
-        <div className="modal-header">
-          <div className="modal-title-group">
-            <h2 id="project-form-title">
-              {mode === "create" ? "Tạo Dự Án Video Mới" : "Chỉnh Sửa Dự Án"}
-            </h2>
-            <p className="modal-subtitle">
-              {mode === "create"
-                ? "Dự án chứa kịch bản phân cảnh và tài nguyên video hoàn chỉnh."
-                : `Cập nhật thông tin dự án ${project?.name || ""}.`}
-            </p>
-          </div>
-          <button
-            type="button"
-            className="btn-icon"
-            onClick={onClose}
-            disabled={isSubmitting}
-            aria-label="Đóng hộp thoại"
-          >
-            <IconClose size={18} />
-          </button>
-        </div>
+        <DialogHeader>
+          <DialogTitle id="project-form-title">
+            {mode === "create" ? "Tạo Dự Án Video Mới" : "Chỉnh Sửa Dự Án"}
+          </DialogTitle>
+          <DialogDescription>
+            {mode === "create"
+              ? "Dự án chứa kịch bản phân cảnh và tài nguyên video hoàn chỉnh."
+              : `Cập nhật thông tin dự án ${project?.name || ""}.`}
+          </DialogDescription>
+        </DialogHeader>
 
-        <form onSubmit={handleSubmit}>
-          <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-            {errorMessage && (
-              <div
-                className="notice-box"
-                style={{
-                  backgroundColor: "rgba(239, 68, 68, 0.12)",
-                  border: "1px solid var(--status-error)",
-                  color: "var(--status-error)",
-                }}
-                role="alert"
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {errorMessage && (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{errorMessage}</AlertDescription>
+            </Alert>
+          )}
+
+          <div className="space-y-1.5">
+            <Label htmlFor="prj-name" className="text-sm font-medium">
+              Tiêu đề dự án <span className="text-destructive">*</span>
+            </Label>
+            <Input
+              id="prj-name"
+              ref={nameInputRef}
+              type="text"
+              placeholder="Ví dụ: Outfit Thu Đông - Áo Len Xinh Xắn"
+              value={name}
+              maxLength={150}
+              disabled={isSubmitting}
+              onChange={(e) => {
+                setName(e.target.value);
+                if (fieldErrors.name) setFieldErrors((prev) => ({ ...prev, name: "" }));
+              }}
+              aria-invalid={!!fieldErrors.name}
+            />
+            {fieldErrors.name ? (
+              <p className="text-xs text-destructive">{fieldErrors.name}</p>
+            ) : (
+              <p className="text-xs text-muted-foreground">Tối đa 150 ký tự.</p>
+            )}
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="prj-desc" className="text-sm font-medium">
+              Mô tả tóm tắt nội dung
+            </Label>
+            <Textarea
+              id="prj-desc"
+              rows={3}
+              className="resize-y"
+              placeholder="Tóm tắt ý tưởng, chủ đề hoặc thông điệp chính của video…"
+              value={description}
+              maxLength={500}
+              disabled={isSubmitting}
+              onChange={(e) => setDescription(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">Tùy chọn, tối đa 500 ký tự.</p>
+          </div>
+
+          {mode === "edit" && (
+            <div className="space-y-1.5">
+              <Label htmlFor="prj-status" className="text-sm font-medium">
+                Trạng thái sản xuất
+              </Label>
+              <select
+                id="prj-status"
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 text-foreground"
+                value={status}
+                onChange={(e) => setStatus(e.target.value)}
+                disabled={isSubmitting}
               >
-                <span>⚠️</span>
-                <div>{errorMessage}</div>
-              </div>
-            )}
-
-            <div className="form-group">
-              <label htmlFor="prj-name">
-                Tiêu đề dự án <span style={{ color: "var(--status-error)" }}>*</span>
-              </label>
-              <input
-                id="prj-name"
-                ref={nameInputRef}
-                type="text"
-                className="form-control"
-                placeholder="Ví dụ: Outfit Thu Đông - Áo Len Xinh Xắn"
-                value={name}
-                maxLength={150}
-                disabled={isSubmitting}
-                onChange={(e) => {
-                  setName(e.target.value);
-                  if (fieldErrors.name) setFieldErrors((prev) => ({ ...prev, name: "" }));
-                }}
-                aria-invalid={!!fieldErrors.name}
-              />
-              {fieldErrors.name ? (
-                <span className="field-hint" style={{ color: "var(--status-error)" }}>
-                  {fieldErrors.name}
-                </span>
-              ) : (
-                <span className="field-hint">Tối đa 150 ký tự.</span>
-              )}
+                <option value="Draft">Nháp (Draft)</option>
+                <option value="InProgress">Đang sản xuất (InProgress)</option>
+                <option value="Completed">Hoàn thành (Completed)</option>
+              </select>
             </div>
+          )}
 
-            <div className="form-group">
-              <label htmlFor="prj-desc">Mô tả tóm tắt nội dung</label>
-              <textarea
-                id="prj-desc"
-                className="form-control"
-                style={{ height: 80, padding: "0.5rem 0.75rem", resize: "vertical" }}
-                placeholder="Tóm tắt ý tưởng, chủ đề hoặc thông điệp chính của video…"
-                value={description}
-                maxLength={500}
-                disabled={isSubmitting}
-                onChange={(e) => setDescription(e.target.value)}
-              />
-              <span className="field-hint">Tùy chọn, tối đa 500 ký tự.</span>
-            </div>
-
-            {mode === "edit" && (
-              <div className="form-group">
-                <label htmlFor="prj-status">Trạng thái sản xuất</label>
-                <select
-                  id="prj-status"
-                  className="form-control"
-                  value={status}
-                  onChange={(e) => setStatus(e.target.value)}
-                  disabled={isSubmitting}
-                >
-                  <option value="Draft">Nháp (Draft)</option>
-                  <option value="InProgress">Đang sản xuất (InProgress)</option>
-                  <option value="Completed">Hoàn thành (Completed)</option>
-                </select>
-              </div>
-            )}
-          </div>
-
-          <div className="modal-footer">
-            <span className="footer-status">
+          <DialogFooter className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-2 pt-2 border-t border-border">
+            <span className="text-xs text-muted-foreground">
               {isSubmitting ? "Đang xử lý…" : "Lưu vào cơ sở dữ liệu SQLite cục bộ."}
             </span>
-            <div style={{ display: "flex", gap: "0.5rem" }}>
-              <button
+            <div className="flex items-center gap-2">
+              <Button
                 type="button"
-                className="btn btn-secondary"
+                variant="outline"
                 onClick={onClose}
                 disabled={isSubmitting}
               >
                 Hủy
-              </button>
-              <button
-                type="submit"
-                className="btn btn-primary"
-                disabled={isSubmitting}
-              >
+              </Button>
+              <Button type="submit" disabled={isSubmitting}>
                 {isSubmitting ? (
                   <>
-                    <IconRefresh size={16} className="spin" /> Đang lưu…
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Đang lưu…
                   </>
                 ) : mode === "create" ? (
                   "Tạo Dự án"
                 ) : (
                   "Lưu thay đổi"
                 )}
-              </button>
+              </Button>
             </div>
-          </div>
+          </DialogFooter>
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

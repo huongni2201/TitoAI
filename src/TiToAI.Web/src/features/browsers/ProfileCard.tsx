@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import type {
   BrowserProfileDto,
   OperationalState,
@@ -6,6 +6,20 @@ import type {
   VisibilityState,
 } from "./browserManagerApi";
 import { browserManagerApi } from "./browserManagerApi";
+import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import {
+  Bot,
+  Video,
+  Smartphone,
+  Globe,
+  RefreshCw,
+  ExternalLink,
+  X,
+  Layers,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
 
 interface ProfileCardProps {
   profile: BrowserProfileDto;
@@ -18,49 +32,51 @@ export const ProfileCard: React.FC<ProfileCardProps> = ({
   workspaceName,
   onActionComplete,
 }) => {
-  const [isRequestingLogin, setIsRequestingLogin] = React.useState(false);
-  const [isCheckingSession, setIsCheckingSession] = React.useState(false);
-  const [isCanceling, setIsCanceling] = React.useState(false);
-  const [actionMessage, setActionMessage] = React.useState<string | null>(null);
+  const [isRequestingLogin, setIsRequestingLogin] = useState(false);
+  const [isCheckingSession, setIsCheckingSession] = useState(false);
+  const [isCanceling, setIsCanceling] = useState(false);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
 
   // 1. Phân loại cấu hình tiêu đề và icon theo kind
   const renderProviderHeader = () => {
     switch (profile.kind) {
       case "SharedAI":
         return {
-          title: profile.displayName || (profile.providerKey === "chatgpt-web" ? "ChatGPT Web" : profile.providerKey === "gemini-web" ? "Gemini Web" : "Tài khoản AI"),
+          title:
+            profile.displayName ||
+            (profile.providerKey === "chatgpt-web"
+              ? "ChatGPT Web"
+              : profile.providerKey === "gemini-web"
+                ? "Gemini Web"
+                : "Tài khoản AI"),
           subtitle: profile.accountIdentity || "Chưa xác minh danh tính",
-          badgeScope: "Toàn ứng dụng (Tất cả Workspace)",
-          icon: (
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M12 2a10 10 0 0 1 10 10c0 5.523-4.477 10-10 10S2 17.523 2 12 6.477 2 12 2Z" />
-              <path d="m9 12 2 2 4-4" />
-            </svg>
-          ),
+          badgeScope: "Hệ thống AI",
+          icon: <Bot className="h-5 w-5" />,
         };
       case "MuseAI":
         return {
-          title: profile.displayName || "MuseAI",
-          subtitle: profile.accountIdentity ? `Tài khoản: ${profile.accountIdentity}` : "Chưa liên kết tài khoản",
-          badgeScope: "Dùng chung toàn ứng dụng",
-          icon: (
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <rect x="2" y="2" width="20" height="20" rx="5" ry="5" />
-              <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z" />
-              <line x1="17.5" y1="6.5" x2="17.51" y2="6.5" />
-            </svg>
-          ),
+          title: profile.displayName || "MuseAI Video",
+          subtitle: profile.accountIdentity
+            ? `Tài khoản: ${profile.accountIdentity}`
+            : "Chưa liên kết tài khoản",
+          badgeScope: "Video Generator",
+          icon: <Video className="h-5 w-5" />,
         };
       case "TikTok":
         return {
-          title: "TikTok Creator",
-          subtitle: profile.accountIdentity ? `Kênh: ${profile.accountIdentity}` : "Chưa liên kết kênh",
+          title: profile.displayName || "TikTok Creator",
+          subtitle: profile.accountIdentity
+            ? `Kênh: ${profile.accountIdentity}`
+            : "Chưa liên kết kênh",
           badgeScope: workspaceName ? `Workspace: ${workspaceName}` : "Kênh TikTok",
-          icon: (
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M9 12a4 4 0 1 0 4 4V4a5 5 0 0 0 5 5" />
-            </svg>
-          ),
+          icon: <Smartphone className="h-5 w-5" />,
+        };
+      default:
+        return {
+          title: profile.displayName || profile.profileId,
+          subtitle: profile.accountIdentity || "Chưa xác minh",
+          badgeScope: "Trình duyệt",
+          icon: <Globe className="h-5 w-5" />,
         };
     }
   };
@@ -72,41 +88,45 @@ export const ProfileCard: React.FC<ProfileCardProps> = ({
     switch (state) {
       case "Running":
         return (
-          <span className="badge badge-op badge-running" title="Tiến trình browser đang chạy nền">
-            <span className="dot dot-pulse" aria-hidden="true" />
+          <Badge variant="success" className="gap-1.5 text-[11px]" title="Tiến trình browser đang chạy nền">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" aria-hidden="true" />
             Đang chạy ẩn
-          </span>
+          </Badge>
         );
       case "Idle":
         return (
-          <span className="badge badge-op badge-idle" title="Tiến trình sẵn sàng nhận tác vụ">
-            <span className="dot" aria-hidden="true" />
+          <Badge variant="info" className="gap-1.5 text-[11px]" title="Tiến trình sẵn sàng nhận tác vụ">
+            <span className="h-1.5 w-1.5 rounded-full bg-sky-500" aria-hidden="true" />
             Chờ việc
-          </span>
+          </Badge>
         );
       case "Stopped":
         return (
-          <span className="badge badge-op badge-stopped" title="Trình duyệt chưa khởi động hoặc đã đóng">
-            <span className="dot" aria-hidden="true" />
+          <Badge variant="secondary" className="gap-1.5 text-[11px]" title="Trình duyệt chưa khởi động hoặc đã đóng">
+            <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60" aria-hidden="true" />
             Đã dừng
-          </span>
+          </Badge>
         );
       case "Quiescing":
         return (
-          <span className="badge badge-op badge-quiescing" title="Đang thu hồi tài nguyên an toàn">
-            <span className="dot" aria-hidden="true" />
+          <Badge variant="warning" className="gap-1.5 text-[11px]" title="Đang thu hồi tài nguyên an toàn">
+            <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" aria-hidden="true" />
             Đang thu hồi
-          </span>
+          </Badge>
         );
       case "Error":
         return (
-          <span className="badge badge-op badge-error" title="Gặp sự cố tiến trình">
-            <span className="dot" aria-hidden="true" />
+          <Badge variant="destructive" className="gap-1.5 text-[11px]" title="Gặp sự cố tiến trình">
+            <span className="h-1.5 w-1.5 rounded-full bg-destructive" aria-hidden="true" />
             Lỗi tiến trình
-          </span>
+          </Badge>
         );
       default:
-        return <span className="badge badge-op badge-stopped">Đã dừng</span>;
+        return (
+          <Badge variant="secondary" className="text-[11px]">
+            Đã dừng
+          </Badge>
+        );
     }
   };
 
@@ -115,24 +135,23 @@ export const ProfileCard: React.FC<ProfileCardProps> = ({
     switch (state) {
       case "Hidden":
         return (
-          <span className="badge badge-vis badge-hidden" title="Chạy hoàn toàn ẩn trên desktop">
+          <Badge variant="secondary" className="text-[11px]" title="Chạy hoàn toàn ẩn trên desktop">
             Chạy ẩn
-          </span>
+          </Badge>
         );
       case "VisibleActive":
         return (
-          <span className="badge badge-vis badge-active" title="Cửa sổ trình duyệt đang mở để đăng nhập">
+          <Badge variant="default" className="text-[11px] gap-1" title="Cửa sổ trình duyệt đang mở để đăng nhập">
+            <span className="h-1.5 w-1.5 rounded-full bg-primary-foreground animate-ping" aria-hidden="true" />
             Đang mở cửa sổ
-          </span>
-        );
-      case "VisibleWaiting":
-        return (
-          <span className="badge badge-vis badge-waiting" title="Đang xếp hàng chờ đến lượt mở cửa sổ">
-            Đang xếp hàng chờ
-          </span>
+          </Badge>
         );
       default:
-        return <span className="badge badge-vis badge-hidden">Chạy ẩn</span>;
+        return (
+          <Badge variant="secondary" className="text-[11px]" title="Chạy hoàn toàn ẩn trên desktop">
+            Chạy ẩn
+          </Badge>
+        );
     }
   };
 
@@ -141,24 +160,28 @@ export const ProfileCard: React.FC<ProfileCardProps> = ({
     switch (status) {
       case "Connected":
         return (
-          <span className="badge badge-sess badge-connected" title="Phiên đăng nhập hợp lệ và sẵn sàng">
+          <Badge variant="success" className="text-[11px]" title="Phiên đăng nhập hợp lệ và sẵn sàng">
             Đã kết nối
-          </span>
+          </Badge>
         );
       case "SessionExpired":
         return (
-          <span className="badge badge-sess badge-expired" title="Phiên đăng nhập đã hết hạn hoặc bị hủy">
+          <Badge variant="warning" className="text-[11px]" title="Phiên đăng nhập đã hết hạn hoặc bị hủy">
             Hết phiên
-          </span>
+          </Badge>
         );
       case "Unverified":
         return (
-          <span className="badge badge-sess badge-unverified" title="Chưa kiểm tra hoặc chưa xác minh phiên">
+          <Badge variant="outline" className="text-[11px]" title="Chưa kiểm tra hoặc chưa xác minh phiên">
             Chưa xác minh
-          </span>
+          </Badge>
         );
       default:
-        return <span className="badge badge-sess badge-unverified">Chưa xác minh</span>;
+        return (
+          <Badge variant="outline" className="text-[11px]">
+            Chưa xác minh
+          </Badge>
+        );
     }
   };
 
@@ -167,12 +190,10 @@ export const ProfileCard: React.FC<ProfileCardProps> = ({
     setIsRequestingLogin(true);
     setActionMessage(null);
     try {
-      const res = await browserManagerApi.requestLogin(profile.profileId);
-      if (res.queued) {
-        setActionMessage("Đang xếp hàng chờ lượt đăng nhập...");
-      } else {
-        setActionMessage("Cửa sổ đăng nhập đã được mở.");
-      }
+      await browserManagerApi.requestLogin(profile.profileId, {
+        providerKey: profile.providerKey ?? undefined,
+      });
+      setActionMessage("Cửa sổ đăng nhập đã được mở.");
       onActionComplete?.();
     } catch (err) {
       setActionMessage(`Lỗi đăng nhập: ${err instanceof Error ? err.message : String(err)}`);
@@ -186,10 +207,10 @@ export const ProfileCard: React.FC<ProfileCardProps> = ({
     setActionMessage(null);
     try {
       await browserManagerApi.cancelLogin(profile.profileId);
-      setActionMessage("Đã hủy chờ đăng nhập.");
+      setActionMessage("Đã đóng cửa sổ đăng nhập.");
       onActionComplete?.();
     } catch (err) {
-      setActionMessage(`Lỗi hủy chờ: ${err instanceof Error ? err.message : String(err)}`);
+      setActionMessage(`Lỗi đóng cửa sổ: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setIsCanceling(false);
     }
@@ -210,178 +231,201 @@ export const ProfileCard: React.FC<ProfileCardProps> = ({
   };
 
   const isBusy = isRequestingLogin || isCheckingSession || isCanceling;
-  const isWaiting = profile.visibilityState === "VisibleWaiting";
   const isActive = profile.visibilityState === "VisibleActive";
 
   return (
-    <article
-      className={`browser-profile-card ${profile.kind.toLowerCase()}-card ${
-        isActive ? "is-active-window" : ""
-      } ${isWaiting ? "is-waiting-queue" : ""}`}
+    <Card
+      className={cn(
+        "flex flex-col transition-all shadow-xs hover:border-border/80",
+        isActive && "border-primary ring-2 ring-primary/20 shadow-md"
+      )}
       aria-label={`Trình duyệt ${headerInfo.title}`}
     >
       {/* HEADER CARD */}
-      <div className="card-top">
-        <div className="provider-icon-wrapper" aria-hidden="true">
-          {headerInfo.icon}
-        </div>
-        <div className="provider-info">
-          <div className="card-title-row">
-            <h3 className="provider-name">{headerInfo.title}</h3>
-            <span className="scope-tag">{headerInfo.badgeScope}</span>
-          </div>
-          <div className="provider-subtitle">{headerInfo.subtitle}</div>
-        </div>
-      </div>
-
-      {/* 3 CHIỀU TRẠNG THÁI MINH BẠCH */}
-      <div className="card-state-section">
-        <div className="state-dimension">
-          <span className="dim-label">Tiến trình:</span>
-          {getOperationalBadge(profile.operationalState)}
-        </div>
-        <div className="state-dimension">
-          <span className="dim-label">Hiển thị:</span>
-          {getVisibilityBadge(profile.visibilityState)}
-        </div>
-        <div className="state-dimension">
-          <span className="dim-label">Phiên đăng nhập:</span>
-          {getSessionBadge(profile.sessionStatus)}
-        </div>
-      </div>
-
-      {/* THÔNG TIN CHI TIẾT (SHARED AI ACTIVE TABS & JOBS) */}
-      {profile.kind === "SharedAI" && (
-        <div className="shared-ai-details">
-          <div className="tabs-header">
-            <span className="detail-label">Vai trò tabs đang mở:</span>
-            <span className="active-jobs-badge">
-              {profile.activeJobCount > 0
-                ? `${profile.activeJobCount} tác vụ đang chạy`
-                : "0 tác vụ đang chạy"}
-            </span>
-          </div>
-          <div className="tabs-list">
-            {profile.activeTabs && profile.activeTabs.length > 0 ? (
-              profile.activeTabs.map((tab) => (
-                <span key={tab} className="tab-pill">
-                  {tab === "Script" ? "Kịch bản" : tab === "Image" ? "Sinh ảnh" : tab === "VideoPrompt" ? "Prompt Video" : tab}
-                </span>
-              ))
-            ) : (
-              <span className="text-muted-sm">Chưa có tab hoạt động</span>
-            )}
-          </div>
-          <div className="security-notice">
-            Khép kín: Quản lý ẩn danh, không lộ thông tin phiên hoặc đường dẫn thư mục lưu trữ.
-          </div>
-        </div>
-      )}
-
-      {/* BANNER HÀNG ĐỢI NỘI BỘ CARD KHI ĐANG VISIBLE WAITING */}
-      {isWaiting && (
-        <div className="card-queue-alert" role="status" aria-live="polite">
-          <div className="alert-text">
-            <strong>Đang xếp hàng chờ:</strong> Đang có cửa sổ khác mở. Cửa sổ này sẽ tự động xuất hiện khi lượt trước kết thúc.
-          </div>
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            onClick={handleCancelLogin}
-            disabled={isBusy}
+      <CardHeader className="p-4 pb-3">
+        <div className="flex items-center gap-3">
+          <div
+            className="h-10 w-10 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0"
+            aria-hidden="true"
           >
-            Hủy chờ
-          </button>
+            {headerInfo.icon}
+          </div>
+          <div className="flex flex-col min-w-0 flex-1">
+            <div className="flex items-center justify-between gap-2">
+              <h4 className="font-bold text-sm text-foreground truncate">{headerInfo.title}</h4>
+              <Badge variant="outline" className="text-[10px] px-1.5 py-0 shrink-0">
+                {headerInfo.badgeScope}
+              </Badge>
+            </div>
+            <p className="text-xs text-muted-foreground truncate mt-0.5">{headerInfo.subtitle}</p>
+          </div>
         </div>
-      )}
+      </CardHeader>
 
-      {/* TIN NHẮN PHẢN HỒI THAO TÁC */}
-      {actionMessage && (
-        <div className="card-action-msg" role="status">
-          {actionMessage}
+      <CardContent className="p-4 pt-0 space-y-3 flex-1">
+        {/* 3 CHIỀU TRẠNG THÁI */}
+        <div className="rounded-lg border border-border/60 bg-muted/40 p-2.5 space-y-2 text-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground font-medium">Tiến trình:</span>
+            {getOperationalBadge(profile.operationalState)}
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground font-medium">Hiển thị:</span>
+            {getVisibilityBadge(profile.visibilityState)}
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground font-medium">Phiên đăng nhập:</span>
+            {getSessionBadge(profile.sessionStatus)}
+          </div>
         </div>
-      )}
 
-      {/* NÚT THAO TÁC CTA NGỮ CẢNH */}
-      <div className="card-actions">
+        {/* THÔNG TIN CHI TIẾT TABS ĐANG MỞ */}
+        {profile.kind === "SharedAI" && (
+          <div className="rounded-lg border border-border/50 bg-background/50 p-2.5 space-y-1.5 text-xs">
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground flex items-center gap-1 font-medium">
+                <Layers className="h-3.5 w-3.5 text-primary" />
+                Tabs đang mở:
+              </span>
+              <span className="font-semibold text-primary">
+                {profile.activeJobCount > 0
+                  ? `${profile.activeJobCount} tác vụ đang chạy`
+                  : "0 tác vụ"}
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-1 pt-0.5">
+              {profile.activeTabs && profile.activeTabs.length > 0 ? (
+                profile.activeTabs.map((tab) => (
+                  <Badge key={tab} variant="secondary" className="text-[10px] px-2 py-0">
+                    {tab === "Script"
+                      ? "Kịch bản"
+                      : tab === "Image"
+                        ? "Sinh ảnh"
+                        : tab === "VideoPrompt"
+                          ? "Prompt Video"
+                          : tab}
+                  </Badge>
+                ))
+              ) : (
+                <span className="text-[11px] text-muted-foreground italic">Chưa có tab hoạt động</span>
+              )}
+            </div>
+            <p className="text-[10px] text-muted-foreground/80 italic pt-1 border-t border-border/40">
+              Khép kín: Quản lý độc lập, không lộ thông tin phiên hoặc thư mục lưu trữ.
+            </p>
+          </div>
+        )}
+
+        {/* THÔNG BÁO PHẢN HỒI THAO TÁC */}
+        {actionMessage && (
+          <p className="text-xs text-muted-foreground italic px-1" role="status">
+            {actionMessage}
+          </p>
+        )}
+      </CardContent>
+
+      {/* FOOTER ACTIONS */}
+      <CardFooter className="p-4 pt-2 border-t border-border/50 flex items-center justify-end gap-2 flex-wrap mt-auto">
         {isActive ? (
-          <div className="active-window-indicator">
-            <span className="pulse-indicator" aria-hidden="true" />
-            <span>Cửa sổ đăng nhập đang mở...</span>
+          <div className="flex items-center justify-between w-full gap-2">
+            <div className="flex items-center gap-2 text-xs font-semibold text-primary">
+              <span className="h-2 w-2 rounded-full bg-primary animate-ping" aria-hidden="true" />
+              <span>Cửa sổ đăng nhập đang mở...</span>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleCancelLogin}
+              disabled={isBusy}
+              className="gap-1.5 h-8 text-xs shrink-0"
+            >
+              <X className="h-3.5 w-3.5" />
+              {isCanceling ? "Đang đóng..." : "Đóng cửa sổ"}
+            </Button>
           </div>
-        ) : isWaiting ? (
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            onClick={handleCancelLogin}
-            disabled={isBusy}
-          >
-            {isCanceling ? "Đang hủy..." : "Hủy chờ đăng nhập"}
-          </button>
         ) : profile.sessionStatus === "Connected" ? (
           <>
-            <button
+            <Button
               type="button"
-              className="btn btn-secondary btn-sm"
+              variant="outline"
+              size="sm"
               onClick={handleCheckSession}
               disabled={isBusy}
               title="Kiểm tra lại tính hợp lệ của phiên làm việc"
+              className="gap-1.5"
             >
+              <RefreshCw className={cn("h-3.5 w-3.5", isCheckingSession && "animate-spin")} />
               {isCheckingSession ? "Đang kiểm tra..." : "Kiểm tra phiên"}
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
-              className="btn btn-secondary btn-sm btn-relogin"
+              variant="secondary"
+              size="sm"
               onClick={handleRequestLogin}
               disabled={isBusy}
               title="Mở lại cửa sổ để đăng nhập lại hoặc đổi tài khoản"
+              className="gap-1.5"
             >
+              <ExternalLink className="h-3.5 w-3.5" />
               {isRequestingLogin ? "Đang gửi..." : "Đăng nhập lại"}
-            </button>
+            </Button>
           </>
         ) : profile.sessionStatus === "SessionExpired" ? (
           <>
-            <button
+            <Button
               type="button"
-              className="btn btn-primary btn-sm"
+              variant="default"
+              size="sm"
               onClick={handleRequestLogin}
               disabled={isBusy}
               title="Phiên đã hết hạn, nhấn để mở cửa sổ đăng nhập"
+              className="gap-1.5"
             >
+              <ExternalLink className="h-3.5 w-3.5" />
               {isRequestingLogin ? "Đang gửi..." : "Đăng nhập lại"}
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
-              className="btn btn-secondary btn-sm"
+              variant="outline"
+              size="sm"
               onClick={handleCheckSession}
               disabled={isBusy}
+              className="gap-1.5"
             >
+              <RefreshCw className={cn("h-3.5 w-3.5", isCheckingSession && "animate-spin")} />
               {isCheckingSession ? "Đang kiểm tra..." : "Kiểm tra phiên"}
-            </button>
+            </Button>
           </>
         ) : (
           /* Unverified */
           <>
-            <button
+            <Button
               type="button"
-              className="btn btn-primary btn-sm"
+              variant="default"
+              size="sm"
               onClick={handleRequestLogin}
               disabled={isBusy}
               title="Mở cửa sổ trình duyệt để đăng nhập tài khoản lần đầu"
+              className="gap-1.5"
             >
+              <ExternalLink className="h-3.5 w-3.5" />
               {isRequestingLogin ? "Đang gửi..." : "Đăng nhập"}
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
-              className="btn btn-secondary btn-sm"
+              variant="outline"
+              size="sm"
               onClick={handleCheckSession}
               disabled={isBusy}
+              className="gap-1.5"
             >
+              <RefreshCw className={cn("h-3.5 w-3.5", isCheckingSession && "animate-spin")} />
               {isCheckingSession ? "Đang kiểm tra..." : "Kiểm tra phiên"}
-            </button>
+            </Button>
           </>
         )}
-      </div>
-    </article>
+      </CardFooter>
+    </Card>
   );
 };

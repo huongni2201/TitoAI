@@ -1,16 +1,93 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { IconInfo, IconCheck } from "../../components/Icons";
+import { Check, FolderOpen, Info, AlertCircle, Loader2 } from "lucide-react";
 import {
   storageSettingsApi,
   type SettingsDto,
   type SettingsSaveRequest,
 } from "./storageSettingsApi";
+import { cn } from "../../lib/utils";
 
 export interface StorageSettingsPanelProps {
-  onClose?: () => void;
+  onDirtyChange?: (isDirty: boolean) => void;
+  resetSignal?: number;
 }
 
-export function StorageSettingsPanel({ onClose }: StorageSettingsPanelProps) {
+// shadcn UI-compatible primitives
+function Button({
+  className,
+  variant = "default",
+  size = "default",
+  ...props
+}: React.ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: "default" | "outline" | "secondary" | "destructive" | "ghost";
+  size?: "default" | "sm" | "lg" | "icon";
+}) {
+  const variantClasses = {
+    default: "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90",
+    outline: "border border-input bg-background shadow-xs hover:bg-accent hover:text-accent-foreground",
+    secondary: "bg-secondary text-secondary-foreground shadow-xs hover:bg-secondary/80",
+    destructive: "bg-destructive text-destructive-foreground shadow-xs hover:bg-destructive/90",
+    ghost: "hover:bg-accent hover:text-accent-foreground",
+  };
+  const sizeClasses = {
+    default: "h-9 px-4 py-2",
+    sm: "h-8 rounded-md px-3 text-xs",
+    lg: "h-10 rounded-md px-8",
+    icon: "h-9 w-9",
+  };
+  return (
+    <button
+      className={cn(
+        "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+        variantClasses[variant],
+        sizeClasses[size],
+        className
+      )}
+      {...props}
+    />
+  );
+}
+
+function Alert({
+  className,
+  variant = "default",
+  ...props
+}: React.HTMLAttributes<HTMLDivElement> & {
+  variant?: "default" | "destructive" | "warning" | "info" | "success";
+}) {
+  const variantClasses = {
+    default: "bg-background text-foreground border-border",
+    destructive: "border-destructive/50 text-destructive dark:border-destructive [&>svg]:text-destructive",
+    warning: "border-amber-500/50 text-amber-600 dark:text-amber-400 [&>svg]:text-amber-500",
+    info: "border-sky-500/50 text-sky-600 dark:text-sky-400 [&>svg]:text-sky-500",
+    success: "border-emerald-500/50 text-emerald-600 dark:text-emerald-400 [&>svg]:text-emerald-500",
+  };
+  return (
+    <div
+      role="alert"
+      className={cn(
+        "relative w-full rounded-lg border px-4 py-3 text-sm [&>svg+div]:translate-y-[-3px] [&>svg]:absolute [&>svg]:left-4 [&>svg]:top-4 [&>svg]:text-foreground [&>svg~*]:pl-7",
+        variantClasses[variant],
+        className
+      )}
+      {...props}
+    />
+  );
+}
+
+function Label({ className, ...props }: React.LabelHTMLAttributes<HTMLLabelElement>) {
+  return (
+    <label
+      className={cn(
+        "text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70",
+        className
+      )}
+      {...props}
+    />
+  );
+}
+
+export function StorageSettingsPanel({ onDirtyChange, resetSignal }: StorageSettingsPanelProps) {
   const [savedSettings, setSavedSettings] = useState<SettingsDto | null>(null);
   const [documentsPath, setDocumentsPath] = useState<string>("");
   const [imagesPath, setImagesPath] = useState<string>("");
@@ -52,6 +129,28 @@ export function StorageSettingsPanel({ onClose }: StorageSettingsPanelProps) {
     (documentsPath !== savedSettings.documentsPath ||
       imagesPath !== savedSettings.imagesPath ||
       videosPath !== savedSettings.videosPath);
+
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+  }, [isDirty, onDirtyChange]);
+
+  // Hủy bản nháp và hoàn tác về cấu hình đã lưu gần nhất
+  const handleCancel = useCallback(() => {
+    if (savedSettings) {
+      setDocumentsPath(savedSettings.documentsPath);
+      setImagesPath(savedSettings.imagesPath);
+      setVideosPath(savedSettings.videosPath);
+    }
+    setFieldErrors({});
+    setGeneralError(null);
+    setSuccessMessage(null);
+  }, [savedSettings]);
+
+  useEffect(() => {
+    if (resetSignal !== undefined && resetSignal > 0) {
+      handleCancel();
+    }
+  }, [resetSignal, handleCancel]);
 
   // Mở hộp thoại chọn thư mục Windows an toàn
   const handleBrowse = async (target: "documents" | "images" | "videos") => {
@@ -122,7 +221,6 @@ export function StorageSettingsPanel({ onClose }: StorageSettingsPanelProps) {
       setFieldErrors({});
       setSuccessMessage("Đã lưu thành công cấu hình thư mục lưu trữ!");
     } catch (err: any) {
-      // Bắt lỗi từ Envelope Error nếu Host trả về VALIDATION_FAILED kèm fieldErrors trong details
       const fe =
         err?.fieldErrors ||
         err?.details?.fieldErrors ||
@@ -145,76 +243,48 @@ export function StorageSettingsPanel({ onClose }: StorageSettingsPanelProps) {
     }
   };
 
-  // Hủy bản nháp và hoàn tác về cấu hình đã lưu gần nhất
-  const handleCancel = () => {
-    if (savedSettings) {
-      setDocumentsPath(savedSettings.documentsPath);
-      setImagesPath(savedSettings.imagesPath);
-      setVideosPath(savedSettings.videosPath);
-    }
-    setFieldErrors({});
-    setGeneralError(null);
-    setSuccessMessage(null);
-  };
-
   return (
-    <div
-      className="settings-section"
-    >
-      <div className="section-header">
-        <h3>Thư mục lưu trữ độc lập</h3>
-        <p>
-          Cấu hình ba thư mục riêng biệt trên ổ đĩa để lưu trữ tài liệu xuất, ảnh AI
-          và video thành phẩm.
+    <div className="space-y-6">
+      <div className="space-y-1">
+        <h3 className="text-lg font-bold text-foreground">Thư mục lưu trữ độc lập</h3>
+        <p className="text-sm text-muted-foreground">
+          Cấu hình ba thư mục riêng biệt trên ổ đĩa để lưu trữ tài liệu xuất, ảnh AI và video thành phẩm.
         </p>
       </div>
 
       {isLoading ? (
-        <div style={{ padding: "2rem", textAlign: "center", color: "var(--text-muted)" }}>
-          Đang nạp thông tin cấu hình lưu trữ...
+        <div className="flex flex-col items-center justify-center p-8 text-muted-foreground gap-2">
+          <Loader2 className="h-6 w-6 animate-spin text-primary" />
+          <p className="text-sm">Đang nạp thông tin cấu hình lưu trữ...</p>
         </div>
       ) : (
-        <form onSubmit={handleSave} noValidate>
+        <form onSubmit={handleSave} noValidate className="space-y-5">
           {/* Thông báo thành công */}
           {successMessage && (
-            <div
-              className="notice-box"
-              style={{
-                backgroundColor: "var(--success-subtle, rgba(34, 197, 94, 0.1))",
-                borderColor: "var(--success, #22c55e)",
-                marginBottom: "1rem",
-              }}
-              role="status"
-            >
-              <IconCheck size={18} style={{ color: "var(--success, #22c55e)" }} />
+            <Alert variant="success" role="status">
+              <Check className="h-4 w-4" />
               <div>
                 <strong>Thành công:</strong> {successMessage}
               </div>
-            </div>
+            </Alert>
           )}
 
           {/* Thông báo lỗi chung */}
           {generalError && (
-            <div
-              className="notice-box"
-              style={{
-                backgroundColor: "rgba(239, 68, 68, 0.1)",
-                borderColor: "var(--error, #ef4444)",
-                marginBottom: "1rem",
-              }}
-              role="alert"
-            >
-              <IconInfo size={18} style={{ color: "var(--error, #ef4444)" }} />
+            <Alert variant="destructive" role="alert">
+              <AlertCircle className="h-4 w-4" />
               <div>
                 <strong>Lỗi cài đặt:</strong> {generalError}
               </div>
-            </div>
+            </Alert>
           )}
 
           {/* 1. Thư mục Tài liệu */}
-          <div className="form-group">
-            <label htmlFor="docs-path">1. Thư mục Tài liệu (Documents)</label>
-            <div className="input-group">
+          <div className="space-y-2">
+            <Label htmlFor="docs-path" className="font-semibold text-foreground">
+              1. Thư mục Tài liệu (Documents)
+            </Label>
+            <div className="flex gap-2">
               <input
                 id="docs-path"
                 type="text"
@@ -224,38 +294,40 @@ export function StorageSettingsPanel({ onClose }: StorageSettingsPanelProps) {
                   setSuccessMessage(null);
                 }}
                 placeholder="Ví dụ: C:\TiToAI\documents"
-                className={`form-control ${fieldErrors["documentsPath"] ? "input-error" : ""}`}
-                style={fieldErrors["documentsPath"] ? { borderColor: "var(--error, #ef4444)" } : undefined}
+                className={cn(
+                  "flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
+                  fieldErrors["documentsPath"] && "border-destructive focus-visible:ring-destructive"
+                )}
                 disabled={isSaving}
               />
-              <button
+              <Button
                 type="button"
-                className="btn btn-secondary"
+                variant="secondary"
                 onClick={() => handleBrowse("documents")}
                 disabled={isSaving || isBrowsing === "documents"}
                 aria-label="Chọn thư mục lưu trữ tài liệu"
+                className="shrink-0"
               >
+                <FolderOpen className="h-4 w-4" />
                 {isBrowsing === "documents" ? "Đang chọn…" : "Chọn thư mục…"}
-              </button>
+              </Button>
             </div>
-            <span className="field-hint">
+            <p className="text-xs text-muted-foreground">
               Lưu trữ kịch bản, prompt và tài liệu được xuất thành tệp văn bản.
-            </span>
+            </p>
             {fieldErrors["documentsPath"] && (
-              <div
-                className="field-error-message"
-                style={{ color: "var(--error, #ef4444)", fontSize: "0.8125rem", marginTop: "0.25rem" }}
-                role="alert"
-              >
+              <p className="text-xs text-destructive font-medium" role="alert">
                 {fieldErrors["documentsPath"].join(" ")}
-              </div>
+              </p>
             )}
           </div>
 
           {/* 2. Thư mục Ảnh AI */}
-          <div className="form-group" style={{ marginTop: "1rem" }}>
-            <label htmlFor="imgs-path">2. Thư mục Ảnh AI (Images)</label>
-            <div className="input-group">
+          <div className="space-y-2">
+            <Label htmlFor="imgs-path" className="font-semibold text-foreground">
+              2. Thư mục Ảnh AI (Images)
+            </Label>
+            <div className="flex gap-2">
               <input
                 id="imgs-path"
                 type="text"
@@ -265,38 +337,40 @@ export function StorageSettingsPanel({ onClose }: StorageSettingsPanelProps) {
                   setSuccessMessage(null);
                 }}
                 placeholder="Ví dụ: C:\TiToAI\images"
-                className={`form-control ${fieldErrors["imagesPath"] ? "input-error" : ""}`}
-                style={fieldErrors["imagesPath"] ? { borderColor: "var(--error, #ef4444)" } : undefined}
+                className={cn(
+                  "flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
+                  fieldErrors["imagesPath"] && "border-destructive focus-visible:ring-destructive"
+                )}
                 disabled={isSaving}
               />
-              <button
+              <Button
                 type="button"
-                className="btn btn-secondary"
+                variant="secondary"
                 onClick={() => handleBrowse("images")}
                 disabled={isSaving || isBrowsing === "images"}
                 aria-label="Chọn thư mục lưu trữ ảnh AI"
+                className="shrink-0"
               >
+                <FolderOpen className="h-4 w-4" />
                 {isBrowsing === "images" ? "Đang chọn…" : "Chọn thư mục…"}
-              </button>
+              </Button>
             </div>
-            <span className="field-hint">
+            <p className="text-xs text-muted-foreground">
               Lưu ảnh do AI tạo ra và ảnh tham chiếu được nhập vào thư viện.
-            </span>
+            </p>
             {fieldErrors["imagesPath"] && (
-              <div
-                className="field-error-message"
-                style={{ color: "var(--error, #ef4444)", fontSize: "0.8125rem", marginTop: "0.25rem" }}
-                role="alert"
-              >
+              <p className="text-xs text-destructive font-medium" role="alert">
                 {fieldErrors["imagesPath"].join(" ")}
-              </div>
+              </p>
             )}
           </div>
 
           {/* 3. Thư mục Video AI */}
-          <div className="form-group" style={{ marginTop: "1rem" }}>
-            <label htmlFor="vids-path">3. Thư mục Video AI (Videos)</label>
-            <div className="input-group">
+          <div className="space-y-2">
+            <Label htmlFor="vids-path" className="font-semibold text-foreground">
+              3. Thư mục Video AI (Videos)
+            </Label>
+            <div className="flex gap-2">
               <input
                 id="vids-path"
                 type="text"
@@ -306,79 +380,59 @@ export function StorageSettingsPanel({ onClose }: StorageSettingsPanelProps) {
                   setSuccessMessage(null);
                 }}
                 placeholder="Ví dụ: C:\TiToAI\videos"
-                className={`form-control ${fieldErrors["videosPath"] ? "input-error" : ""}`}
-                style={fieldErrors["videosPath"] ? { borderColor: "var(--error, #ef4444)" } : undefined}
+                className={cn(
+                  "flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
+                  fieldErrors["videosPath"] && "border-destructive focus-visible:ring-destructive"
+                )}
                 disabled={isSaving}
               />
-              <button
+              <Button
                 type="button"
-                className="btn btn-secondary"
+                variant="secondary"
                 onClick={() => handleBrowse("videos")}
                 disabled={isSaving || isBrowsing === "videos"}
                 aria-label="Chọn thư mục lưu trữ video AI"
+                className="shrink-0"
               >
+                <FolderOpen className="h-4 w-4" />
                 {isBrowsing === "videos" ? "Đang chọn…" : "Chọn thư mục…"}
-              </button>
+              </Button>
             </div>
-            <span className="field-hint">
+            <p className="text-xs text-muted-foreground">
               Lưu video thành phẩm được tạo hoặc tải về từ các dịch vụ sinh video.
-            </span>
+            </p>
             {fieldErrors["videosPath"] && (
-              <div
-                className="field-error-message"
-                style={{ color: "var(--error, #ef4444)", fontSize: "0.8125rem", marginTop: "0.25rem" }}
-                role="alert"
-              >
+              <p className="text-xs text-destructive font-medium" role="alert">
                 {fieldErrors["videosPath"].join(" ")}
-              </div>
+              </p>
             )}
           </div>
 
           {/* Banner lưu ý đổi thư mục theo SETTINGS_PLAN §3 */}
-          <div className="notice-box info" style={{ marginTop: "1.25rem" }}>
-            <IconInfo size={18} />
+          <Alert variant="info" className="mt-4">
+            <Info className="h-4 w-4" />
             <div>
-              <strong>Quy tắc lưu trữ:</strong> Đổi thư mục chỉ áp dụng cho tài liệu và
-              tác vụ mới; các tệp đã tạo trước đó được giữ nguyên tại vị trí cũ.
+              <strong>Quy tắc lưu trữ:</strong> Đổi thư mục chỉ áp dụng cho tài liệu và tác vụ mới; các tệp đã tạo trước đó được giữ nguyên tại vị trí cũ.
             </div>
-          </div>
+          </Alert>
 
-          {/* Thanh hành động Lưu, Hủy & Đóng */}
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "flex-end",
-              gap: "0.75rem",
-              marginTop: "1.5rem",
-              paddingTop: "1rem",
-              borderTop: "1px solid var(--border)",
-            }}
-          >
-            {onClose && (
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={onClose}
-                disabled={isSaving}
-              >
-                Đóng
-              </button>
-            )}
-            <button
+          {/* Thanh hành động Lưu & Hủy */}
+          <div className="flex items-center justify-end gap-3 pt-5 border-t border-border mt-6">
+            <Button
               type="button"
-              className="btn btn-secondary"
+              variant="outline"
               onClick={handleCancel}
               disabled={isSaving || !isDirty}
             >
               Hủy thay đổi
-            </button>
-            <button
+            </Button>
+            <Button
               type="submit"
-              className="btn btn-primary"
+              variant="default"
               disabled={isSaving || !isDirty}
             >
               {isSaving ? "Đang lưu cấu hình…" : "Lưu cài đặt"}
-            </button>
+            </Button>
           </div>
         </form>
       )}

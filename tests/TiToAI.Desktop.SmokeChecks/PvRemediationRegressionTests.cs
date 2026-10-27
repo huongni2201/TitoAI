@@ -1,0 +1,1054 @@
+using System;
+using System.IO;
+using System.Linq;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.EntityFrameworkCore;
+using TiToAI.Application.Content;
+using TiToAI.Application.Jobs;
+using TiToAI.Application.Providers;
+using TiToAI.Application.Settings;
+using TiToAI.Contracts.Content;
+using TiToAI.Contracts.Jobs;
+using TiToAI.Contracts.Providers;
+using TiToAI.Contracts.Settings;
+using TiToAI.Infrastructure.Persistence;
+using TiToAI.Infrastructure.Persistence.Entities;
+using TiToAI.Infrastructure.Storage;
+
+namespace TiToAI.Desktop.SmokeChecks;
+
+/// <summary>
+/// Bộ kiểm thử hồi quy tái hiện và kiểm chứng 5 lỗi độc lập (PV-R3, PV-R4, PV-R5) 
+/// cùng lỗi mất USER_BRIEF (PV-R11) theo docs/reviews/2026-10-27-audit-pv-independent-recheck.md
+/// và docs/plans/2026-10-27-pv-remediation-fix-plan.md.
+/// </summary>
+public static class PvRemediationRegressionTests
+{
+    private static void Assert(bool condition, string message)
+    {
+        if (!condition)
+        {
+            throw new InvalidOperationException($"[ASSERTION FAILED] {message}");
+        }
+    }
+
+    private static (DbContextOptions<TiToAIDbContext> dbOptions, string tempDir, string wsId, string prjId) CreateTestEnvironment()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "titoai-pvrepro-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        var dbPath = Path.Combine(tempDir, "pvrepro.db");
+        var dbOptions = new DbContextOptionsBuilder<TiToAIDbContext>()
+            .UseSqlite($"Data Source={dbPath}")
+            .Options;
+
+        var wsId = Guid.NewGuid().ToString("D").ToLowerInvariant();
+        var prjId = Guid.NewGuid().ToString("D").ToLowerInvariant();
+        var now = DateTimeOffset.UtcNow.ToString("o");
+
+        using (var db = new TiToAIDbContext(dbOptions))
+        {
+            db.Database.EnsureCreated();
+
+            db.Workspaces.Add(new Workspace
+            {
+                Id = wsId,
+                Name = "Workspace Test PV",
+                Status = "Active",
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now
+            });
+
+            db.Projects.Add(new Project
+            {
+                Id = prjId,
+                WorkspaceId = wsId,
+                Name = "Project Test PV",
+                Description = "Mô tả dự án",
+                Status = "Draft",
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now
+            });
+
+            db.SaveChanges();
+        }
+
+        return (dbOptions, tempDir, wsId, prjId);
+    }
+
+    private static void CleanupTestEnvironment(string tempDir)
+    {
+        try
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+        catch { }
+    }
+
+    private static string SeedAsset(DbContextOptions<TiToAIDbContext> dbOptions, string workspaceId, string assetType, string relativePath)
+    {
+        using var db = new TiToAIDbContext(dbOptions);
+        var assetId = Guid.NewGuid().ToString("D").ToLowerInvariant();
+        var now = DateTimeOffset.UtcNow.ToString("o");
+
+        db.Assets.Add(new Asset
+        {
+            Id = assetId,
+            WorkspaceId = workspaceId,
+            ProjectId = null,
+            StorageRootId = "root-1",
+            RelativePath = relativePath,
+            AssetType = assetType,
+            ByteSize = 1024,
+            Sha256Hash = "hash-" + Guid.NewGuid().ToString("N"),
+            Status = "Linked",
+            CreatedAtUtc = now
+        });
+
+        db.SaveChanges();
+        return assetId;
+    }
+
+    private static async Task<(SettingsService settings, JobService jobs, ProjectWorkflowService workflow)> SetupServicesAsync(
+        DbContextOptions<TiToAIDbContext> dbOptions, string tempDir)
+    {
+        var registry = new StorageRootRegistry(dbOptions, tempDir);
+        await registry.EnsureDefaultRootsAsync();
+        var settingsService = new SettingsService(dbOptions, registry);
+        var curSettings = await settingsService.GetSettingsAsync();
+        await settingsService.SaveSettingsAsync(new SettingsSaveRequest(
+            DocumentsPath: curSettings.DocumentsPath,
+            ImagesPath: curSettings.ImagesPath,
+            VideosPath: curSettings.VideosPath,
+            ImageProvider: ProviderKeys.ChatGPTWeb,
+            ScriptProvider: ProviderKeys.ChatGPTWeb,
+            VideoPromptProvider: ProviderKeys.ChatGPTWeb,
+            ExpectedRevision: curSettings.Revision
+        ));
+        var snapshotFactory = new JobSnapshotFactory(settingsService, dbOptions: dbOptions);
+        var reservation = new JobReservation(dbOptions);
+        var fakeChatGpt = new DeterministicFakeProviderAdapter(ProviderKeys.ChatGPTWeb);
+        var fakeMuseAi = new DeterministicFakeProviderAdapter(ProviderKeys.MuseAI);
+        var scheduler = new JobScheduler(dbOptions, reservation, new CompositeTestJobExecutor(fakeChatGpt, fakeMuseAi));
+        var jobService = new JobService(dbOptions, snapshotFactory, scheduler);
+        var workflowService = new ProjectWorkflowService(dbOptions, jobService);
+
+        return (settingsService, jobService, workflowService);
+    }
+
+    /// <summary>
+    /// Ca 1: PV-R3 — Apply Script lặp phải Idempotent, không nhân đôi cảnh (2 rồi 4 cảnh)
+    /// </summary>
+    public static async Task Test_Repro1_DuplicateScriptApply_MustBeIdempotentAsync()
+    {
+        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        try
+        {
+            var (_, jobService, workflowService) = await SetupServicesAsync(dbOptions, tempDir);
+
+            var modelAssetId = SeedAsset(dbOptions, wsId, "Image", "models/m1.jpg");
+            var productAssetId = SeedAsset(dbOptions, wsId, "Image", "products/p1.jpg");
+
+            await workflowService.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
+                WorkspaceId: wsId,
+                ProjectId: prjId,
+                WorkflowMode: WorkflowModes.ModelAndProduct,
+                GoalPrompt: "BST Áo khoác mùa đông",
+                ModelAssetId: modelAssetId,
+                ProductAssetId: productAssetId,
+                ReadyImageAssetId: null,
+                AudioOption: AudioOptions.None,
+                AudioAssetId: null,
+                TargetSceneCount: 2,
+                TargetDurationPerSceneSeconds: 15
+            ));
+
+            await workflowService.StartWorkflowAsync(new StartProjectWorkflowRequest(wsId, prjId));
+
+            string scriptJobId;
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                var scriptJob = await db.Jobs.FirstAsync(j => j.ProjectId == prjId && j.TaskType == JobTaskType.Script);
+                scriptJob.State = JobState.Succeeded;
+                scriptJob.ResultText = "{\"scenes\": [" +
+                    "{\"name\": \"Cảnh 1: Giới thiệu\", \"targetDurationSeconds\": 15}," +
+                    "{\"name\": \"Cảnh 2: Chi tiết\", \"targetDurationSeconds\": 15}" +
+                    "]}";
+                await db.SaveChangesAsync();
+                scriptJobId = scriptJob.Id;
+            }
+
+            // Apply lần 1: tạo 2 cảnh
+            bool firstApplied = await workflowService.ApplyJobOutputAsync(scriptJobId);
+            Assert(firstApplied, "Apply lần 1 phải thành công.");
+
+            int firstCount;
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                firstCount = await db.Scenes.CountAsync(s => s.ProjectId == prjId);
+                Assert(firstCount == 2, $"Sau lần 1 phải có đúng 2 cảnh, thực tế: {firstCount}");
+            }
+
+            // Apply lần 2: phải idempotent, KHÔNG được tạo thêm cảnh (2 -> 4)
+            bool secondApplied = await workflowService.ApplyJobOutputAsync(scriptJobId);
+            Assert(secondApplied, "Apply lần 2 (lặp) phải xử lý an toàn (idempotent).");
+
+            int secondCount;
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                secondCount = await db.Scenes.CountAsync(s => s.ProjectId == prjId);
+                Assert(secondCount == 2, $"[PV-R3] Lỗi apply Script lặp: số cảnh bị nhân bản từ {firstCount} thành {secondCount} (kỳ vọng vẫn giữ nguyên 2).");
+            }
+        }
+        finally
+        {
+            CleanupTestEnvironment(tempDir);
+        }
+    }
+
+    /// <summary>
+    /// Ca 2: PV-R3 — Output stale không được ghi đè bản sửa tay của người dùng
+    /// </summary>
+    public static async Task Test_Repro2_StaleOutput_MustNotOverwriteUserEditedPromptAsync()
+    {
+        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        try
+        {
+            var (_, jobService, workflowService) = await SetupServicesAsync(dbOptions, tempDir);
+            var readyAssetId = SeedAsset(dbOptions, wsId, "Image", "ready/r1.jpg");
+
+            string sceneId = Guid.NewGuid().ToString("D").ToLowerInvariant();
+            var now = DateTimeOffset.UtcNow.ToString("o");
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                db.Scenes.Add(new Scene
+                {
+                    Id = sceneId,
+                    ProjectId = prjId,
+                    WorkspaceId = wsId,
+                    SequenceOrder = 1,
+                    Name = "Cảnh 1",
+                    TargetDurationSeconds = 15,
+                    ImageAssetId = readyAssetId,
+                    PromptText = "PROMPT GỐC CŨ",
+                    Status = "Draft",
+                    CreatedAtUtc = now,
+                    UpdatedAtUtc = now
+                });
+                await db.SaveChangesAsync();
+            }
+
+            await workflowService.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
+                WorkspaceId: wsId,
+                ProjectId: prjId,
+                WorkflowMode: WorkflowModes.ReadyImage,
+                GoalPrompt: "Prompt test stale",
+                ModelAssetId: null,
+                ProductAssetId: null,
+                ReadyImageAssetId: readyAssetId,
+                AudioOption: AudioOptions.None,
+                AudioAssetId: null,
+                TargetSceneCount: 1,
+                TargetDurationPerSceneSeconds: 15
+            ));
+
+            // Giả lập một Job VideoPrompt cũ sinh kết quả "OLD AI PROMPT"
+            string staleJobId = Guid.NewGuid().ToString("D").ToLowerInvariant();
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                db.Jobs.Add(new Job
+                {
+                    Id = staleJobId,
+                    WorkspaceId = wsId,
+                    ProjectId = prjId,
+                    SceneId = sceneId,
+                    TaskType = JobTaskType.VideoPrompt,
+                    State = JobState.Succeeded,
+                    ProviderKey = ProviderKeys.ChatGPTWeb,
+                    StorageRootId = "root-1",
+                    PromptSnapshotText = "snapshot",
+                    ConfigSnapshotJson = "{}",
+                    ResultText = "OLD AI PROMPT",
+                    MaxAttempts = 3,
+                    CreatedAtUtc = now,
+                    UpdatedAtUtc = now
+                });
+                await db.SaveChangesAsync();
+            }
+
+            // Người dùng chủ động sửa Prompt của cảnh thành "USER EDITED PROMPT"
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                var s = await db.Scenes.FirstAsync(sc => sc.Id == sceneId);
+                s.PromptText = "USER EDITED PROMPT";
+                s.UpdatedAtUtc = DateTimeOffset.UtcNow.ToString("o");
+                await db.SaveChangesAsync();
+            }
+
+            // Áp dụng kết quả job cũ
+            await workflowService.ApplyJobOutputAsync(staleJobId);
+
+            // Kiểm tra: PromptText phải giữ "USER EDITED PROMPT", KHÔNG được bị đè thành "OLD AI PROMPT"
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                var s = await db.Scenes.FirstAsync(sc => sc.Id == sceneId);
+                Assert(s.PromptText == "USER EDITED PROMPT",
+                    $"[PV-R3] Lỗi apply output cũ: Prompt của người dùng đã bị đè thành '{s.PromptText}' (kỳ vọng bảo toàn 'USER EDITED PROMPT').");
+            }
+        }
+        finally
+        {
+            CleanupTestEnvironment(tempDir);
+        }
+    }
+
+    /// <summary>
+    /// Ca 3: PV-R4 — CancelWorkflowAsync phải xử lý cả Job đang Running, không bỏ sót
+    /// </summary>
+    public static async Task Test_Repro3_CancelWorkflow_MustCancelRunningJobsAsync()
+    {
+        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        try
+        {
+            var (_, jobService, workflowService) = await SetupServicesAsync(dbOptions, tempDir);
+            var readyAssetId = SeedAsset(dbOptions, wsId, "Image", "ready/r_running.jpg");
+
+            string sceneId = Guid.NewGuid().ToString("D").ToLowerInvariant();
+            var now = DateTimeOffset.UtcNow.ToString("o");
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                db.Scenes.Add(new Scene
+                {
+                    Id = sceneId,
+                    ProjectId = prjId,
+                    WorkspaceId = wsId,
+                    SequenceOrder = 1,
+                    Name = "Cảnh 1",
+                    TargetDurationSeconds = 15,
+                    ImageAssetId = readyAssetId,
+                    PromptText = "Prompt",
+                    Status = "Draft",
+                    CreatedAtUtc = now,
+                    UpdatedAtUtc = now
+                });
+                await db.SaveChangesAsync();
+            }
+
+            await workflowService.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
+                WorkspaceId: wsId,
+                ProjectId: prjId,
+                WorkflowMode: WorkflowModes.ReadyImage,
+                GoalPrompt: "Prompt test cancel running",
+                ModelAssetId: null,
+                ProductAssetId: null,
+                ReadyImageAssetId: readyAssetId,
+                AudioOption: AudioOptions.None,
+                AudioAssetId: null,
+                TargetSceneCount: 1,
+                TargetDurationPerSceneSeconds: 15
+            ));
+
+            // Tạo một job ở trạng thái Running
+            string runningJobId = Guid.NewGuid().ToString("D").ToLowerInvariant();
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                db.Jobs.Add(new Job
+                {
+                    Id = runningJobId,
+                    WorkspaceId = wsId,
+                    ProjectId = prjId,
+                    SceneId = sceneId,
+                    TaskType = JobTaskType.VideoRender,
+                    State = JobState.Running,
+                    ProviderKey = ProviderKeys.MuseAI,
+                    StorageRootId = "root-1",
+                    PromptSnapshotText = "snapshot",
+                    ConfigSnapshotJson = "{}",
+                    CancelRequested = 0,
+                    MaxAttempts = 3,
+                    CreatedAtUtc = now,
+                    UpdatedAtUtc = now
+                });
+                await db.SaveChangesAsync();
+            }
+
+            // Gọi CancelWorkflowAsync
+            await workflowService.CancelWorkflowAsync(wsId, prjId);
+
+            // Kiểm tra: Job đang Running phải được yêu cầu hủy (CancelRequested == 1 hoặc State == Canceled)
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                var job = await db.Jobs.FirstAsync(j => j.Id == runningJobId);
+                Assert(job.CancelRequested == 1 || job.State == JobState.Canceled,
+                    $"[PV-R4] Lỗi Cancel bỏ sót Running: Job {job.Id} vẫn ở State={job.State}, CancelRequested={job.CancelRequested} (kỳ vọng CancelRequested=1 hoặc Canceled).");
+            }
+        }
+        finally
+        {
+            CleanupTestEnvironment(tempDir);
+        }
+    }
+
+    /// <summary>
+    /// Ca 4: PV-R4 — Khi Workflow đang Paused, ApplyJobOutputAsync KHÔNG được tự ý enqueue bước tiếp theo
+    /// </summary>
+    public static async Task Test_Repro4_PauseWorkflow_MustPreventEnqueuingNextStepsAsync()
+    {
+        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        try
+        {
+            var (_, jobService, workflowService) = await SetupServicesAsync(dbOptions, tempDir);
+            var readyAssetId = SeedAsset(dbOptions, wsId, "Image", "ready/r_pause.jpg");
+
+            string sceneId = Guid.NewGuid().ToString("D").ToLowerInvariant();
+            var now = DateTimeOffset.UtcNow.ToString("o");
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                db.Scenes.Add(new Scene
+                {
+                    Id = sceneId,
+                    ProjectId = prjId,
+                    WorkspaceId = wsId,
+                    SequenceOrder = 1,
+                    Name = "Cảnh 1",
+                    TargetDurationSeconds = 15,
+                    ImageAssetId = readyAssetId,
+                    PromptText = null,
+                    Status = "Draft",
+                    CreatedAtUtc = now,
+                    UpdatedAtUtc = now
+                });
+                await db.SaveChangesAsync();
+            }
+
+            await workflowService.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
+                WorkspaceId: wsId,
+                ProjectId: prjId,
+                WorkflowMode: WorkflowModes.ReadyImage,
+                GoalPrompt: "Prompt test pause",
+                ModelAssetId: null,
+                ProductAssetId: null,
+                ReadyImageAssetId: readyAssetId,
+                AudioOption: AudioOptions.None,
+                AudioAssetId: null,
+                TargetSceneCount: 1,
+                TargetDurationPerSceneSeconds: 15
+            ));
+
+            // Tạm dừng quy trình (PauseWorkflowAsync)
+            await workflowService.PauseWorkflowAsync(wsId, prjId);
+
+            int queuedBefore;
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                queuedBefore = await db.Jobs.CountAsync(j => j.State == JobState.Queued);
+            }
+
+            // Tạo một Job VideoPrompt vừa hoàn tất trong thời gian tạm dừng
+            string promptJobId = Guid.NewGuid().ToString("D").ToLowerInvariant();
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                db.Jobs.Add(new Job
+                {
+                    Id = promptJobId,
+                    WorkspaceId = wsId,
+                    ProjectId = prjId,
+                    SceneId = sceneId,
+                    TaskType = JobTaskType.VideoPrompt,
+                    State = JobState.Succeeded,
+                    ProviderKey = ProviderKeys.ChatGPTWeb,
+                    StorageRootId = "root-1",
+                    PromptSnapshotText = "snapshot",
+                    ConfigSnapshotJson = "{}",
+                    ResultText = "Prompt mới hoàn tất",
+                    MaxAttempts = 3,
+                    CreatedAtUtc = now,
+                    UpdatedAtUtc = now
+                });
+                await db.SaveChangesAsync();
+            }
+
+            // Gọi Apply kết quả của job này
+            await workflowService.ApplyJobOutputAsync(promptJobId);
+
+            // Kiểm tra: Vì quy trình đang Paused, KHÔNG được tự ý enqueue Job VideoRender mới vào queue!
+            int queuedAfter;
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                queuedAfter = await db.Jobs.CountAsync(j => j.State == JobState.Queued);
+                Assert(queuedAfter == queuedBefore,
+                    $"[PV-R4] Lỗi Pause vẫn enqueue: Số job Queued tăng từ {queuedBefore} lên {queuedAfter} khi đang Paused (kỳ vọng không enqueue mới).");
+            }
+        }
+        finally
+        {
+            CleanupTestEnvironment(tempDir);
+        }
+    }
+
+    /// <summary>
+    /// Ca 5: PV-R5 — Cảnh có SCRIPT MOTION DRAFT khi Image thành công không được đứng im
+    /// </summary>
+    public static async Task Test_Repro5_ImageSuccess_WithScriptMotionDraft_MustProgressToNextStepAsync()
+    {
+        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        try
+        {
+            var (_, jobService, workflowService) = await SetupServicesAsync(dbOptions, tempDir);
+            var readyAssetId = SeedAsset(dbOptions, wsId, "Image", "ready/r_img.jpg");
+
+            string sceneId = Guid.NewGuid().ToString("D").ToLowerInvariant();
+            var now = DateTimeOffset.UtcNow.ToString("o");
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                // Cảnh ban đầu chưa có ảnh, nhưng ĐÃ CÓ draft từ Script: "SCRIPT MOTION DRAFT"
+                db.Scenes.Add(new Scene
+                {
+                    Id = sceneId,
+                    ProjectId = prjId,
+                    WorkspaceId = wsId,
+                    SequenceOrder = 1,
+                    Name = "Cảnh 1",
+                    TargetDurationSeconds = 15,
+                    ImageAssetId = null,
+                    PromptText = "SCRIPT MOTION DRAFT",
+                    Status = "Draft",
+                    CreatedAtUtc = now,
+                    UpdatedAtUtc = now
+                });
+                await db.SaveChangesAsync();
+            }
+
+            await workflowService.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
+                WorkspaceId: wsId,
+                ProjectId: prjId,
+                WorkflowMode: WorkflowModes.ModelAndProduct,
+                GoalPrompt: "BST Váy dạ hội",
+                ModelAssetId: readyAssetId,
+                ProductAssetId: readyAssetId,
+                ReadyImageAssetId: null,
+                AudioOption: AudioOptions.None,
+                AudioAssetId: null,
+                TargetSceneCount: 1,
+                TargetDurationPerSceneSeconds: 15
+            ));
+
+            int jobsBefore;
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                jobsBefore = await db.Jobs.CountAsync();
+            }
+
+            // Tạo Job Image hoàn tất thành công cho cảnh
+            string imageJobId = Guid.NewGuid().ToString("D").ToLowerInvariant();
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                db.Jobs.Add(new Job
+                {
+                    Id = imageJobId,
+                    WorkspaceId = wsId,
+                    ProjectId = prjId,
+                    SceneId = sceneId,
+                    TaskType = JobTaskType.Image,
+                    State = JobState.Succeeded,
+                    ProviderKey = ProviderKeys.ChatGPTWeb,
+                    StorageRootId = "root-1",
+                    PromptSnapshotText = "snapshot",
+                    ConfigSnapshotJson = "{}",
+                    ResultReference = readyAssetId,
+                    MaxAttempts = 3,
+                    CreatedAtUtc = now,
+                    UpdatedAtUtc = now
+                });
+                await db.SaveChangesAsync();
+            }
+
+            // Gọi ApplyJobOutputAsync cho Image
+            await workflowService.ApplyJobOutputAsync(imageJobId);
+
+            // Kiểm tra: Phải enqueue bước tiếp theo (VideoPrompt hoặc VideoRender), KHÔNG được dừng im với 0 successor job!
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                int jobsAfter = await db.Jobs.CountAsync();
+                int newSuccessors = jobsAfter - jobsBefore - 1; // trừ job Image giả lập
+                Assert(newSuccessors > 0,
+                    $"[PV-R5] Lỗi Image có draft bị đứng: Sau khi có ảnh, 0 successor job nào được enqueue (kỳ vọng enqueue bước tiếp theo).");
+            }
+        }
+        finally
+        {
+            CleanupTestEnvironment(tempDir);
+        }
+    }
+
+    /// <summary>
+    /// Ca 6: PV-R11 — Chuyển tiếp Image -> VideoPrompt phải truyền USER_BRIEF / GoalPrompt vào successor job
+    /// </summary>
+    public static async Task Test_Repro6_ImageToVideoPromptSuccessor_MustPreserveUserBriefAsync()
+    {
+        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        try
+        {
+            var (_, jobService, workflowService) = await SetupServicesAsync(dbOptions, tempDir);
+            var readyAssetId = SeedAsset(dbOptions, wsId, "Image", "ready/r_brief.jpg");
+
+            string sceneId = Guid.NewGuid().ToString("D").ToLowerInvariant();
+            var now = DateTimeOffset.UtcNow.ToString("o");
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                db.Scenes.Add(new Scene
+                {
+                    Id = sceneId,
+                    ProjectId = prjId,
+                    WorkspaceId = wsId,
+                    SequenceOrder = 1,
+                    Name = "Cảnh 1",
+                    TargetDurationSeconds = 15,
+                    ImageAssetId = null,
+                    PromptText = null,
+                    Status = "Draft",
+                    CreatedAtUtc = now,
+                    UpdatedAtUtc = now
+                });
+                await db.SaveChangesAsync();
+            }
+
+            string uniqueBriefToken = "UNIQUE_BRIEF_TOKEN_PV_R11_ÁO_LEN_CASHMERE";
+            await workflowService.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
+                WorkspaceId: wsId,
+                ProjectId: prjId,
+                WorkflowMode: WorkflowModes.ModelAndProduct,
+                GoalPrompt: uniqueBriefToken,
+                ModelAssetId: readyAssetId,
+                ProductAssetId: readyAssetId,
+                ReadyImageAssetId: null,
+                AudioOption: AudioOptions.None,
+                AudioAssetId: null,
+                TargetSceneCount: 1,
+                TargetDurationPerSceneSeconds: 15
+            ));
+
+            // Tạo Job Image hoàn tất
+            string imageJobId = Guid.NewGuid().ToString("D").ToLowerInvariant();
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                db.Jobs.Add(new Job
+                {
+                    Id = imageJobId,
+                    WorkspaceId = wsId,
+                    ProjectId = prjId,
+                    SceneId = sceneId,
+                    TaskType = JobTaskType.Image,
+                    State = JobState.Succeeded,
+                    ProviderKey = ProviderKeys.ChatGPTWeb,
+                    StorageRootId = "root-1",
+                    PromptSnapshotText = "snapshot",
+                    ConfigSnapshotJson = "{}",
+                    ResultReference = readyAssetId,
+                    MaxAttempts = 3,
+                    CreatedAtUtc = now,
+                    UpdatedAtUtc = now
+                });
+                await db.SaveChangesAsync();
+            }
+
+            // Gọi Apply cho Job Image -> kích hoạt enqueue VideoPrompt kế tiếp
+            await workflowService.ApplyJobOutputAsync(imageJobId);
+
+            // Kiểm tra: Job VideoPrompt kế tiếp bắt buộc phải chứa uniqueBriefToken từ GoalPrompt trong PromptSnapshotText!
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                var promptJob = await db.Jobs.FirstOrDefaultAsync(j => j.SceneId == sceneId && j.TaskType == JobTaskType.VideoPrompt);
+                Assert(promptJob != null, "Phải có Job VideoPrompt được enqueue sau khi Image hoàn tất.");
+                Assert(!string.IsNullOrWhiteSpace(promptJob!.PromptSnapshotText), "PromptSnapshotText của VideoPrompt không được rỗng.");
+
+                using var doc = JsonDocument.Parse(promptJob.PromptSnapshotText!);
+                var renderedText = doc.RootElement.GetProperty("renderedText").GetString() ?? string.Empty;
+                Assert(renderedText.Contains(uniqueBriefToken),
+                    $"[PV-R11] Lỗi mất USER_BRIEF: RenderedText '{renderedText}' không chứa '{uniqueBriefToken}' từ GoalPrompt.");
+            }
+        }
+        finally
+        {
+            CleanupTestEnvironment(tempDir);
+        }
+    }
+
+    /// <summary>
+    /// Ca 7: PV-R2 — Manual Handoff import kết quả thủ công phải kích hoạt ApplyJobOutputAsync và tạo successor job
+    /// </summary>
+    public static async Task Test_Repro7_ManualHandoff_MustTriggerApplyAndSuccessorJobAsync()
+    {
+        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        try
+        {
+            var (_, jobService, workflowService) = await SetupServicesAsync(dbOptions, tempDir);
+            var manualHandoffService = new ManualHandoffService(dbOptions, (jId, ct) => workflowService.ApplyJobOutputAsync(jId, ct));
+            var readyAssetId = SeedAsset(dbOptions, wsId, "Image", "ready/r_manual.jpg");
+
+            string sceneId = Guid.NewGuid().ToString("D").ToLowerInvariant();
+            var now = DateTimeOffset.UtcNow.ToString("o");
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                db.Scenes.Add(new Scene
+                {
+                    Id = sceneId,
+                    ProjectId = prjId,
+                    WorkspaceId = wsId,
+                    SequenceOrder = 1,
+                    Name = "Cảnh 1",
+                    TargetDurationSeconds = 15,
+                    ImageAssetId = null,
+                    PromptText = null,
+                    Status = "Draft",
+                    CreatedAtUtc = now,
+                    UpdatedAtUtc = now
+                });
+                await db.SaveChangesAsync();
+            }
+
+            await workflowService.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
+                WorkspaceId: wsId,
+                ProjectId: prjId,
+                WorkflowMode: WorkflowModes.ModelAndProduct,
+                GoalPrompt: "BST Hè Rực Rỡ",
+                ModelAssetId: readyAssetId,
+                ProductAssetId: readyAssetId,
+                ReadyImageAssetId: null,
+                AudioOption: AudioOptions.None,
+                AudioAssetId: null,
+                TargetSceneCount: 1,
+                TargetDurationPerSceneSeconds: 15
+            ));
+
+            // Tạo một Job Image ở trạng thái AwaitingUser
+            string imageJobId = Guid.NewGuid().ToString("D").ToLowerInvariant();
+            long fencingToken = 1;
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                db.Jobs.Add(new Job
+                {
+                    Id = imageJobId,
+                    WorkspaceId = wsId,
+                    ProjectId = prjId,
+                    SceneId = sceneId,
+                    TaskType = JobTaskType.Image,
+                    State = JobState.AwaitingUser,
+                    ReasonCode = "automation_blocked",
+                    ProviderKey = ProviderKeys.ChatGPTWeb,
+                    StorageRootId = "root-1",
+                    PromptSnapshotText = "snapshot",
+                    ConfigSnapshotJson = "{}",
+                    MaxAttempts = 3,
+                    FencingToken = fencingToken,
+                    CreatedAtUtc = now,
+                    UpdatedAtUtc = now
+                });
+                await db.SaveChangesAsync();
+            }
+
+            // Người dùng import kết quả thủ công qua ManualHandoffService
+            var importResponse = await manualHandoffService.ImportResultAsync(new JobImportResultRequest(
+                WorkspaceId: wsId,
+                JobId: imageJobId,
+                ExpectedRevision: fencingToken,
+                ClientRequestId: "req-import-manual-1",
+                AssetId: readyAssetId
+            ));
+
+            Assert(importResponse.State == JobState.Succeeded, "Job sau khi import phải ở State=Succeeded.");
+
+            // Kiểm tra: Scene phải được gán ImageAssetId tự động qua hook Apply
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                var scene = await db.Scenes.FirstAsync(s => s.Id == sceneId);
+                Assert(scene.ImageAssetId == readyAssetId, "Cảnh phải nhận ImageAssetId sau khi import thủ công.");
+
+                // Kiểm tra: Successor VideoPrompt phải được tự động enqueue!
+                var promptJob = await db.Jobs.FirstOrDefaultAsync(j => j.SceneId == sceneId && j.TaskType == JobTaskType.VideoPrompt);
+                Assert(promptJob != null, "[PV-R2] Lỗi đứt chuỗi manual: Sau khi import ảnh thủ công, không có successor VideoPrompt nào được enqueue.");
+            }
+        }
+        finally
+        {
+            CleanupTestEnvironment(tempDir);
+        }
+    }
+
+    /// <summary>
+    /// Ca 8: PV-R1 — ProductionJobExecutor chưa có browser automation phải chuyển sang AwaitingUser, KHÔNG fake URI
+    /// </summary>
+    public static async Task Test_Repro8_ProductionJobExecutor_WithoutBrowser_MustTransitionToAwaitingUserAsync()
+    {
+        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        try
+        {
+            var registry = new ProviderRegistry();
+            var executor = new ProductionJobExecutor(registry);
+
+            var context = new JobExecutionContext(
+                JobId: "job-exec-1",
+                WorkspaceId: wsId,
+                ProjectId: prjId,
+                SceneId: "scene-1",
+                TaskType: JobTaskType.VideoRender,
+                ProviderKey: ProviderKeys.MuseAI,
+                StorageRootId: "root-1",
+                PromptSnapshotText: "Góc quay 4K",
+                ConfigSnapshotJson: "{}",
+                FencingToken: 1,
+                Attempts: 1
+            );
+
+            var result = await executor.ExecuteAsync(context, () => Task.CompletedTask, null, CancellationToken.None);
+
+            Assert(!result.Success, "Executor không được báo Success khi provider chưa có adapter!");
+            Assert(result.ResultReference == null, "Không được tự dựng URI/ResultReference ảo!");
+            Assert(string.Equals(result.ReasonCode, "adapter_not_available", StringComparison.OrdinalIgnoreCase),
+                $"ReasonCode phải là adapter_not_available, thực tế: {result.ReasonCode}");
+
+            // Đánh giá với Retry Policy: phải yêu cầu chuyển sang AwaitingUser
+            var dummyJob = new Job
+            {
+                Id = "job-exec-1",
+                WorkspaceId = wsId,
+                ProjectId = prjId,
+                State = JobState.Running,
+                Attempts = 1,
+                MaxAttempts = 3,
+                CreatedAtUtc = DateTimeOffset.UtcNow.ToString("o"),
+                UpdatedAtUtc = DateTimeOffset.UtcNow.ToString("o")
+            };
+
+            var decision = JobRetryAndCancelPolicy.EvaluateFailure(dummyJob, result.ReasonCode, false);
+            Assert(decision.TargetState == JobState.AwaitingUser,
+                $"[PV-R1] Lỗi định tuyến: Job lỗi adapter phải sang AwaitingUser, thực tế: {decision.TargetState}");
+        }
+        finally
+        {
+            CleanupTestEnvironment(tempDir);
+        }
+    }
+
+    /// <summary>
+    /// Ca 9: PV-R7/PV-R10 — Quét phục hồi Continuation Intent sau crash ứng dụng
+    /// </summary>
+    public static async Task Test_Repro9_CrashRecovery_ContinuationSweep_MustResumePendingIntentsAsync()
+    {
+        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        try
+        {
+            var (_, jobService, workflowService) = await SetupServicesAsync(dbOptions, tempDir);
+            var readyAssetId = SeedAsset(dbOptions, wsId, "Image", "ready/r_crash.jpg");
+
+            string sceneId = Guid.NewGuid().ToString("D").ToLowerInvariant();
+            var now = DateTimeOffset.UtcNow.ToString("o");
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                db.Scenes.Add(new Scene
+                {
+                    Id = sceneId,
+                    ProjectId = prjId,
+                    WorkspaceId = wsId,
+                    SequenceOrder = 1,
+                    Name = "Cảnh 1",
+                    TargetDurationSeconds = 15,
+                    ImageAssetId = readyAssetId,
+                    PromptText = "Prompt đã sẵn sàng",
+                    Status = "Draft",
+                    CreatedAtUtc = now,
+                    UpdatedAtUtc = now
+                });
+
+                // Giả lập intent chuyển tiếp bị treo lại do tiến trình crash giữa SaveChanges và Dispatch
+                var intent = new WorkflowContinuationIntent(
+                    IntentId: "intent-crash-1",
+                    WorkspaceId: wsId,
+                    ProjectId: prjId,
+                    SceneId: sceneId,
+                    TaskType: JobTaskType.VideoRender,
+                    CustomPromptText: "Prompt đã sẵn sàng",
+                    MediaSnapshot: null,
+                    RunId: "run-crash-1",
+                    CreatedAtUtc: now
+                );
+
+                db.AppSettings.Add(new AppSetting
+                {
+                    Key = $"workflow.continuation.{intent.IntentId}",
+                    Value = JsonSerializer.Serialize(intent, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }),
+                    UpdatedAtUtc = now
+                });
+
+                await db.SaveChangesAsync();
+            }
+
+            // Gọi sweep phục hồi khi khởi động lại ứng dụng
+            int resumedCount = await workflowService.RunWorkflowContinuationSweepAsync();
+            Assert(resumedCount == 1, $"Phải phục hồi đúng 1 intent bị treo, thực tế: {resumedCount}");
+
+            // Kiểm tra: Job VideoRender đã được đưa vào queue và intent đã được xóa
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                var queuedJob = await db.Jobs.FirstOrDefaultAsync(j => j.SceneId == sceneId && j.TaskType == JobTaskType.VideoRender);
+                Assert(queuedJob != null, "[PV-R7] Lỗi crash recovery: Tác vụ chuyển tiếp không được enqueue sau sweep.");
+
+                var remainingIntents = await dbContextCountAsync(db);
+                Assert(remainingIntents == 0, "Intent sau khi sweep thành công phải được dọn khỏi AppSettings.");
+            }
+        }
+        finally
+        {
+            CleanupTestEnvironment(tempDir);
+        }
+    }
+
+    private static async Task<int> dbContextCountAsync(TiToAIDbContext db)
+    {
+        return await db.AppSettings.CountAsync(s => s.Key.StartsWith("workflow.continuation."));
+    }
+
+    /// <summary>
+    /// Ca 10: PV-R1 — StartWorkflowAsync Idempotency với ClientRequestId
+    /// </summary>
+    public static async Task Test_Repro10_StartWorkflow_IdempotencyWithClientRequestIdAsync()
+    {
+        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        try
+        {
+            var (_, jobService, workflowService) = await SetupServicesAsync(dbOptions, tempDir);
+            var modelAssetId = SeedAsset(dbOptions, wsId, "Image", "models/m_idem.jpg");
+            var productAssetId = SeedAsset(dbOptions, wsId, "Image", "products/p_idem.jpg");
+
+            await workflowService.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
+                WorkspaceId: wsId,
+                ProjectId: prjId,
+                WorkflowMode: WorkflowModes.ModelAndProduct,
+                GoalPrompt: "BST Idempotent Test",
+                ModelAssetId: modelAssetId,
+                ProductAssetId: productAssetId,
+                ReadyImageAssetId: null,
+                AudioOption: AudioOptions.None,
+                AudioAssetId: null,
+                TargetSceneCount: 2,
+                TargetDurationPerSceneSeconds: 15
+            ));
+
+            string clientRequestId = "req-idempotent-" + Guid.NewGuid().ToString("N");
+
+            // Lần 1: Bắt đầu workflow
+            var resp1 = await workflowService.StartWorkflowAsync(new StartProjectWorkflowRequest(
+                WorkspaceId: wsId,
+                ProjectId: prjId,
+                ClientRequestId: clientRequestId
+            ));
+
+            Assert(!string.IsNullOrWhiteSpace(resp1.RunId), "Lần 1 phải sinh RunId.");
+            Assert(resp1.RunState == WorkflowRunState.Running, "Lần 1 RunState phải là Running.");
+
+            int scriptJobCount1;
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                scriptJobCount1 = await db.Jobs.CountAsync(j => j.ProjectId == prjId && j.TaskType == JobTaskType.Script);
+                Assert(scriptJobCount1 == 1, $"Lần 1 phải có đúng 1 Script Job, thực tế: {scriptJobCount1}");
+            }
+
+            // Lần 2: Gọi lại với cùng clientRequestId (mô phỏng double click hoặc mạng lặp)
+            var resp2 = await workflowService.StartWorkflowAsync(new StartProjectWorkflowRequest(
+                WorkspaceId: wsId,
+                ProjectId: prjId,
+                ClientRequestId: clientRequestId
+            ));
+
+            Assert(resp2.RunId == resp1.RunId, $"[PV-R1] Idempotency thất bại: RunId lần 2 ({resp2.RunId}) khác lần 1 ({resp1.RunId}).");
+
+            // Kiểm tra: Tuyệt đối không được enqueue thêm Script Job thứ hai
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                int scriptJobCount2 = await db.Jobs.CountAsync(j => j.ProjectId == prjId && j.TaskType == JobTaskType.Script);
+                Assert(scriptJobCount2 == 1, $"[PV-R1] Trùng lặp: Số Script Job bị tăng lên {scriptJobCount2} sau khi gửi cùng ClientRequestId (kỳ vọng vẫn giữ nguyên 1).");
+            }
+        }
+        finally
+        {
+            CleanupTestEnvironment(tempDir);
+        }
+    }
+
+    public static async Task<int> RunAllAsync()
+    {
+        Console.WriteLine("\n=================================================================");
+        Console.WriteLine("    TiToAI — PV Remediation Regression & Bug Reproduction Suite  ");
+        Console.WriteLine("=================================================================");
+
+        var tests = new (string Name, Func<Task> TestFunc)[]
+        {
+            ("PV-R3 Ca 1: Apply Script lặp phải Idempotent, không nhân đôi cảnh", Test_Repro1_DuplicateScriptApply_MustBeIdempotentAsync),
+            ("PV-R3 Ca 2: Output stale không được đè bản sửa tay của người dùng", Test_Repro2_StaleOutput_MustNotOverwriteUserEditedPromptAsync),
+            ("PV-R4 Ca 3: CancelWorkflowAsync phải xử lý cả Job đang Running", Test_Repro3_CancelWorkflow_MustCancelRunningJobsAsync),
+            ("PV-R4 Ca 4: Khi Paused, ApplyJobOutputAsync không được tự enqueue tiếp", Test_Repro4_PauseWorkflow_MustPreventEnqueuingNextStepsAsync),
+            ("PV-R5 Ca 5: Image thành công với Script Motion Draft không được đứng im", Test_Repro5_ImageSuccess_WithScriptMotionDraft_MustProgressToNextStepAsync),
+            ("PV-R11 Ca 6: Image -> VideoPrompt chuyển tiếp phải giữ USER_BRIEF", Test_Repro6_ImageToVideoPromptSuccessor_MustPreserveUserBriefAsync),
+            ("PV-R2 Ca 7: Manual Handoff import kết quả thủ công phải trigger Apply và successor", Test_Repro7_ManualHandoff_MustTriggerApplyAndSuccessorJobAsync),
+            ("PV-R1 Ca 8: ProductionJobExecutor chưa có browser automation phải sang AwaitingUser", Test_Repro8_ProductionJobExecutor_WithoutBrowser_MustTransitionToAwaitingUserAsync),
+            ("PV-R7/10 Ca 9: Crash Recovery continuation sweep phải phục hồi intent bị treo", Test_Repro9_CrashRecovery_ContinuationSweep_MustResumePendingIntentsAsync),
+            ("PV-R1 Ca 10: StartWorkflowAsync Idempotency với ClientRequestId", Test_Repro10_StartWorkflow_IdempotencyWithClientRequestIdAsync),
+        };
+
+        int pass = 0;
+        int fail = 0;
+
+        foreach (var (name, testFunc) in tests)
+        {
+            Console.Write($"[RUN] {name} ... ");
+            try
+            {
+                await testFunc();
+                Console.WriteLine("PASS");
+                pass++;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"FAIL: {ex.Message}");
+                fail++;
+            }
+        }
+
+        Console.WriteLine("\n-----------------------------------------------------------------");
+        Console.WriteLine($"Kết quả kiểm thử PV Remediation: {pass} PASS, {fail} FAIL.");
+        Console.WriteLine("=================================================================\n");
+
+        return fail == 0 ? 0 : 1;
+    }
+
+    private sealed class CompositeTestJobExecutor : IJobExecutor
+    {
+        private readonly IProviderAdapter _chatGptAdapter;
+        private readonly IProviderAdapter _museAiAdapter;
+
+        public CompositeTestJobExecutor(IProviderAdapter chatGptAdapter, IProviderAdapter museAiAdapter)
+        {
+            _chatGptAdapter = chatGptAdapter;
+            _museAiAdapter = museAiAdapter;
+        }
+
+        public Task<JobExecutionResult> ExecuteAsync(
+            JobExecutionContext context,
+            Func<Task> onPreSideEffectCommitAsync,
+            Func<int, string, Task>? onProgressAsync,
+            CancellationToken cancellationToken)
+        {
+            if (string.Equals(context.ProviderKey, ProviderKeys.MuseAI, StringComparison.OrdinalIgnoreCase))
+            {
+                return _museAiAdapter.ExecuteAsync(context, onPreSideEffectCommitAsync, onProgressAsync, cancellationToken);
+            }
+
+            return _chatGptAdapter.ExecuteAsync(context, onPreSideEffectCommitAsync, onProgressAsync, cancellationToken);
+        }
+    }
+}

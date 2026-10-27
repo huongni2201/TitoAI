@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef, type FormEvent } from "react";
+import { RefreshCw, Check, AlertTriangle, CheckCircle2, Sparkles, Trash2, CheckCircle } from "lucide-react";
 import {
   promptApi,
   extractTemplateVariables,
@@ -12,18 +13,20 @@ import {
 } from "./promptApi.ts";
 import { PromptVariableEditor } from "./PromptVariableEditor.tsx";
 import { PromptPreviewPanel } from "./PromptPreviewPanel.tsx";
-import { PromptVersionHistory } from "./PromptVersionHistory.tsx";
-import { IconRefresh, IconCheck } from "../../components/Icons.tsx";
 
 export interface PromptTemplateEditorProps {
   template: PromptTemplateDto | null;
   currentVersion: PromptVersionDto | null;
   workspaceId?: string | null;
   purpose: PromptPurpose;
+  promptName?: string;
+  onNameChange?: (name: string) => void;
+  isActivePrompt?: boolean;
+  onSetActivePrompt?: () => void;
+  onDeletePrompt?: () => void;
   transport?: IPromptTransport;
   onDirtyChange?: (isDirty: boolean) => void;
-  onSaveSuccess?: (template: PromptTemplateDto, version: PromptVersionDto) => void;
-  onRollbackSuccess?: (template: PromptTemplateDto, version: PromptVersionDto) => void;
+  onSaveSuccess?: (template: PromptTemplateDto, version: PromptVersionDto, name?: string) => void;
   onDeleteOverrideSuccess?: (templateId: string) => void;
   onApplyPreview?: (
     renderedText: string,
@@ -36,16 +39,20 @@ export function PromptTemplateEditor({
   currentVersion,
   workspaceId,
   purpose,
+  promptName: initialPromptName,
+  onNameChange,
+  isActivePrompt = false,
+  onSetActivePrompt,
+  onDeletePrompt,
   transport = defaultPromptTransport,
   onDirtyChange,
   onSaveSuccess,
-  onRollbackSuccess,
   onDeleteOverrideSuccess,
   onApplyPreview,
 }: PromptTemplateEditorProps) {
   // Trạng thái bản nháp đang chỉnh sửa
   const [templateText, setTemplateText] = useState(() => currentVersion?.templateText || "");
-  const [changeDescription, setChangeDescription] = useState("");
+  const [promptName, setPromptName] = useState(() => initialPromptName || "");
   const [isOverrideMode, setIsOverrideMode] = useState(() => template?.isOverride ?? Boolean(workspaceId));
 
   // Biến số phục vụ preview
@@ -57,6 +64,7 @@ export function PromptTemplateEditor({
     templateId: string | null;
     versionId: string | null;
     renderedSourceText: string;
+    renderedVariablesJson: string;
     purpose: PromptPurpose;
   } | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
@@ -73,18 +81,20 @@ export function PromptTemplateEditor({
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
-  // Hộp thoại lịch sử phiên bản
-  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
 
-  // Đồng bộ dữ liệu khi template hoặc currentVersion thay đổi từ máy chủ
+  useEffect(() => {
+    if (initialPromptName) {
+      setPromptName(initialPromptName);
+    }
+  }, [initialPromptName]);
+
+  // Đồng bộ nội dung đã lưu khi template được nạp hoặc thay đổi.
   useEffect(() => {
     if (currentVersion) {
       setTemplateText(currentVersion.templateText || "");
-      setChangeDescription("");
-      setIsOverrideMode(template?.isOverride ?? false);
+      setIsOverrideMode(template?.isOverride ?? Boolean(workspaceId));
     } else {
       setTemplateText("");
-      setChangeDescription("");
       setIsOverrideMode(Boolean(workspaceId));
     }
     // Khi đổi template/version, xóa preview cũ để tránh gán sai metadata
@@ -141,15 +151,19 @@ export function PromptTemplateEditor({
     };
   }, [onDirtyChange]);
 
-  // R2: Kiểm tra bản xem trước có bị stale không
+  // H6: Snapshot chuỗi JSON của biến số để phát hiện stale khi biến thay đổi
+  const currentVariablesJson = useMemo(() => JSON.stringify(variableValues), [variableValues]);
+
+  // R2 & H6: Kiểm tra bản xem trước có bị stale không (text đổi, template đổi, hoặc biến đổi)
   const isPreviewStale = useMemo(() => {
     if (!previewData || !previewMeta) return false;
     return (
       previewMeta.renderedSourceText !== templateText ||
       previewMeta.templateId !== (template?.templateId ?? null) ||
-      previewMeta.versionId !== (currentVersion?.versionId ?? null)
+      previewMeta.versionId !== (currentVersion?.versionId ?? null) ||
+      previewMeta.renderedVariablesJson !== currentVariablesJson
     );
-  }, [previewData, previewMeta, templateText, template?.templateId, currentVersion?.versionId]);
+  }, [previewData, previewMeta, templateText, template?.templateId, currentVersion?.versionId, currentVariablesJson]);
 
   // Cập nhật giá trị một biến số
   const handleVariableChange = useCallback((name: string, value: string) => {
@@ -169,6 +183,8 @@ export function PromptTemplateEditor({
     const snapshotPurpose = purpose;
     const snapshotTemplateId = template?.templateId ?? null;
     const snapshotVersionId = currentVersion?.versionId ?? null;
+    const snapshotVariables = { ...variableValues };
+    const snapshotVariablesJson = JSON.stringify(snapshotVariables);
 
     try {
       const res = await promptApi.preview(
@@ -177,7 +193,7 @@ export function PromptTemplateEditor({
           purpose: snapshotPurpose,
           workspaceId: workspaceId ?? null,
           templateText: snapshotText,
-          variables: variableValues,
+          variables: snapshotVariables,
         },
         transport
       );
@@ -192,6 +208,7 @@ export function PromptTemplateEditor({
         templateId: snapshotTemplateId,
         versionId: snapshotVersionId,
         renderedSourceText: snapshotText,
+        renderedVariablesJson: snapshotVariablesJson,
         purpose: snapshotPurpose,
       });
     } catch (err: unknown) {
@@ -208,8 +225,8 @@ export function PromptTemplateEditor({
     }
   }, [template?.templateId, currentVersion?.versionId, purpose, workspaceId, templateText, variableValues, transport]);
 
-  // Lưu phiên bản mới qua backend T10
-  const handleSaveNewVersion = async (e: React.FormEvent) => {
+  // Lưu nội dung prompt hiện hành.
+  const handleSave = async (e: FormEvent) => {
     e.preventDefault();
     if (isSaving) return;
 
@@ -229,22 +246,18 @@ export function PromptTemplateEditor({
           workspaceId: isOverrideMode ? workspaceId ?? null : null,
           templateText,
           variableDefinitionsJson: currentVersion?.variableDefinitionsJson ?? null,
-          changeDescription: changeDescription.trim() || null,
         },
         transport
       );
 
-      setSaveSuccessNotice(
-        `Đã tạo thành công phiên bản v${res.version.versionNumber} (${res.template.isOverride ? "Override Workspace" : "Toàn cục"})`
-      );
-      setChangeDescription("");
+      setSaveSuccessNotice("Đã lưu thay đổi Prompt thành công.");
 
       // R2: Xóa preview cũ sau khi lưu version mới để không gán sai metadata
       setPreviewData(null);
       setPreviewMeta(null);
 
       if (onSaveSuccess) {
-        onSaveSuccess(res.template, res.version);
+        onSaveSuccess(res.template, res.prompt, promptName);
       }
 
       setTimeout(() => setSaveSuccessNotice(null), 4000);
@@ -252,30 +265,32 @@ export function PromptTemplateEditor({
       const msg =
         err && typeof err === "object" && "message" in err
           ? String(err.message)
-          : "Lỗi khi lưu phiên bản mới qua backend T10.";
+          : "Lỗi khi lưu prompt.";
       setSaveError(msg);
     } finally {
       setIsSaving(false);
     }
   };
 
-  // Xóa bản ghi đè Workspace (fallback về Global)
-  const handleDeleteOverride = async () => {
-    if (!template || !template.isOverride) return;
+  // Xử lý Xóa Prompt (hoặc Xóa bản ghi đè Workspace)
+  const handleDeleteAction = async () => {
     setIsDeletingOverride(true);
     setDeleteError(null);
 
     try {
-      await promptApi.deleteOverride(template.templateId, workspaceId, transport);
-      setShowDeleteConfirm(false);
-      if (onDeleteOverrideSuccess) {
-        onDeleteOverrideSuccess(template.templateId);
+      if (template?.isOverride) {
+        await promptApi.deleteOverride(template.templateId, workspaceId, transport);
+        onDeleteOverrideSuccess?.(template.templateId);
       }
+      if (onDeletePrompt) {
+        onDeletePrompt();
+      }
+      setShowDeleteConfirm(false);
     } catch (err: unknown) {
       const msg =
         err && typeof err === "object" && "message" in err
           ? String(err.message)
-          : "Không thể xóa bản ghi đè Workspace.";
+          : "Không thể xóa prompt.";
       setDeleteError(msg);
     } finally {
       setIsDeletingOverride(false);
@@ -286,7 +301,6 @@ export function PromptTemplateEditor({
   const handleResetDraft = () => {
     if (currentVersion) {
       setTemplateText(currentVersion.templateText || "");
-      setChangeDescription("");
       setSaveError(null);
       // Xóa preview nếu nó được render từ bản nháp khác với bản đã lưu
       if (previewMeta && previewMeta.renderedSourceText !== currentVersion.templateText) {
@@ -294,21 +308,6 @@ export function PromptTemplateEditor({
         setPreviewMeta(null);
       }
     }
-  };
-
-  // R3: Callback khi rollback thành công từ modal lịch sử
-  const handleRollbackSuccess = (
-    rolledBackTemplate: PromptTemplateDto,
-    rolledBackVersion: PromptVersionDto
-  ) => {
-    setTemplateText(rolledBackVersion.templateText);
-    setChangeDescription("");
-    setPreviewData(null);
-    setPreviewMeta(null);
-    setSaveSuccessNotice(`Đã khôi phục về phiên bản v${rolledBackVersion.versionNumber}`);
-    setTimeout(() => setSaveSuccessNotice(null), 4000);
-
-    onRollbackSuccess?.(rolledBackTemplate, rolledBackVersion);
   };
 
   // R2: Áp dụng preview vào scene kèm metadata chính xác của bản render
@@ -327,73 +326,78 @@ export function PromptTemplateEditor({
   };
 
   return (
-    <div className="prompt-editor-pane">
+    <div className="flex flex-col w-full h-full min-h-0 bg-background text-foreground overflow-hidden">
       {/* Topbar của Editor */}
-      <div className="prompt-editor-topbar">
-        <div className="prompt-editor-meta-group">
-          <span style={{ fontWeight: 700, fontSize: "0.95rem", color: "var(--text-primary)" }}>
-            {`Mục đích: ${purpose}`}
+      <div className="flex items-center justify-between gap-3 px-5 py-3.5 bg-card border-b border-border/80 shrink-0 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="font-bold text-sm text-foreground">
+            {purpose === "VideoPrompt"
+              ? "Hướng dẫn AI tạo prompt video"
+              : purpose === "Script"
+                ? "Kịch bản & Ý tưởng (Script)"
+                : `Mục đích: ${purpose}`}
           </span>
 
-          {template ? (
-            <>
-              <span
-                className={`badge ${template.isOverride ? "badge-override" : "badge-global"}`}
-              >
-                {template.isOverride ? "Override Workspace" : "Toàn cục (Global)"}
-              </span>
-              <span
-                className="badge badge-neutral"
-                title={`Phiên bản hiện tại: v${template.currentVersionNumber ?? currentVersion?.versionNumber ?? 1}`}
-              >
-                v{template.currentVersionNumber ?? currentVersion?.versionNumber ?? 1}
-              </span>
-            </>
-          ) : (
-            <span className="badge badge-neutral">Tạo mới</span>
+          {isActivePrompt ? (
+            <span
+              className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-600 dark:text-emerald-400 shadow-2xs"
+              title="Prompt này đang được kích hoạt và sử dụng cho các tác vụ AI"
+            >
+              <CheckCircle className="h-3 w-3" /> Đang áp dụng
+            </span>
+          ) : onSetActivePrompt ? (
+            <button
+              type="button"
+              className="inline-flex items-center justify-center gap-1 rounded-md text-[11px] font-medium h-6 px-2 border border-primary/40 text-primary bg-primary/10 hover:bg-primary/20 transition-colors cursor-pointer"
+              onClick={onSetActivePrompt}
+              title="Đặt prompt này làm prompt chính áp dụng cho tác vụ AI"
+            >
+              <Check className="h-3 w-3" /> Sử dụng prompt này
+            </button>
+          ) : null}
+
+          {!template && (
+            <span className="inline-flex items-center rounded-md border border-border bg-muted/60 px-2 py-0.5 text-xs font-medium text-muted-foreground shadow-2xs">
+              Tạo mới
+            </span>
           )}
 
           {isDirty ? (
-            <span className="badge badge-dirty" title="Bạn có nội dung bản nháp chưa lưu">
+            <span
+              className="inline-flex items-center rounded-md border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400 shadow-2xs"
+              title="Bạn có nội dung bản nháp chưa lưu"
+            >
               Bản nháp chưa lưu
             </span>
           ) : (
-            <span className="badge badge-saved" title="Nội dung đã đồng bộ với máy chủ">
+            <span
+              className="inline-flex items-center rounded-md border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-600 dark:text-emerald-400 shadow-2xs"
+              title="Nội dung đã đồng bộ"
+            >
               Đã lưu
             </span>
           )}
         </div>
 
-        <div className="prompt-editor-actions">
-          {template && (
+        <div className="flex items-center gap-2 flex-wrap">
+          {(template || onDeletePrompt) && (
             <button
               type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => setIsHistoryOpen(true)}
-              disabled={isSaving || isDeletingOverride}
-              aria-label="Xem lịch sử các phiên bản và rollback"
-            >
-              Lịch sử phiên bản
-            </button>
-          )}
-
-          {template?.isOverride && (
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              style={{ color: "var(--status-error)", borderColor: "rgba(239, 68, 68, 0.4)" }}
+              className="inline-flex items-center justify-center gap-1.5 rounded-md text-xs font-medium h-8 px-3 border border-destructive/40 text-destructive bg-destructive/10 hover:bg-destructive/20 shadow-xs transition-colors disabled:opacity-50 disabled:pointer-events-none cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               onClick={() => setShowDeleteConfirm(true)}
               disabled={isSaving || isDeletingOverride}
-              aria-label="Xóa bản ghi đè này để quay lại template toàn cục"
+              aria-label="Xóa prompt này"
             >
-              Xóa bản ghi đè
+              <Trash2 className="h-3.5 w-3.5" />
+              <span>Xóa Prompt</span>
+              <span className="sr-only">Xóa bản ghi đè</span>
             </button>
           )}
 
           {isDirty && (
             <button
               type="button"
-              className="btn btn-secondary btn-sm"
+              className="inline-flex items-center justify-center rounded-md text-xs font-medium h-8 px-3 border border-input bg-background shadow-xs hover:bg-accent hover:text-accent-foreground text-foreground transition-colors disabled:opacity-50 disabled:pointer-events-none cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               onClick={handleResetDraft}
               disabled={isSaving}
               aria-label="Hủy các thay đổi trong bản nháp"
@@ -404,75 +408,105 @@ export function PromptTemplateEditor({
 
           <button
             type="button"
-            className="btn btn-primary btn-sm"
-            onClick={handleSaveNewVersion}
+            className="inline-flex items-center justify-center gap-1.5 rounded-md text-xs font-medium h-8 px-3.5 bg-primary text-primary-foreground shadow-xs hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:pointer-events-none cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            onClick={handleSave}
             disabled={isSaving || !templateText.trim()}
-            aria-label="Lưu bản nháp thành phiên bản mới"
+            aria-label="Lưu nội dung prompt"
           >
             {isSaving ? (
               <>
-                <IconRefresh size={14} className="spin" /> Đang lưu...
+                <RefreshCw className="h-3.5 w-3.5 animate-spin" /> Đang lưu...
               </>
             ) : (
               <>
-                <IconCheck size={14} /> Lưu phiên bản mới
+                <Check className="h-3.5 w-3.5" />
+                <span>{template ? "Lưu thay đổi" : "Lưu Prompt mới"}</span>
               </>
             )}
           </button>
         </div>
       </div>
 
+      {/* Banner hướng dẫn tự nhiên theo mục đích */}
+      {purpose === "VideoPrompt" && (
+        <div className="mx-5 mt-3 flex items-start gap-2.5 rounded-lg border border-purple-500/30 bg-purple-500/10 px-3.5 py-2.5 text-xs text-foreground shadow-xs shrink-0">
+          <Sparkles className="h-4 w-4 shrink-0 text-purple-600 dark:text-purple-400 mt-0.5" />
+          <div className="flex flex-col gap-0.5">
+            <span className="font-semibold text-purple-700 dark:text-purple-300">
+              Hướng dẫn AI tạo prompt video tiếng Anh
+            </span>
+            <span className="text-muted-foreground text-[11px] leading-relaxed">
+              AI tự quyết định chi tiết còn thiếu về góc máy, chuyển động camera, ánh sáng và không khí. Bạn không cần điền biến kỹ thuật.
+            </span>
+          </div>
+        </div>
+      )}
+
+      {purpose === "Script" && (
+        <div className="mx-5 mt-3 flex items-start gap-2.5 rounded-lg border border-blue-500/30 bg-blue-500/10 px-3.5 py-2.5 text-xs text-foreground shadow-xs shrink-0">
+          <Sparkles className="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400 mt-0.5" />
+          <div className="flex flex-col gap-0.5">
+            <span className="font-semibold text-blue-700 dark:text-blue-300">
+              Hướng dẫn kịch bản &amp; đề xuất ý tưởng
+            </span>
+            <span className="text-muted-foreground text-[11px] leading-relaxed">
+              Dùng cho cả tác vụ phát triển kịch bản và phân tích/đề xuất ý tưởng (operation SuggestIdeas).
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Thông báo thành công */}
       {saveSuccessNotice && (
         <div
-          className="prompt-alert prompt-alert-info"
-          style={{ margin: "0.75rem 1.25rem 0", padding: "0.5rem 1rem" }}
+          className="mx-5 mt-3 flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3.5 py-2 text-xs text-emerald-600 dark:text-emerald-400 shadow-xs shrink-0"
           role="status"
         >
-          <div>✅</div>
-          <div>{saveSuccessNotice}</div>
+          <CheckCircle2 className="h-4 w-4 shrink-0" />
+          <span>{saveSuccessNotice}</span>
         </div>
       )}
 
       {/* Thông báo lỗi khi lưu (Bảo đảm không mất bản nháp) */}
       {saveError && (
         <div
-          className="prompt-alert prompt-alert-error"
-          style={{ margin: "0.75rem 1.25rem 0", padding: "0.5rem 1rem" }}
+          className="mx-5 mt-3 flex items-start gap-2.5 rounded-lg border border-destructive/40 bg-destructive/10 px-3.5 py-2.5 text-xs text-destructive shadow-xs shrink-0"
           role="alert"
         >
-          <div>⚠️</div>
-          <div>
-            <div style={{ fontWeight: 600 }}>Lưu phiên bản thất bại</div>
-            <div style={{ fontSize: "0.8rem" }}>{saveError}</div>
-            <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "0.2rem" }}>
+          <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+          <div className="flex flex-col gap-0.5">
+            <div className="font-semibold">Lưu prompt thất bại</div>
+            <div className="text-xs">{saveError}</div>
+            <div className="text-[11px] text-muted-foreground mt-0.5">
               Nội dung bạn vừa soạn thảo ở dưới không bị mất. Bạn có thể sửa đổi và thử lại.
             </div>
           </div>
         </div>
       )}
 
-      {/* Hộp thoại xác nhận xóa Override */}
+      {/* Hộp thoại xác nhận xóa Prompt */}
       {showDeleteConfirm && (
         <div
-          className="prompt-alert prompt-alert-warning"
-          style={{ margin: "0.75rem 1.25rem 0" }}
+          className="mx-5 mt-3 flex items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-3.5 text-xs text-destructive shadow-xs shrink-0"
           role="alertdialog"
         >
-          <div>⚠️</div>
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-            <div style={{ fontWeight: 700 }}>Xác nhận xóa bản ghi đè Workspace?</div>
-            <div style={{ fontSize: "0.8rem" }}>
-              Sau khi xóa, Workspace này sẽ tự động quay về sử dụng template Toàn cục (Global) mặc định
-              cho mục đích <strong>{purpose}</strong>.
+          <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+          <div className="flex-1 flex flex-col gap-1.5">
+            <div className="font-bold text-sm text-foreground">Xác nhận xóa Prompt này?</div>
+            <div className="text-xs text-muted-foreground leading-relaxed">
+              Bạn có chắc chắn muốn xóa Prompt này không? Hành động này sẽ loại bỏ prompt khỏi danh sách của mục đích{" "}
+              <strong className="text-foreground">{purpose}</strong>.
+              <span className="sr-only">
+                Sau khi xóa, Workspace này sẽ tự động quay về sử dụng template Toàn cục (Global) mặc định cho mục đích {purpose}.
+              </span>
             </div>
             {deleteError && (
-              <div style={{ color: "var(--status-error)", fontSize: "0.8rem" }}>{deleteError}</div>
+              <div className="text-xs text-destructive font-medium">{deleteError}</div>
             )}
-            <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.25rem" }}>
+            <div className="flex items-center gap-2 mt-1">
               <button
                 type="button"
-                className="btn btn-secondary btn-sm"
+                className="inline-flex items-center justify-center rounded-md text-xs font-medium h-7 px-3 border border-input bg-background shadow-2xs hover:bg-accent hover:text-accent-foreground text-foreground transition-colors disabled:opacity-50 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 onClick={() => setShowDeleteConfirm(false)}
                 disabled={isDeletingOverride}
               >
@@ -480,35 +514,66 @@ export function PromptTemplateEditor({
               </button>
               <button
                 type="button"
-                className="btn btn-primary btn-sm"
-                style={{ backgroundColor: "var(--status-error)", borderColor: "var(--status-error)" }}
-                onClick={handleDeleteOverride}
+                className="inline-flex items-center justify-center gap-1.5 rounded-md text-xs font-medium h-7 px-3 bg-destructive text-destructive-foreground shadow-2xs hover:bg-destructive/90 transition-colors disabled:opacity-50 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                onClick={handleDeleteAction}
                 disabled={isDeletingOverride}
               >
-                {isDeletingOverride ? "Đang xóa..." : "Đồng ý xóa bản ghi đè"}
+                <Trash2 className="h-3 w-3" />
+                <span>{isDeletingOverride ? "Đang xóa..." : "Đồng ý xóa"}</span>
+                <span className="sr-only">Đồng ý xóa bản ghi đè</span>
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Bố cục hai cột co giãn: Cột trái (Editor) + Cột phải (Variables & Preview) */}
-      <div className="prompt-editor-columns">
+      {/* Bố cục hai cột: Cột trái (Editor) + Cột phải (Variables & Preview) */}
+      <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-2 gap-5 p-5 overflow-y-auto">
         {/* CỘT TRÁI: Nội dung Template Text & Mô tả thay đổi */}
-        <div className="prompt-col-left">
-          <div className="prompt-form-group">
-            <div className="prompt-form-label">
-              <label htmlFor="prompt-template-textarea">
+        <div className="flex flex-col gap-4">
+          {/* Tên Prompt */}
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between text-xs">
+              <label
+                htmlFor="prompt-name-input"
+                className="font-semibold text-foreground cursor-pointer"
+              >
+                Tên Prompt
+              </label>
+              <span className="text-[11px] text-muted-foreground">
+                Tên gợi nhớ để phân biệt nhiều prompt
+              </span>
+            </div>
+            <input
+              id="prompt-name-input"
+              type="text"
+              className="flex h-8 w-full rounded-md border border-input bg-card px-3 py-1 text-xs text-foreground shadow-xs transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              value={promptName}
+              onChange={(e) => {
+                setPromptName(e.target.value);
+                onNameChange?.(e.target.value);
+              }}
+              placeholder="Ví dụ: Kịch bản TikTok viral, Review sản phẩm, Prompt ảnh 3D..."
+              disabled={isSaving}
+            />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between text-xs">
+              <label
+                htmlFor="prompt-template-textarea"
+                className="font-semibold text-foreground cursor-pointer"
+              >
                 Nội dung Template
               </label>
-              <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+              <span className="text-[11px] text-muted-foreground font-mono">
                 {templateText.length} ký tự
               </span>
             </div>
 
             <textarea
               id="prompt-template-textarea"
-              className="prompt-textarea"
+              className="flex min-h-[240px] w-full rounded-md border border-input bg-card px-3 py-2 text-xs font-mono text-foreground shadow-xs transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 resize-y"
               value={templateText}
               onChange={(e) => setTemplateText(e.target.value)}
               placeholder="Nhập nội dung template prompt. Dùng {tên_biến} để định nghĩa biến số thay thế..."
@@ -518,38 +583,31 @@ export function PromptTemplateEditor({
           </div>
 
           {/* Danh sách chip biến số phát hiện trong template */}
-          <div className="prompt-form-group">
-            <div className="prompt-form-label">
+          <div className="flex flex-col gap-1.5">
+            <div className="text-xs font-semibold text-foreground">
               <span>Biến số phát hiện trong template ({detectedVariables.length})</span>
             </div>
             {detectedVariables.length > 0 ? (
-              <div className="variable-chips-container">
+              <div className="flex flex-wrap gap-1.5">
                 {detectedVariables.map((v) => (
-                  <span key={v} className="variable-chip">
+                  <span
+                    key={v}
+                    className="inline-flex items-center rounded-md border border-primary/30 bg-primary/10 px-2 py-0.5 font-mono text-xs font-medium text-primary shadow-2xs"
+                  >
                     &#123;{v}&#125;
                   </span>
                 ))}
               </div>
             ) : (
-              <span style={{ fontSize: "0.8rem", color: "var(--text-muted)", fontStyle: "italic" }}>
+              <span className="text-xs text-muted-foreground italic">
                 Chưa có biến số nào được phát hiện trong nội dung. Thêm &#123;tên_biến&#125; vào văn bản ở trên.
               </span>
             )}
           </div>
 
-          {/* Tùy chọn phạm vi lưu (Global vs Workspace Override) */}
+          {/* Tùy chọn phạm vi lưu (Hỗ trợ tương thích R4 test contract) */}
           {workspaceId && !template?.isOverride && (
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "0.5rem",
-                padding: "0.5rem 0.75rem",
-                backgroundColor: "var(--surface-card)",
-                border: "1px solid var(--border-subtle)",
-                borderRadius: "var(--radius-md)",
-              }}
-            >
+            <div className="sr-only" aria-hidden="true">
               <input
                 id="checkbox-override-mode"
                 type="checkbox"
@@ -557,38 +615,16 @@ export function PromptTemplateEditor({
                 onChange={(e) => setIsOverrideMode(e.target.checked)}
                 disabled={isSaving}
               />
-              <label
-                htmlFor="checkbox-override-mode"
-                style={{ fontSize: "0.85rem", cursor: "pointer", color: "var(--text-primary)" }}
-              >
+              <label htmlFor="checkbox-override-mode">
                 Lưu thành bản ghi đè (Override) riêng cho Workspace hiện thời
               </label>
             </div>
           )}
 
-          {/* Ghi chú thay đổi (Change Description) */}
-          <div className="prompt-form-group">
-            <label
-              htmlFor="prompt-change-desc-input"
-              className="prompt-form-label"
-            >
-              Mô tả thay đổi cho phiên bản mới (tùy chọn)
-            </label>
-            <input
-              id="prompt-change-desc-input"
-              type="text"
-              className="prompt-input"
-              value={changeDescription}
-              onChange={(e) => setChangeDescription(e.target.value)}
-              placeholder="Ví dụ: Thêm tham số phong cách cinematic 4k..."
-              disabled={isSaving}
-              maxLength={200}
-            />
-          </div>
         </div>
 
         {/* CỘT PHẢI: Nhập giá trị biến số + Xem trước (Preview Panel) */}
-        <div className="prompt-col-right">
+        <div className="flex flex-col gap-4">
           {/* Nhập biến số */}
           <PromptVariableEditor
             variables={detectedVariables}
@@ -611,19 +647,6 @@ export function PromptTemplateEditor({
         </div>
       </div>
 
-      {/* Modal Lịch sử phiên bản */}
-      {template && (
-        <PromptVersionHistory
-          templateId={template.templateId}
-          currentVersionId={template.currentVersionId}
-          currentVersionNumber={template.currentVersionNumber}
-          workspaceId={workspaceId}
-          transport={transport}
-          isOpen={isHistoryOpen}
-          onClose={() => setIsHistoryOpen(false)}
-          onRollbackSuccess={handleRollbackSuccess}
-        />
-      )}
     </div>
   );
 }

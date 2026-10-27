@@ -277,6 +277,14 @@ public static class GlobalAiPoolSmokeTests
                     UpdatedAtUtc = now
                 });
 
+                // Cấu hình đủ budget browser toàn app (5) cho ca nghiệm thu 4 MuseAI
+                db.AppSettings.Add(new AppSetting
+                {
+                    Key = "scheduler.max_open_browsers",
+                    Value = "5",
+                    UpdatedAtUtc = now
+                });
+
                 db.Projects.Add(new Project
                 {
                     Id = prjId,
@@ -365,6 +373,15 @@ public static class GlobalAiPoolSmokeTests
             // Đợt 1: Dispatch tối đa 4 jobs vào 4 MuseAI accounts
             int dispatched1 = await scheduler.DispatchPendingJobsAsync();
             Assert(dispatched1 == 4, $"Kỳ vọng dispatch tối đa 4 video jobs, thực tế: {dispatched1}");
+
+            // Đợi async workers chuyển sang trạng thái Running
+            for (int wait = 0; wait < 50; wait++)
+            {
+                await using var db = new TiToAIDbContext(dbOptions);
+                var c = await db.Jobs.CountAsync(j => j.State == JobState.Running);
+                if (c == 4) break;
+                await Task.Delay(20);
+            }
 
             // Xác minh 4 jobs chạy trên 4 tài khoản MuseAI khác nhau
             string earlyFinishedJobId;

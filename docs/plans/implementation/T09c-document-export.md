@@ -9,6 +9,8 @@
 
 Người dùng chủ động xuất nội dung scene ra TXT UTF-8 trong root Tài liệu; trả metadata Asset Document. Nội dung editor/template vẫn ở DB, không xuất file ở mỗi lần gõ.
 
+Phần bổ sung [SOURCE §7.4](../SOURCE_PLAN.md#74-tạo-ý-tưởngprompt-kèm-nội-dung-đăng-tiktok--p0) cho xuất bài đăng TikTok đã lưu cấp project, gồm caption và hashtag. Coordinator chốt delta DTO nhận project và loại nội dung; contract scene-only dưới đây là baseline, không tạo scene giả để xuất bài đăng. Dùng cùng file store/root/ownership; nghiệm thu copy và TXT giữ đúng tiếng Việt, xuống dòng, hashtag, không lẫn prompt AI.
+
 ## File và contract
 
 - Tạo đề xuất: `src/TiToAI.Application/Documents/DocumentExportService.cs`, `src/TiToAI.Desktop/Bridge/Handlers/DocumentHandlers.cs`.

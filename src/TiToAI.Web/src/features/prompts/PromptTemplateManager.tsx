@@ -1,4 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { Search, Plus, RefreshCw, Sparkles, AlertTriangle, CheckCircle, FileText } from "lucide-react";
+import { cn } from "../../lib/utils.ts";
 import {
   promptApi,
   PROMPT_PURPOSES,
@@ -9,8 +11,14 @@ import {
   defaultPromptTransport,
 } from "./promptApi.ts";
 import { PromptTemplateEditor } from "./PromptTemplateEditor.tsx";
-import { IconSearch, IconPlus, IconRefresh } from "../../components/Icons.tsx";
-import "./promptStyles.css";
+import {
+  getStoredPrompts,
+  saveStoredPrompts,
+  getActivePromptId,
+  setActivePromptId,
+  DEFAULT_PRESET_PROMPTS,
+  type CustomPromptItem,
+} from "./promptStorage.ts";
 
 export interface PromptTemplateManagerProps {
   workspaceId?: string | null;
@@ -37,14 +45,30 @@ export function PromptTemplateManager({
   // Purpose đang chọn
   const [activePurpose, setActivePurpose] = useState<PromptPurpose>(initialPurpose);
 
-  // Danh sách templates
+  // H5: Workspace ID đã cam kết nội bộ. Khi prop workspaceId đổi từ bên ngoài, chỉ cam kết sau khi vượt qua dirty guard!
+  const [committedWorkspaceId, setCommittedWorkspaceId] = useState<string | null | undefined>(workspaceId);
+
+  // Danh sách templates từ backend T10
   const [templates, setTemplates] = useState<PromptTemplateDto[]>([]);
   const [isLoadingList, setIsLoadingList] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
 
-  // Template đang chọn để chỉnh sửa
+  // Danh sách custom prompts lưu ở client
+  const [storedPrompts, setStoredPrompts] = useState<CustomPromptItem[]>(() =>
+    getStoredPrompts(workspaceId)
+  );
+
+  // ID của prompt đang được chọn làm active cho AI
+  const [activePromptId, setActivePromptIdState] = useState<string | null>(() =>
+    getActivePromptId(initialPurpose, workspaceId)
+  );
+
+  // Prompt / Template đang được hiển thị trong Editor
+  const [selectedPromptId, setSelectedPromptId] = useState<string | null>(null);
   const [selectedTemplate, setSelectedTemplate] = useState<PromptTemplateDto | null>(null);
   const [currentVersion, setCurrentVersion] = useState<PromptVersionDto | null>(null);
+  const [currentPromptName, setCurrentPromptName] = useState<string>("");
+
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
 
@@ -75,13 +99,15 @@ export function PromptTemplateManager({
   }, [isEditorDirty]);
 
   // Tải danh sách templates từ backend T10
-  const fetchTemplates = useCallback(async () => {
+  const fetchTemplates = useCallback(async (targetWorkspaceId?: string | null | undefined) => {
     const currentRequestId = ++listRequestIdRef.current;
     setIsLoadingList(true);
     setListError(null);
 
+    const wsToQuery = targetWorkspaceId !== undefined ? targetWorkspaceId : committedWorkspaceId;
+
     try {
-      const result = await promptApi.listTemplates(workspaceId, transport);
+      const result = await promptApi.listTemplates(wsToQuery, transport);
 
       // Nếu đã có request mới hơn (người dùng đổi workspace nhanh), bỏ qua response cũ
       if (currentRequestId !== listRequestIdRef.current) {
@@ -101,26 +127,28 @@ export function PromptTemplateManager({
         setIsLoadingList(false);
       }
     }
-  }, [workspaceId, transport]);
+  }, [committedWorkspaceId, transport]);
 
-  // Tự động tải lại danh sách khi workspaceId thay đổi qua dirty guard
-  const prevWorkspaceIdRef = useRef<string | null | undefined>(workspaceId);
+  // H5: Tự động đổi workspace khi prop workspaceId thay đổi NHƯNG PHẢI ĐI QUA dirty guard!
   useEffect(() => {
-    if (prevWorkspaceIdRef.current !== workspaceId) {
-      prevWorkspaceIdRef.current = workspaceId;
+    if (workspaceId !== committedWorkspaceId) {
       requestSwitch(() => {
+        setCommittedWorkspaceId(workspaceId);
         setIsCreatingNew(false);
-        fetchTemplates();
+        setStoredPrompts(getStoredPrompts(workspaceId));
+        setActivePromptIdState(getActivePromptId(activePurpose, workspaceId));
+        fetchTemplates(workspaceId);
       });
     }
-  }, [workspaceId, fetchTemplates, requestSwitch]);
+  }, [workspaceId, committedWorkspaceId, requestSwitch, fetchTemplates, activePurpose]);
 
-  // Lần đầu mở: tải danh sách
+  // Lần đầu mở: tải danh sách ban đầu
   useEffect(() => {
-    fetchTemplates();
-  }, [fetchTemplates]);
+    fetchTemplates(committedWorkspaceId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // Tải chi tiết template đang chọn
+  // Tải chi tiết template đang chọn từ backend
   const loadTemplateDetail = useCallback(
     async (templateId: string) => {
       const currentRequestId = ++detailRequestIdRef.current;
@@ -132,7 +160,7 @@ export function PromptTemplateManager({
           {
             templateId,
             purpose: null,
-            workspaceId: workspaceId ?? null,
+            workspaceId: committedWorkspaceId ?? null,
           },
           transport
         );
@@ -143,6 +171,7 @@ export function PromptTemplateManager({
 
         setSelectedTemplate(result.template);
         setCurrentVersion(result.currentVersion);
+        setSelectedPromptId(result.template.templateId);
 
         if (onSelectTemplate) {
           onSelectTemplate(result.template);
@@ -160,13 +189,88 @@ export function PromptTemplateManager({
         }
       }
     },
-    [workspaceId, transport, onSelectTemplate]
+    [committedWorkspaceId, transport, onSelectTemplate]
   );
 
-  // Lọc templates theo purpose đang chọn
-  const purposeTemplates = useMemo(() => {
+  // Danh sách các custom prompts của purpose hiện tại
+  const purposeCustomPrompts = useMemo(() => {
+    return storedPrompts.filter((p) => p.purpose === activePurpose);
+  }, [storedPrompts, activePurpose]);
+
+  // Templates của purpose hiện tại từ backend
+  const purposeBackendTemplates = useMemo(() => {
     return templates.filter((t) => t.purpose === activePurpose);
   }, [templates, activePurpose]);
+
+  // Preset prompts mặc định nếu chưa có prompt nào
+  const presetsForPurpose = useMemo(() => {
+    return DEFAULT_PRESET_PROMPTS[activePurpose] || [];
+  }, [activePurpose]);
+
+  // Hợp nhất toàn bộ danh sách prompt hiển thị cho purpose hiện tại
+  const allPromptsForPurpose = useMemo(() => {
+    const list: Array<{
+      id: string;
+      name: string;
+      purpose: PromptPurpose;
+      templateText: string;
+      isBackend: boolean;
+      backendTemplate?: PromptTemplateDto;
+      isOverride?: boolean;
+      versionNumber?: number;
+      updatedAt?: string;
+    }> = [];
+
+    // 1. Thêm các backend templates
+    for (const bt of purposeBackendTemplates) {
+      list.push({
+        id: bt.templateId,
+        name: bt.isOverride ? `Prompt tùy chỉnh Workspace (${bt.purpose})` : `Prompt Mặc định Toàn cục (${bt.purpose})`,
+        purpose: bt.purpose as PromptPurpose,
+        templateText: "", // Sẽ được tải khi load detail
+        isBackend: true,
+        backendTemplate: bt,
+        isOverride: bt.isOverride,
+        versionNumber: bt.currentVersionNumber ?? 1,
+        updatedAt: bt.updatedAtUtc,
+      });
+    }
+
+    // 2. Thêm các custom prompts người dùng đã tạo/sửa
+    for (const cp of purposeCustomPrompts) {
+      // Tránh trùng lặp nếu custom prompt trùng ID với backend template
+      if (!list.some((item) => item.id === cp.id)) {
+        list.push({
+          id: cp.id,
+          name: cp.name,
+          purpose: cp.purpose,
+          templateText: cp.templateText,
+          isBackend: false,
+          isOverride: true,
+          versionNumber: 1,
+          updatedAt: cp.updatedAtUtc,
+        });
+      }
+    }
+
+    // 3. Nếu chưa có bất kỳ prompt nào (cả backend lẫn custom), nạp presets mặc định
+    if (list.length === 0) {
+      for (const preset of presetsForPurpose) {
+        list.push({
+          id: preset.id,
+          name: preset.name,
+          purpose: preset.purpose,
+          templateText: preset.templateText,
+          isBackend: false,
+          isOverride: false,
+          versionNumber: 1,
+          updatedAt: preset.updatedAtUtc,
+        });
+      }
+    }
+
+    return list;
+  }, [purposeBackendTemplates, purposeCustomPrompts, presetsForPurpose]);
 
   // Đếm số lượng template cho mỗi purpose tab
   const purposeCounts = useMemo(() => {
@@ -175,121 +279,263 @@ export function PromptTemplateManager({
       Image: 0,
       VideoPrompt: 0,
     };
-    for (const t of templates) {
-      if (t.purpose in counts) {
-        counts[t.purpose as PromptPurpose]++;
-      }
+    for (const p of PROMPT_PURPOSES) {
+      const backendCount = templates.filter((t) => t.purpose === p).length;
+      const customCount = storedPrompts.filter((cp) => cp.purpose === p).length;
+      const presetCount = DEFAULT_PRESET_PROMPTS[p]?.length || 0;
+      counts[p] = backendCount + customCount > 0 ? backendCount + customCount : presetCount;
     }
     return counts;
-  }, [templates]);
+  }, [templates, storedPrompts]);
 
   // Lọc theo bộ tìm kiếm và scope filter (Tất cả / Global / Override)
   const filteredTemplates = useMemo(() => {
-    return purposeTemplates.filter((t) => {
+    return allPromptsForPurpose.filter((t) => {
       if (scopeFilter === "global" && t.isOverride) return false;
       if (scopeFilter === "override" && !t.isOverride) return false;
 
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
-        const matchesId = t.templateId.toLowerCase().includes(q);
-        const matchesPurpose = t.purpose.toLowerCase().includes(q);
-        return matchesId || matchesPurpose;
+        const matchesName = t.name.toLowerCase().includes(q);
+        const matchesId = t.id.toLowerCase().includes(q);
+        const matchesText = t.templateText.toLowerCase().includes(q);
+        return matchesName || matchesId || matchesText;
       }
       return true;
     });
-  }, [purposeTemplates, scopeFilter, searchQuery]);
+  }, [allPromptsForPurpose, scopeFilter, searchQuery]);
 
-  // Tự động chọn template mặc định khi chuyển purpose hoặc khi danh sách tải xong
+  // Tự động chọn prompt mặc định khi chuyển purpose hoặc danh sách tải xong
   useEffect(() => {
-    // R4: Nếu người dùng đang chủ động ở chế độ tạo template mới, tuyệt đối không tự ghi đè chọn template cũ
-    if (isCreatingNew) {
+    if (isCreatingNew) return;
+
+    if (allPromptsForPurpose.length === 0) {
+      setSelectedTemplate(null);
+      setCurrentVersion(null);
+      setSelectedPromptId(null);
+      setDetailError(null);
       return;
     }
 
-    if (propSelectedTemplateId) {
-      const match = purposeTemplates.find((t) => t.templateId === propSelectedTemplateId);
-      if (match) {
-        loadTemplateDetail(match.templateId);
-        return;
-      }
+    // Đọc active ID đã lưu cho purpose này hoặc propSelectedTemplateId
+    const savedActiveId = getActivePromptId(activePurpose, committedWorkspaceId);
+    let target = propSelectedTemplateId
+      ? allPromptsForPurpose.find((p) => p.id === propSelectedTemplateId)
+      : allPromptsForPurpose.find((p) => p.id === savedActiveId);
+
+    if (!target) {
+      // Ưu tiên chọn Override trước
+      const override = allPromptsForPurpose.find((t) => t.isOverride);
+      target = override || allPromptsForPurpose[0];
     }
 
-    if (purposeTemplates.length > 0) {
-      // Ưu tiên chọn Override trước (resolution precedence: Override > Global)
-      const currentSelectedExists = purposeTemplates.some(
-        (t) => t.templateId === selectedTemplate?.templateId
-      );
-      if (!currentSelectedExists) {
-        const override = purposeTemplates.find((t) => t.isOverride);
-        const target = override || purposeTemplates[0];
-        loadTemplateDetail(target.templateId);
+    if (target) {
+      if (!savedActiveId) {
+        setActivePromptId(activePurpose, target.id, committedWorkspaceId);
+        setActivePromptIdState(target.id);
       }
-    } else {
-      setSelectedTemplate(null);
-      setCurrentVersion(null);
-    }
-  }, [purposeTemplates, propSelectedTemplateId, loadTemplateDetail, selectedTemplate?.templateId, isCreatingNew]);
 
-  // R1: Xử lý chuyển chọn template card qua dirty guard
-  const handleSelectTemplateCard = (template: PromptTemplateDto) => {
-    if (template.templateId === selectedTemplate?.templateId && !isCreatingNew) return;
+      // Nếu là backend template thì load detail
+      if (target.isBackend) {
+        if (selectedTemplate?.templateId !== target.id) {
+          loadTemplateDetail(target.id);
+        }
+      } else {
+        // Là custom / preset prompt: gán trực tiếp vào Editor
+        setSelectedPromptId(target.id);
+        setCurrentPromptName(target.name);
+        setSelectedTemplate(null);
+        setCurrentVersion({
+          versionId: `v-${target.id}`,
+          templateId: target.id,
+          versionNumber: 1,
+          templateText: target.templateText,
+          variableDefinitionsJson: "[]",
+          changeDescription: null,
+          createdAtUtc: target.updatedAt || new Date().toISOString(),
+        });
+        setDetailError(null);
+      }
+    }
+  }, [
+    allPromptsForPurpose,
+    activePurpose,
+    committedWorkspaceId,
+    isCreatingNew,
+    loadTemplateDetail,
+    selectedTemplate?.templateId,
+    propSelectedTemplateId,
+  ]);
+
+  // Chọn một Prompt từ danh sách bên trái
+  const handleSelectPrompt = (promptItem: (typeof allPromptsForPurpose)[0]) => {
+    if (promptItem.id === selectedPromptId && !isCreatingNew) return;
+
     requestSwitch(() => {
       setIsCreatingNew(false);
-      loadTemplateDetail(template.templateId);
+      setDetailError(null);
+      setSelectedPromptId(promptItem.id);
+      setCurrentPromptName(promptItem.name);
+
+      if (promptItem.isBackend) {
+        loadTemplateDetail(promptItem.id);
+      } else {
+        setSelectedTemplate(null);
+        setCurrentVersion({
+          versionId: `v-${promptItem.id}`,
+          templateId: promptItem.id,
+          versionNumber: 1,
+          templateText: promptItem.templateText,
+          variableDefinitionsJson: "[]",
+          changeDescription: null,
+          createdAtUtc: promptItem.updatedAt || new Date().toISOString(),
+        });
+      }
     });
   };
 
-  // R1: Xử lý chuyển tab purpose qua dirty guard
+  // Chọn prompt này làm Prompt áp dụng (Active) cho tác vụ AI và lưu lại cho lần sau
+  const handleSetActivePrompt = (promptIdToActive: string) => {
+    setActivePromptId(activePurpose, promptIdToActive, committedWorkspaceId);
+    setActivePromptIdState(promptIdToActive);
+
+    // Đồng bộ nội dung sang backend nếu cần
+    const target = allPromptsForPurpose.find((p) => p.id === promptIdToActive);
+    if (target && target.templateText) {
+      promptApi
+        .createVersion(
+          {
+            purpose: activePurpose,
+            workspaceId: committedWorkspaceId ?? null,
+            templateText: target.templateText,
+          },
+          transport
+        )
+        .then(() => fetchTemplates())
+        .catch((err) => console.warn("Lỗi đồng bộ prompt active sang backend:", err));
+    }
+  };
+
+  // Chuyển tab purpose qua dirty guard
   const handleSelectPurpose = (purpose: PromptPurpose) => {
     if (purpose === activePurpose) return;
     requestSwitch(() => {
       setIsCreatingNew(false);
+      setDetailError(null);
       setActivePurpose(purpose);
+      setActivePromptIdState(getActivePromptId(purpose, committedWorkspaceId));
     });
   };
 
-  // R4: Tạo mới một template rỗng cho purpose hiện tại qua dirty guard
+  // Tạo mới một template rỗng cho purpose hiện tại
   const handleCreateNewTemplate = () => {
     requestSwitch(() => {
       setIsCreatingNew(true);
+      setSelectedPromptId(null);
       setSelectedTemplate(null);
       setCurrentVersion(null);
+      setCurrentPromptName("");
+      setDetailError(null);
     });
   };
 
-  // R4: Hủy chế độ tạo mới
+  // Hủy chế độ tạo mới
   const handleCancelCreateNew = () => {
-    setIsCreatingNew(false);
-    if (purposeTemplates.length > 0) {
-      const override = purposeTemplates.find((t) => t.isOverride);
-      const target = override || purposeTemplates[0];
-      loadTemplateDetail(target.templateId);
-    }
+    requestSwitch(() => {
+      setIsCreatingNew(false);
+      setDetailError(null);
+      if (allPromptsForPurpose.length > 0) {
+        handleSelectPrompt(allPromptsForPurpose[0]);
+      }
+    });
   };
 
-  // Callback sau khi lưu phiên bản mới thành công
-  const handleSaveSuccess = (savedTemplate: PromptTemplateDto, savedVersion: PromptVersionDto) => {
+  // Lưu nội dung prompt hiện hành.
+  const handleSaveSuccess = (
+    savedTemplate: PromptTemplateDto,
+    savedVersion: PromptVersionDto,
+    customName?: string
+  ) => {
+    const finalName = customName?.trim() || currentPromptName.trim() || `Prompt ${activePurpose} mới`;
+
+    // Cập nhật vào custom prompts lưu trữ
+    const existingIndex = storedPrompts.findIndex((p) => p.id === savedTemplate.templateId);
+    let nextStored: CustomPromptItem[];
+
+    if (existingIndex >= 0) {
+      nextStored = [...storedPrompts];
+      nextStored[existingIndex] = {
+        ...nextStored[existingIndex],
+        name: finalName,
+        templateText: savedVersion.templateText,
+        updatedAtUtc: new Date().toISOString(),
+        backendTemplateId: savedTemplate.templateId,
+      };
+    } else {
+      nextStored = [
+        ...storedPrompts,
+        {
+          id: savedTemplate.templateId,
+          name: finalName,
+          purpose: activePurpose,
+          templateText: savedVersion.templateText,
+          createdAtUtc: new Date().toISOString(),
+          updatedAtUtc: new Date().toISOString(),
+          backendTemplateId: savedTemplate.templateId,
+        },
+      ];
+    }
+
+    setStoredPrompts(nextStored);
+    saveStoredPrompts(nextStored, committedWorkspaceId);
+
+    // Đặt prompt này làm active prompt và lưu lựa chọn
+    setActivePromptId(activePurpose, savedTemplate.templateId, committedWorkspaceId);
+    setActivePromptIdState(savedTemplate.templateId);
+
     setIsCreatingNew(false);
     setSelectedTemplate(savedTemplate);
     setCurrentVersion(savedVersion);
+    setSelectedPromptId(savedTemplate.templateId);
+    setCurrentPromptName(finalName);
+    setDetailError(null);
+
     fetchTemplates();
   };
 
-  // R3: Callback sau khi rollback thành công: cập nhật template và currentVersion của manager
-  const handleRollbackSuccess = (
-    rolledBackTemplate: PromptTemplateDto,
-    rolledBackVersion: PromptVersionDto
-  ) => {
-    setSelectedTemplate(rolledBackTemplate);
-    setCurrentVersion(rolledBackVersion);
-    fetchTemplates(); // Cập nhật lại danh sách template cards
-  };
+  // Callback sau khi xóa Prompt / Override thành công
+  const handleDeleteSuccess = () => {
+    const deletedId = selectedPromptId || selectedTemplate?.templateId;
 
-  // Callback sau khi xóa Override thành công
-  const handleDeleteOverrideSuccess = () => {
-    setIsCreatingNew(false);
+    // 1. Xóa khỏi danh sách lưu trữ custom prompts
+    if (deletedId) {
+      const nextStored = storedPrompts.filter((p) => p.id !== deletedId);
+      setStoredPrompts(nextStored);
+      saveStoredPrompts(nextStored, committedWorkspaceId);
+    }
+
+    // 2. Optimistic update templates state để không bị race condition
+    if (deletedId) {
+      setTemplates((prev) => prev.filter((t) => t.templateId !== deletedId));
+    }
+
+    // 3. Reset các error và state
+    setDetailError(null);
     setSelectedTemplate(null);
     setCurrentVersion(null);
+    setSelectedPromptId(null);
+
+    // 4. Kiểm tra còn prompt nào khác cho purpose này không
+    const remaining = allPromptsForPurpose.filter((p) => p.id !== deletedId);
+    if (remaining.length > 0) {
+      setIsCreatingNew(false);
+      handleSelectPrompt(remaining[0]);
+    } else {
+      // Khi không còn template nào: Tự động hiển thị form tạo prompt mới như hình 1!
+      setIsCreatingNew(true);
+      setCurrentPromptName("");
+    }
+
     fetchTemplates();
   };
 
@@ -310,48 +556,52 @@ export function PromptTemplateManager({
   };
 
   return (
-    <div className={`prompt-manager-container ${className}`}>
+    <div className={cn("flex flex-col w-full h-full overflow-hidden bg-background text-foreground", className)}>
       {/* Thanh tiêu đề header */}
-      <div className="prompt-header-bar">
-        <div className="prompt-title-group">
-          <h1>Quản lý Prompt Templates</h1>
-          <p>
-            Định nghĩa template bất biến, quản lý phiên bản đơn điệu và ghi đè Workspace theo T10.
+      <div className="flex items-center justify-between gap-4 px-6 py-4 bg-card border-b border-border/80 shrink-0 flex-wrap">
+        <div>
+          <h1 className="text-lg font-bold text-foreground">Quản lý Prompt</h1>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Quản lý và tùy chỉnh các mẫu prompt AI cho Kịch bản, Tạo ảnh và Video.
             {workspaceId ? (
-              <span style={{ marginLeft: "0.5rem", color: "var(--accent)" }}>
+              <span className="ml-2 font-medium text-primary">
                 [Ngữ cảnh: Workspace {workspaceId}]
               </span>
             ) : (
-              <span style={{ marginLeft: "0.5rem", color: "var(--text-muted)" }}>
+              <span className="ml-2 font-medium text-muted-foreground">
                 [Ngữ cảnh: Toàn cục]
               </span>
             )}
           </p>
         </div>
 
-        <div className="prompt-header-actions">
+        <div className="flex items-center gap-2.5">
           <button
             type="button"
-            className="btn btn-secondary btn-sm"
-            onClick={fetchTemplates}
+            className="inline-flex items-center justify-center gap-1.5 rounded-md text-xs font-medium h-8 px-3 border border-input bg-background shadow-xs hover:bg-accent hover:text-accent-foreground text-foreground transition-colors disabled:opacity-50 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            onClick={() => fetchTemplates()}
             disabled={isLoadingList}
             aria-label="Tải lại danh sách templates"
           >
-            <IconRefresh size={14} className={isLoadingList ? "spin" : ""} /> Tải lại
+            <RefreshCw className={cn("h-3.5 w-3.5", isLoadingList && "animate-spin")} /> Tải lại
           </button>
           <button
             type="button"
-            className="btn btn-primary btn-sm"
+            className="inline-flex items-center justify-center gap-1.5 rounded-md text-xs font-medium h-8 px-3.5 bg-primary text-primary-foreground shadow-xs hover:bg-primary/90 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             onClick={handleCreateNewTemplate}
             aria-label="Tạo template mới cho mục đích đang chọn"
           >
-            <IconPlus size={14} /> Tạo template mới
+            <Plus className="h-3.5 w-3.5" /> Tạo prompt mới
           </button>
         </div>
       </div>
 
       {/* Tabs mục đích (Script / Image / VideoPrompt) */}
-      <div className="prompt-purpose-tabs" role="tablist" aria-label="Mục đích prompt">
+      <div
+        className="flex items-center gap-2 px-6 py-2 bg-muted/20 border-b border-border/80 shrink-0 overflow-x-auto"
+        role="tablist"
+        aria-label="Mục đích prompt"
+      >
         {PROMPT_PURPOSES.map((purpose) => {
           const isActive = activePurpose === purpose;
           const count = purposeCounts[purpose] || 0;
@@ -361,122 +611,188 @@ export function PromptTemplateManager({
               type="button"
               role="tab"
               aria-selected={isActive}
-              className={`prompt-tab-btn ${isActive ? "active" : ""}`}
+              className={cn(
+                "inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer whitespace-nowrap focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                isActive
+                  ? "bg-primary text-primary-foreground shadow-xs font-semibold"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
+              )}
               onClick={() => handleSelectPurpose(purpose)}
             >
-              <span>{purpose === "Script" ? "Kịch bản (Script)" : purpose === "Image" ? "Tạo ảnh (Image)" : "Prompt video (VideoPrompt)"}</span>
-              <span className="prompt-tab-count">{count}</span>
+              <span>
+                {purpose === "Script"
+                  ? "Kịch bản & Ý tưởng (Script)"
+                  : purpose === "Image"
+                    ? "Tạo ảnh (Image)"
+                    : "Hướng dẫn AI tạo prompt video"}
+              </span>
+              <span
+                className={cn(
+                  "rounded-full px-1.5 py-0.2 text-[10px] font-semibold",
+                  isActive
+                    ? "bg-primary-foreground/20 text-primary-foreground"
+                    : "bg-muted text-muted-foreground"
+                )}
+              >
+                {count}
+              </span>
             </button>
           );
         })}
       </div>
 
       {/* Thân giao diện chính: Danh sách bên trái + Editor hai cột bên phải */}
-      <div className="prompt-body-layout">
-        {/* Danh sách templates theo purpose */}
-        <aside className="prompt-sidebar-list" aria-label="Danh sách template">
-          <div className="prompt-search-bar">
-            <div className="prompt-search-input-wrap">
-              <span className="prompt-search-icon">
-                <IconSearch size={14} />
-              </span>
+      <div className="flex flex-1 min-h-0 overflow-hidden">
+        {/* Danh sách prompts theo purpose */}
+        <aside
+          className="w-80 shrink-0 flex flex-col bg-card/40 border-r border-border/80 overflow-hidden"
+          aria-label="Danh sách template"
+        >
+          <div className="p-3 border-b border-border/70 flex flex-col gap-2">
+            <div className="relative flex items-center">
+              <Search className="absolute left-2.5 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
               <input
                 type="text"
-                className="prompt-search-input"
-                placeholder="Tìm template theo ID..."
+                className="flex h-8 w-full rounded-md border border-input bg-background pl-8 pr-3 py-1 text-xs text-foreground shadow-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                placeholder="Tìm prompt theo tên, nội dung..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 aria-label="Tìm kiếm template"
               />
             </div>
 
-            <div className="prompt-scope-filter">
+            <div className="flex items-center gap-1.5">
               <button
                 type="button"
-                className={`prompt-filter-chip ${scopeFilter === "all" ? "active" : ""}`}
+                className={cn(
+                  "rounded px-2.5 py-0.5 text-[11px] font-medium border transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                  scopeFilter === "all"
+                    ? "bg-background text-foreground border-border shadow-xs font-semibold"
+                    : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                )}
                 onClick={() => setScopeFilter("all")}
               >
                 Tất cả
               </button>
               <button
                 type="button"
-                className={`prompt-filter-chip ${scopeFilter === "global" ? "active" : ""}`}
+                className={cn(
+                  "rounded px-2.5 py-0.5 text-[11px] font-medium border transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                  scopeFilter === "global"
+                    ? "bg-background text-foreground border-border shadow-xs font-semibold"
+                    : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                )}
                 onClick={() => setScopeFilter("global")}
               >
                 Toàn cục
               </button>
               <button
                 type="button"
-                className={`prompt-filter-chip ${scopeFilter === "override" ? "active" : ""}`}
+                className={cn(
+                  "rounded px-2.5 py-0.5 text-[11px] font-medium border transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                  scopeFilter === "override"
+                    ? "bg-background text-foreground border-border shadow-xs font-semibold"
+                    : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                )}
                 onClick={() => setScopeFilter("override")}
               >
-                Override
+                Tùy chỉnh
               </button>
             </div>
           </div>
 
-          <div className="prompt-list-scroll">
+          <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-1.5">
             {listError && (
-              <div className="prompt-alert prompt-alert-error" style={{ margin: "0.5rem" }}>
+              <div
+                className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive shadow-xs"
+                role="alert"
+              >
+                <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
                 <span>{listError}</span>
               </div>
             )}
 
             {isLoadingList && (
-              <div style={{ textAlign: "center", padding: "1.5rem", color: "var(--text-muted)" }}>
-                <IconRefresh size={18} className="spin" style={{ marginBottom: "0.4rem" }} />
-                <div>Đang tải templates...</div>
+              <div className="text-center py-8 text-muted-foreground text-xs flex flex-col items-center gap-2">
+                <RefreshCw className="h-5 w-5 animate-spin" />
+                <div>Đang tải danh sách prompt...</div>
               </div>
             )}
 
             {!isLoadingList && filteredTemplates.length === 0 && (
-              <div style={{ textAlign: "center", padding: "2rem 1rem", color: "var(--text-muted)" }}>
-                <p style={{ margin: "0 0 0.5rem 0", fontSize: "0.85rem" }}>
+              <div className="text-center py-8 px-4 text-muted-foreground text-xs flex flex-col items-center gap-2">
+                <p className="leading-relaxed">
                   Chưa có template nào cho mục đích {activePurpose}.
                 </p>
                 <button
                   type="button"
-                  className="btn btn-secondary btn-sm"
+                  className="inline-flex items-center justify-center gap-1.5 rounded-md text-xs font-medium h-7 px-3 border border-input bg-background shadow-xs hover:bg-accent hover:text-accent-foreground text-foreground transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                   onClick={handleCreateNewTemplate}
                 >
-                  <IconPlus size={12} /> Tạo template đầu tiên
+                  <Plus className="h-3 w-3" /> Tạo template đầu tiên
                 </button>
               </div>
             )}
 
-            {filteredTemplates.map((t) => {
-              const isSelected = selectedTemplate?.templateId === t.templateId && !isCreatingNew;
+            {filteredTemplates.map((item) => {
+              const isSelected = selectedPromptId === item.id && !isCreatingNew;
+              const isActive = activePromptId === item.id;
+
               return (
                 <div
-                  key={t.templateId}
-                  className={`prompt-template-card ${isSelected ? "selected" : ""}`}
-                  onClick={() => handleSelectTemplateCard(t)}
+                  key={item.id}
+                  className={cn(
+                    "flex flex-col gap-1.5 rounded-lg border p-2.5 transition-colors cursor-pointer shadow-xs text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                    isSelected
+                      ? "border-primary bg-primary/10 shadow-xs"
+                      : "border-border/70 bg-card hover:border-border hover:bg-accent/40"
+                  )}
+                  onClick={() => handleSelectPrompt(item)}
                   role="button"
                   tabIndex={0}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
-                      handleSelectTemplateCard(t);
+                      handleSelectPrompt(item);
                     }
                   }}
                   aria-pressed={isSelected}
-                  aria-label={`Chọn template ${t.templateId}`}
+                  aria-label={`Chọn prompt ${item.name}`}
                 >
-                  <div className="prompt-card-top">
-                    <span className="prompt-card-title">{t.templateId}</span>
-                    <span
-                      className={`badge ${t.isOverride ? "badge-override" : "badge-global"}`}
-                      style={{ fontSize: "0.65rem", padding: "0.1rem 0.4rem" }}
-                    >
-                      {t.isOverride ? "Override" : "Global"}
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold text-xs text-foreground truncate flex items-center gap-1.5">
+                      <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                      <span className="truncate">{item.name}</span>
                     </span>
+                    {isActive ? (
+                      <span className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.2 text-[10px] font-semibold border border-emerald-500/40 bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 shrink-0">
+                        <CheckCircle className="h-2.5 w-2.5" /> Áp dụng
+                      </span>
+                    ) : (
+                      <span
+                        className={cn(
+                          "inline-flex items-center rounded px-1.5 py-0.2 text-[10px] font-medium border shadow-2xs shrink-0",
+                          item.isOverride
+                            ? "border-purple-500/30 bg-purple-500/10 text-purple-600 dark:text-purple-400"
+                            : "border-border bg-muted/60 text-muted-foreground"
+                        )}
+                      >
+                        {item.isOverride ? "Tùy chỉnh" : "Mặc định"}
+                      </span>
+                    )}
                   </div>
 
-                  <div className="prompt-card-meta">
-                    <span>v{t.currentVersionNumber ?? 1}</span>
+                  {item.templateText && (
+                    <div className="text-[11px] text-muted-foreground line-clamp-2 leading-relaxed">
+                      {item.templateText}
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground font-mono mt-0.5">
+                    <span className="truncate max-w-[140px] text-muted-foreground/80">{item.id}</span>
                     <span>·</span>
                     <span>
-                      {t.updatedAtUtc ? new Date(t.updatedAtUtc).toLocaleDateString("vi-VN") : "—"}
+                      {item.updatedAt ? new Date(item.updatedAt).toLocaleDateString("vi-VN") : "—"}
                     </span>
                   </div>
                 </div>
@@ -486,24 +802,16 @@ export function PromptTemplateManager({
         </aside>
 
         {/* Khung Editor chi tiết */}
-        <main className="prompt-editor-pane" style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+        <main className="flex-1 flex flex-col min-w-0 overflow-hidden bg-background">
           {isCreatingNew && (
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                padding: "0.6rem 1.25rem",
-                backgroundColor: "var(--accent-subtle)",
-                borderBottom: "1px solid var(--accent)",
-              }}
-            >
-              <div style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--accent)" }}>
-                ✨ Đang tạo template mới cho mục đích: {activePurpose}
+            <div className="flex items-center justify-between px-5 py-2.5 bg-primary/10 border-b border-primary/30 shrink-0">
+              <div className="text-xs font-semibold text-primary flex items-center gap-1.5">
+                <Sparkles className="h-3.5 w-3.5" />
+                <span>Đang tạo template mới cho mục đích: {activePurpose}</span>
               </div>
               <button
                 type="button"
-                className="btn btn-secondary btn-sm"
+                className="inline-flex items-center justify-center rounded-md text-xs font-medium h-7 px-2.5 border border-input bg-background shadow-xs hover:bg-accent hover:text-accent-foreground text-foreground transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 onClick={handleCancelCreateNew}
               >
                 Hủy tạo mới
@@ -512,91 +820,84 @@ export function PromptTemplateManager({
           )}
 
           {isLoadingDetail ? (
-            <div style={{ margin: "auto", textAlign: "center", color: "var(--text-muted)" }}>
-              <IconRefresh size={24} className="spin" style={{ marginBottom: "0.5rem" }} />
-              <div>Đang tải chi tiết phiên bản template...</div>
+            <div className="m-auto text-center text-muted-foreground text-xs flex flex-col items-center gap-2">
+              <RefreshCw className="h-6 w-6 animate-spin" />
+              <div>Đang tải nội dung prompt...</div>
             </div>
-          ) : detailError ? (
-            <div style={{ margin: "auto", maxWidth: "400px" }}>
-              <div className="prompt-alert prompt-alert-error" role="alert">
-                <div>⚠️ {detailError}</div>
+          ) : detailError && !isCreatingNew && allPromptsForPurpose.length > 0 ? (
+            <div className="m-auto max-w-md p-4 flex flex-col gap-3">
+              <div
+                className="flex items-start gap-2.5 rounded-lg border border-destructive/40 bg-destructive/10 p-3.5 text-xs text-destructive shadow-xs"
+                role="alert"
+              >
+                <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                <div>{detailError}</div>
               </div>
+              <button
+                type="button"
+                className="inline-flex items-center justify-center gap-1.5 rounded-md text-xs font-medium h-8 px-3 border border-input bg-background shadow-xs hover:bg-accent hover:text-accent-foreground text-foreground transition-colors cursor-pointer"
+                onClick={handleCreateNewTemplate}
+              >
+                <Plus className="h-3.5 w-3.5" /> Tạo prompt mới
+              </button>
             </div>
           ) : (
             <PromptTemplateEditor
               template={isCreatingNew ? null : selectedTemplate}
               currentVersion={isCreatingNew ? null : currentVersion}
-              workspaceId={workspaceId}
+              workspaceId={committedWorkspaceId}
               purpose={activePurpose}
+              promptName={currentPromptName}
+              onNameChange={setCurrentPromptName}
+              isActivePrompt={Boolean(selectedPromptId && activePromptId === selectedPromptId)}
+              onSetActivePrompt={
+                selectedPromptId ? () => handleSetActivePrompt(selectedPromptId) : undefined
+              }
+              onDeletePrompt={handleDeleteSuccess}
               transport={transport}
               onDirtyChange={setIsEditorDirty}
               onSaveSuccess={handleSaveSuccess}
-              onRollbackSuccess={handleRollbackSuccess}
-              onDeleteOverrideSuccess={handleDeleteOverrideSuccess}
+              onDeleteOverrideSuccess={handleDeleteSuccess}
               onApplyPreview={onApplyPreview}
             />
           )}
         </main>
       </div>
 
-      {/* R1: Modal xác nhận rời bản nháp khi có thay đổi chưa lưu */}
+      {/* R1 & H5: Modal xác nhận rời bản nháp khi có thay đổi chưa lưu */}
       {showDirtyConfirmModal && (
         <div
-          className="modal-backdrop"
-          style={{
-            position: "fixed",
-            inset: 0,
-            backgroundColor: "var(--backdrop-color)",
-            backdropFilter: "blur(2px)",
-            zIndex: 1100,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: "1rem",
-          }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs"
           role="alertdialog"
           aria-modal="true"
           aria-labelledby="dirty-confirm-title"
         >
-          <div
-            style={{
-              width: "100%",
-              maxWidth: "440px",
-              backgroundColor: "var(--surface-card)",
-              border: "1px solid var(--border)",
-              borderRadius: "var(--radius-lg)",
-              boxShadow: "var(--shadow-modal)",
-              padding: "1.25rem",
-              display: "flex",
-              flexDirection: "column",
-              gap: "1rem",
-            }}
-          >
+          <div className="w-full max-w-md rounded-xl border border-border bg-card p-5 shadow-xl flex flex-col gap-3.5 text-card-foreground">
             <div
               id="dirty-confirm-title"
-              style={{ fontWeight: 700, fontSize: "1.05rem", color: "var(--text-primary)" }}
+              className="font-bold text-base text-foreground flex items-center gap-2"
             >
+              <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0" />
               Nội dung bản nháp chưa được lưu!
             </div>
-            <div style={{ fontSize: "0.85rem", color: "var(--text-secondary)", lineHeight: 1.5 }}>
+            <div className="text-xs text-muted-foreground leading-relaxed">
               Bạn đang có các thay đổi chưa lưu trong bản nháp. Nếu chuyển sang template khác hoặc thay đổi mục đích,
               các thay đổi này sẽ bị hủy bỏ.
             </div>
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem" }}>
+            <div className="flex items-center justify-end gap-2 pt-2">
               <button
                 type="button"
-                className="btn btn-secondary btn-sm"
+                className="inline-flex items-center justify-center rounded-md text-xs font-medium h-8 px-3.5 border border-input bg-background shadow-xs hover:bg-accent hover:text-accent-foreground text-foreground transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 onClick={handleCancelDiscard}
               >
                 Ở lại chỉnh sửa
               </button>
               <button
                 type="button"
-                className="btn btn-primary btn-sm"
-                style={{ backgroundColor: "var(--status-error)", borderColor: "var(--status-error)" }}
+                className="inline-flex items-center justify-center rounded-md text-xs font-medium h-8 px-3.5 bg-destructive text-destructive-foreground shadow-xs hover:bg-destructive/90 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 onClick={handleConfirmDiscard}
               >
-                Bỏ qua thay đổi
+                Rời đi (Bỏ qua thay đổi)
               </button>
             </div>
           </div>

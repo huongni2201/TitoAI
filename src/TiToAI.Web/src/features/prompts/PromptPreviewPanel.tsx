@@ -1,6 +1,7 @@
 import { useState } from "react";
+import { RefreshCw, Check, Copy, AlertTriangle } from "lucide-react";
+import { cn } from "../../lib/utils.ts";
 import type { PromptPreviewResponseData } from "./promptApi.ts";
-import { IconCheck, IconRefresh } from "../../components/Icons.tsx";
 
 export interface PromptPreviewPanelProps {
   previewData: PromptPreviewResponseData | null;
@@ -47,32 +48,35 @@ export function PromptPreviewPanel({
     : 0;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
-          <span style={{ fontWeight: 600, fontSize: "0.9rem", color: "var(--text-primary)" }}>
+    <div className="flex flex-col gap-3">
+      {/* Header Panel */}
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="font-semibold text-xs text-foreground">
             Bản xem trước render
           </span>
           {previewData && (
             <span
-              className={`badge ${previewData.isOverride ? "badge-override" : "badge-global"}`}
-              style={{ fontSize: "0.7rem" }}
+              className={cn(
+                "inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] font-medium shadow-2xs",
+                previewData.isOverride
+                  ? "border-purple-500/30 bg-purple-500/10 text-purple-600 dark:text-purple-400"
+                  : "border-border bg-muted/60 text-muted-foreground"
+              )}
             >
               {previewData.isOverride ? "Override Workspace" : "Global Template"}
             </span>
           )}
           {isStale ? (
             <span
-              className="badge badge-dirty"
-              style={{ fontSize: "0.7rem", backgroundColor: "rgba(245, 158, 11, 0.15)", color: "var(--status-warning)", borderColor: "var(--status-warning)" }}
+              className="inline-flex items-center rounded-md border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400 shadow-2xs"
               title="Bản xem trước cũ, không khớp với nội dung bản nháp vừa sửa"
             >
               Bản xem trước cũ (Stale)
             </span>
           ) : isDraftDirty ? (
             <span
-              className="badge badge-dirty"
-              style={{ fontSize: "0.7rem" }}
+              className="inline-flex items-center rounded-md border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400 shadow-2xs"
               title="Nội dung bản nháp đã thay đổi so với bản preview trước"
             >
               Bản nháp mới
@@ -82,25 +86,28 @@ export function PromptPreviewPanel({
 
         <button
           type="button"
-          className="btn btn-secondary btn-sm"
+          className="inline-flex items-center justify-center gap-1.5 rounded-md text-xs font-medium h-8 px-3 border border-input bg-background shadow-xs hover:bg-accent hover:text-accent-foreground text-foreground transition-colors disabled:opacity-50 disabled:pointer-events-none cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           onClick={onRender}
           disabled={isLoading}
-          aria-label="Render xem trước qua backend T10"
+          aria-label="Xem yêu cầu gửi AI (Render xem trước)"
         >
-          <IconRefresh size={14} className={isLoading ? "spin" : ""} />
-          {isLoading ? "Đang render..." : "Render xem trước"}
+          <RefreshCw className={cn("h-3.5 w-3.5", isLoading && "animate-spin")} />
+          {isLoading ? "Đang render..." : "Xem yêu cầu gửi AI (Render xem trước)"}
         </button>
+      </div>
+
+      <div className="rounded-md border border-border/60 bg-muted/30 px-3 py-1.5 text-[11px] text-muted-foreground leading-relaxed">
+        <strong>Lưu ý:</strong> Thao tác này chỉ render xem trước nội dung yêu cầu ghép với dữ liệu; hoàn toàn không gọi AI và không tốn lượt gửi. Thao tác gửi AI được thực hiện tại luồng Tạo nội dung trong Dự án.
       </div>
 
       {/* Cảnh báo bản xem trước cũ không khớp với bản nháp hiện tại */}
       {isStale && previewData && (
         <div
-          className="prompt-alert prompt-alert-warning"
-          style={{ fontSize: "0.8rem", padding: "0.5rem 0.75rem" }}
+          className="flex items-start gap-2.5 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-600 dark:text-amber-400 shadow-xs"
           role="status"
         >
-          <div>⚠️</div>
-          <div>
+          <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+          <div className="leading-relaxed">
             Bản xem trước này thuộc về nội dung cũ trước khi chỉnh sửa. Vui lòng nhấn &quot;Render xem trước&quot;
             để cập nhật lại trước khi áp dụng.
           </div>
@@ -109,21 +116,24 @@ export function PromptPreviewPanel({
 
       {/* Hiển thị lỗi nếu backend trả validation error hoặc lỗi kết nối */}
       {error && (
-        <div className="prompt-alert prompt-alert-error" role="alert">
-          <div style={{ flexShrink: 0 }}>⚠️</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-            <span style={{ fontWeight: 600 }}>Lỗi render xem trước</span>
-            <span style={{ fontSize: "0.8rem", lineHeight: 1.4 }}>{error}</span>
-            <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+        <div
+          className="flex items-start gap-2.5 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive shadow-xs"
+          role="alert"
+        >
+          <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+          <div className="flex flex-col gap-1">
+            <span className="font-semibold">Lỗi render xem trước</span>
+            <span className="leading-relaxed">{error}</span>
+            <span className="text-[11px] text-muted-foreground">
               (Nội dung bản nháp bạn đang nhập vẫn được giữ nguyên đầy đủ).
             </span>
           </div>
         </div>
       )}
 
-      {/* Container hiển thị nội dung kết quả xem trước */}
-      <div className="preview-output-container">
-        <div className="preview-output-header">
+      {/* Card hiển thị nội dung kết quả xem trước */}
+      <div className="flex flex-col rounded-xl border border-border/80 bg-card text-card-foreground overflow-hidden shadow-xs">
+        <div className="flex items-center justify-between border-b border-border/70 bg-muted/30 px-3.5 py-2 text-xs font-medium text-muted-foreground">
           <span>
             {isLoading
               ? "Đang xử lý render qua Prompt Engine..."
@@ -132,41 +142,44 @@ export function PromptPreviewPanel({
                 : "Chưa render xem trước"}
           </span>
           {previewData && (
-            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-              <span>{charCount} ký tự / {wordCount} từ</span>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] text-muted-foreground font-mono">
+                {charCount} ký tự / {wordCount} từ
+              </span>
               <button
                 type="button"
-                className="btn btn-secondary btn-sm"
-                style={{ padding: "0.15rem 0.5rem", minHeight: "24px", fontSize: "0.7rem" }}
+                className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-2 py-0.5 text-[11px] font-medium text-foreground shadow-2xs hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-50 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 onClick={handleCopy}
                 disabled={isLoading || !previewData.renderedText}
                 aria-label="Sao chép kết quả render"
               >
                 {copied ? (
                   <>
-                    <IconCheck size={12} style={{ color: "var(--status-success)" }} /> Đã chép
+                    <Check className="h-3 w-3 text-emerald-500" /> Đã chép
                   </>
                 ) : (
-                  "Sao chép"
+                  <>
+                    <Copy className="h-3 w-3" /> Sao chép
+                  </>
                 )}
               </button>
             </div>
           )}
         </div>
 
-        <div className="preview-output-body">
+        <div className="p-3.5 font-mono text-xs text-foreground leading-relaxed whitespace-pre-wrap break-words max-h-64 overflow-y-auto min-h-[110px] bg-background/50">
           {isLoading ? (
-            <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>
+            <span className="text-muted-foreground italic">
               Đang phân tích cú pháp template và thay thế biến số qua backend T10...
             </span>
           ) : previewData ? (
             previewData.renderedText || (
-              <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>
+              <span className="text-muted-foreground italic">
                 (Kết quả render trả về chuỗi rỗng)
               </span>
             )
           ) : (
-            <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>
+            <span className="text-muted-foreground italic">
               Nhấn &quot;Render xem trước&quot; để kiểm tra cú pháp và kết quả thay thế biến số qua backend T10.
             </span>
           )}
@@ -175,16 +188,16 @@ export function PromptPreviewPanel({
 
       {/* Nút áp dụng vào scene editor nếu được cung cấp */}
       {onApply && previewData && (
-        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <div className="flex justify-end pt-1">
           <button
             type="button"
-            className="btn btn-primary btn-sm"
+            className="inline-flex items-center justify-center gap-1.5 rounded-md text-xs font-medium h-8 px-3.5 bg-primary text-primary-foreground shadow-xs hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:pointer-events-none cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             onClick={() => onApply(previewData.renderedText)}
             disabled={isLoading || !previewData.renderedText || isStale}
             title={isStale ? "Bản xem trước cũ, cần render lại trước khi áp dụng" : "Áp dụng nội dung này vào cảnh hiện tại"}
             aria-label="Áp dụng nội dung này vào cảnh hiện tại"
           >
-            <IconCheck size={14} /> Áp dụng vào cảnh
+            <Check className="h-3.5 w-3.5" /> Áp dụng vào cảnh
           </button>
         </div>
       )}

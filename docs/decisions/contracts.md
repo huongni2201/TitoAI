@@ -207,7 +207,7 @@ TiToAI phân định rạch ròi giữa việc hủy một yêu cầu RPC ngắn
 - `project.*`: `list_by_workspace`, `get`, `create`, `update`, `delete`.
 - `scene.*`: `list_by_project`, `get`, `create`, `update`, `delete`, `reorder`.
 - `account.*`: `list_by_workspace`, `link`, `unlink`.
-- `prompt.*`: `list_templates`, `get_template`, `list_versions`, `create_version`, `preview`, `rollback_version`, `delete_override`.
+- `prompt.*`: `list_templates`, `get_template`, `save_template`, `preview`, `delete_override`. Prompt chỉ có nội dung hiện hành; không lưu lịch sử hoặc rollback version.
 - `asset.*`: `import_audio`, `select_reference_image`, `get_metadata`, `open_folder`.
 - `browser.*`: `list_profiles`, `request_login`, `cancel_login`, `check_session`.
 - `document.*`: `export`.
@@ -273,8 +273,9 @@ TiToAI phân định rạch ròi giữa việc hủy một yêu cầu RPC ngắn
     - Nếu `workspaceId` có giá trị GUID: Trả về profile Shared AI toàn app kèm các profile kênh (MuseAI / TikTok) liên kết với Workspace đó.
     - Nếu `workspaceId` là `null` hoặc không truyền: Trả về profile Shared AI toàn app và toàn bộ các profile kênh đã cấu hình trong hệ thống (phục vụ màn hình "Trình duyệt AI" cấp App Shell).
 - **`browser.request_login`:**
-  - Request payload: `{ "profileId": string }`
-  - Response data: `{ "queued": boolean, "visibilityState": "VisibleWaiting" | "VisibleActive", "currentHolder": string | null }`
+  - Request payload: `{ "profileId": string, "targetUrl"?: string | null, "providerKey"?: string | null }`
+  - Response data: `{ "queued": boolean, "visibilityState": "VisibleActive", "currentHolder": string | null }`
+  - *Quy tắc:* Cho phép người dùng chủ động mở đồng thời nhiều cửa sổ đăng nhập cho các profile độc lập (`queued` luôn là `false`). Bấm nhiều lần vào cùng một profile không mở trùng. Nếu vượt ngân sách `max_open_browsers` toàn hệ thống thì từ chối với lỗi tài nguyên rõ ràng.
 - **`browser.cancel_login`:**
   - Request payload: `{ "profileId": string }`
   - Response data: `{ "canceled": boolean }`
@@ -506,7 +507,7 @@ TiToAI phân định rạch ròi giữa việc hủy một yêu cầu RPC ngắn
     }
     ```
 
-#### I. Quản lý Mẫu & Phiên bản Prompt (`prompt.*`)
+#### I. Quản lý Mẫu Prompt (`prompt.*`)
 - **Tập hợp Mục đích Hợp lệ (Purpose):** `"Script" | "Image" | "VideoPrompt"`.
 - **`PromptTemplateDto`:**
   ```json
@@ -515,8 +516,6 @@ TiToAI phân định rạch ròi giữa việc hủy một yêu cầu RPC ngắn
     "purpose": "Script",
     "name": "Kịch bản Mặc định",
     "workspaceId": null,
-    "currentVersionId": "pv-9a8b7c6d-...",
-    "currentVersionNumber": 1,
     "templateText": "Viết kịch bản ngắn về chủ đề {topic} cho kênh {channel_name}...",
     "variableDefinitions": [
       {
@@ -537,26 +536,20 @@ TiToAI phân định rạch ròi giữa việc hủy một yêu cầu RPC ngắn
   - *Quy tắc:* Nếu có `workspaceId`, trả về template Global và template Override của riêng Workspace đó; tuyệt đối cấm trả về override của kênh khác.
 - **`prompt.get_template`:**
   - Request payload: `{ "purpose": "Script" | "Image" | "VideoPrompt", "workspaceId"?: string | null }`
-  - Response data: `{ "template": PromptTemplateDto }`
+  - Response data: `{ "template": PromptTemplateDto, "currentVersion": PromptContentDto | null }` (legacy JSON field name; value is the single current prompt, not a history entry).
   - *Resolution Precedence:* Ưu tiên trả về Workspace Override nếu tồn tại; nếu không, tự động fallback về Global Template.
-- **`prompt.list_versions`:**
-  - Request payload: `{ "templateId": string }`
-  - Response data: `{ "templateId": string, "versions": PromptVersionSummaryDto[] }`
-- **`prompt.create_version`:**
+- **`prompt.save_template`:**
   - Request payload:
     ```json
     {
-      "templateId": "p-1a2b3c4d-...",
+      "purpose": "Script",
+      "workspaceId": null,
       "templateText": "Nội dung template mới với {bien}...",
-      "variableDefinitions": [
-        { "name": "bien", "isRequired": true, "defaultValue": null, "description": "Mô tả biến" }
-      ],
-      "changeReason": "Tối ưu câu lệnh sinh kịch bản",
-      "expectedCurrentVersionId": "pv-9a8b7c6d-..."
+      "variableDefinitionsJson": "[{\"name\":\"bien\",\"isRequired\":true,\"description\":\"Mô tả biến\"}]"
     }
     ```
-  - Response data: `{ "template": PromptTemplateDto, "newVersion": PromptVersionSummaryDto }`
-  - *Quy tắc:* `VersionNumber` tăng đơn điệu ($1, 2, 3 \dots$), cập nhật `CurrentVersionId`. Không ghi đè các version cũ trong lịch sử. Hỗ trợ optimistic concurrency qua `expectedCurrentVersionId`.
+  - Response data: `{ "template": PromptTemplateDto, "prompt": PromptContentDto }`
+  - *Quy tắc:* Tạo hoặc cập nhật duy nhất một nội dung theo `(purpose, workspaceId)`. Không tạo lịch sử prompt.
 - **`prompt.preview`:**
   - Request payload:
     ```json
@@ -573,7 +566,6 @@ TiToAI phân định rạch ròi giữa việc hủy một yêu cầu RPC ngắn
     {
       "renderedText": "Viết kịch bản ngắn về chủ đề AI Automation...",
       "effectiveTemplateId": "p-1a2b3c4d-...",
-      "effectiveVersionId": "pv-9a8b7c6d-...",
       "isOverride": false,
       "validation": {
         "isValid": true,
@@ -584,10 +576,6 @@ TiToAI phân định rạch ròi giữa việc hủy một yêu cầu RPC ngắn
     }
     ```
   - *Quy tắc:* Render tất định (deterministic), không eval/script, escape `{{` $\rightarrow$ `{`, `}}` $\rightarrow$ `}`. Hỗ trợ tiếng Việt có dấu và emoji.
-- **`prompt.rollback_version`:**
-  - Request payload: `{ "templateId": string, "targetVersionId": string }`
-  - Response data: `{ "template": PromptTemplateDto, "activeVersion": PromptVersionSummaryDto }`
-  - *Quy tắc:* Cập nhật con trỏ `CurrentVersionId` về version cũ. Không thay đổi nội dung các bản ghi lịch sử.
 - **`prompt.delete_override`:**
   - Request payload: `{ "templateId": string, "workspaceId": string }`
   - Response data: `{ "deleted": boolean, "fallbackTemplate": PromptTemplateDto }`
@@ -1150,9 +1138,12 @@ Nếu lưu tệp thất bại (do mất ổ cứng hoặc hết dung lượng), 
 
 ---
 
-### 4.3. Quy tắc Đăng nhập Duy nhất (Global One-Visible-Login Rule)
-- Toàn bộ ứng dụng TiToAI được điều phối bởi một `SemaphoreSlim(1, 1)` toàn cục cho luồng hiển thị đăng nhập.
-- **Không bao giờ xuất hiện 2 cửa sổ đăng nhập cùng lúc trên desktop**. Nếu profile B cần đăng nhập trong khi profile A đang mở cửa sổ, yêu cầu B nhận trạng thái `VisibleWaiting` và được xếp hàng trong app.
+### 4.3. Quy tắc Mở Đăng nhập Đồng thời cho Nhiều Profile Độc lập (Concurrent Multi-Profile Login)
+- **Chỉ dẫn mới (thay thế quy tắc Global One-Visible-Login cũ):** Người dùng được phép chủ động mở đồng thời nhiều cửa sổ đăng nhập cho các profile độc lập khi bấm "Đăng nhập".
+- **Khóa theo từng profile (Single-Instance per Profile):** Mỗi `userDataDir` chỉ có đúng một tiến trình/owner nắm giữ file lock `.titoai_lock`. Bấm nhiều lần trên cùng một profile không mở trùng cửa sổ.
+- **Không tự bật hàng loạt:** Hệ thống tuyệt đối không tự động bật cửa sổ đăng nhập khi nhiều tài khoản hết phiên; cửa sổ hiển thị chỉ xuất hiện khi người dùng chủ động thao tác.
+- **Ngân sách tài nguyên `max_open_browsers`:** Giữ nguyên ngân sách tài nguyên tổng số trình duyệt mở đồng thời trên toàn app; nếu chạm ngưỡng ngân sách, báo lỗi tài nguyên rõ ràng, không dùng lại thông báo "chỉ một cửa sổ đăng nhập".
+- **Độc lập vòng đời:** Đóng hoặc hủy một profile không làm đóng hoặc ảnh hưởng tới trạng thái của các profile đang mở khác.
 
 ---
 
@@ -1170,11 +1161,10 @@ stateDiagram-v2
     state "Chuyển giao sang Đăng nhập" as HandoffState {
         Headless_Running --> Job_Quiescing: Gặp login_required / session_expired
         Job_Quiescing --> Headless_Closed: Quiescing hoàn tất & context.CloseAsync()
-        Headless_Closed --> Queue_Visible_Lock: Xếp hàng chờ Semaphore đăng nhập
     }
 
     state "Đăng nhập Thủ công" as LoginState {
-        Queue_Visible_Lock --> Headful_Active: Đạt Semaphore & mở Headless = false
+        Headless_Closed --> Headful_Active: Người dùng bấm Đăng nhập & mở Headless = false
         Headful_Active --> User_Typing: Người dùng tự nhập tài khoản / MFA / CAPTCHA
         User_Typing --> Validate_Identity: Người dùng bấm "Xác nhận" / Cookie Probe
         
@@ -1184,12 +1174,12 @@ stateDiagram-v2
         IdentityCheck --> Auth_Mismatch: Sai Account -> Cảnh báo trong app
         IdentityCheck --> Auth_Closed: Người dùng đóng cửa sổ -> awaiting_user
         
-        Auth_OK --> Headful_Closed: context.CloseAsync() & Giải phóng Semaphore
+        Auth_OK --> Headful_Closed: context.CloseAsync() & Giải phóng Profile Slot
     }
 
     Headful_Closed --> Headless_Running: Mở lại Headless = true & Reconcile Job
     Auth_Mismatch --> Headful_Active: Tiếp tục cho nhập lại
-    Auth_Closed --> Profile_Idle: Giải phóng Semaphore, giữ Job awaiting_user
+    Auth_Closed --> Profile_Idle: Giải phóng Profile Slot, giữ Job awaiting_user
 ```
 
 **Quy trình 4 bước Quiescing của Shared AI Profile:**
@@ -1360,3 +1350,60 @@ Bảng phân công chi tiết cho các task Gate G1 nhằm đảm bảo không c
    - **T18 (G3):** Sở hữu tab AI & Prompt (`AiProviderSettingsTab.tsx`).
 3. **Composition Root (DI):**
    Trong quá trình T04 và T05 chạy song song, T05 sử dụng handler giả lập (stub). Việc đăng ký `TiToAIDbContext` thật vào `App.xaml.cs` và `MainWindow.xaml.cs` do Integrator (T03) thực hiện trong bước tích hợp G1 (sau khi T04 hoàn thành), không để T05 ghi đè trong lúc chạy song song.
+
+---
+
+## 8. Hợp đồng Quy trình Sản xuất Video từ Ảnh Mẫu và Sản phẩm (Workflow RPC Contract)
+
+Căn cứ kỹ thuật: `docs/plans/PRODUCT_IMAGE_VIDEO_WORKFLOW_PLAN.md`.
+
+### 8.1. Các Lệnh RPC Bridge (`workflow.*`)
+Tất cả các lệnh thuộc allow-list của WebView2 Bridge, nhận và trả về Envelope chuẩn:
+- `workflow.get_config`: Lấy cấu hình quy trình cấp Project (`projectId`).
+- `workflow.save_config`: Lưu cấu hình cấp Project (chế độ, prompt mục tiêu, asset references, audio option).
+- `workflow.start`: Bắt đầu chu trình tạo video (tự động lập cảnh nếu chưa có cảnh, kiểm tra hợp lệ, khởi tạo trạng thái run).
+- `workflow.list_scenes`: Lấy danh sách chi tiết tiến độ quy trình theo cảnh của dự án.
+- `workflow.update_scene_input`: Cập nhật input/override cho từng cảnh, thực thi ma trận phụ thuộc §3.4 để đánh dấu stale/re-run.
+- `workflow.pause`: Tạm dừng tiến trình run của dự án.
+- `workflow.resume`: Tiếp tục tiến trình run của dự án.
+
+### 8.2. Ba Chế độ Bắt đầu (Workflow Modes)
+1. `ModelAndProduct`: Yêu cầu cả ảnh mẫu (`modelReference`) và ảnh sản phẩm (`productReference`). Tự động tạo ảnh nền tảng (`foundationImage`) và các biến thể cảnh trước khi sang prompt.
+2. `ReadyImage`: Yêu cầu ảnh đã hoàn thiện (`readyImage`). Đi thẳng tới bước viết prompt chuyển động, không phát sinh job tạo ảnh.
+3. `ProductOnly`: Yêu cầu ảnh sản phẩm (`productReference`), không bắt ảnh mẫu.
+
+### 8.3. Audio Tùy chọn (Optional Audio)
+- Mặc định: `None` (Không gửi audio). Scene đạt điều kiện sẵn sàng tạo video mà không bị chặn bởi audio.
+- Chọn file: `CustomAudio` với `AudioAssetId`. Hệ thống kiểm tra quyền sở hữu asset thuộc đúng Workspace.
+
+### 8.4. Ma trận Phụ thuộc & Đánh dấu Chạy lại (§3.4 Dependency Matrix)
+- Sửa prompt chuyển động: Chỉ làm lại video của cảnh đó; giữ nguyên ảnh.
+- Thay ảnh của cảnh: Làm lại prompt chuyển động và video của cảnh đó; không làm lại ảnh của các cảnh khác.
+- Thay mẫu/sản phẩm hoặc ảnh nền tảng: Làm lại ảnh dẫn xuất, prompt và video của các cảnh phụ thuộc; giữ cảnh có override độc lập.
+- Thay đổi thứ tự cảnh: Chỉ cập nhật sequence metadata, không kích hoạt AI chạy lại.
+
+### 8.5. Hợp đồng Lập Cảnh, Ảnh Nền tảng/Biến thể & Prompt từ Ảnh (Mốc 2 Contract)
+1. **Lập cảnh có mục đích (`AiScenePlanningResultDto`, `ScenePlanItemDto`):**
+   - AI nhận Goal Prompt mục tiêu, phong cách và tỷ lệ khung hình từ dự án.
+   - Trả về danh sách $K$ cảnh: sequenceOrder, name, purpose, targetDurationSeconds, imageStrategy (`ReuseFoundation` | `GenerateVariant` | `DirectInput`), motionPromptDraft.
+   - Tuyệt đối không dùng danh sách cảnh mẫu cứng cố định trong production. Nếu chưa có AI lập cảnh, dự án giữ nguyên số cảnh hiện có do người dùng tạo.
+2. **Ảnh nền tảng và biến thể (`ImageGenerationResultDto`):**
+   - Chế độ `ModelAndProduct`: Tạo 1 ảnh nền tảng (`FoundationImage`) từ ảnh mẫu và ảnh sản phẩm. Các cảnh tái sử dụng ảnh nền tảng hoặc yêu cầu tạo biến thể góc nhìn/bối cảnh (`SceneVariantImage`).
+   - Chế độ `ReadyImage` / `ProductOnly`: Gán trực tiếp ảnh đầu vào làm ảnh dùng cho video mà không phát sinh job tạo ảnh.
+3. **Prompt chuyển động từ ảnh (`MotionPromptGenerationResultDto`):**
+   - AI đọc ảnh được chọn (`selectedImageAssetId`), nhận diện trang phục/chất liệu/bối cảnh và viết prompt chuyển động tiếng Anh chuẩn cho video provider.
+   - Tách biệt hoàn toàn với kịch bản lời dẫn (Script).
+4. **Hành vi Audio tùy chọn:**
+   - Mặc định "Không gửi audio" (`None`).
+   - Lưu ý: "Không gửi audio" không đồng nghĩa video chắc chắn im lặng nếu provider tự sinh âm thanh nền (như tiếng nhạc hoặc âm thanh môi trường); ghi đúng hành vi capability của provider.
+
+### 8.6. Cơ chế Lưu trữ, Revision, Concurrency & Recovery trong SQLite AppSettings
+- **Cấu trúc lưu trữ:**
+  * Cấu hình dự án: `project.workflow.config.{projectId}` lưu JSON của `ProjectWorkflowConfigDto`.
+  * Chi tiết từng cảnh: `scene.workflow.{sceneId}` lưu JSON của `SceneWorkflowDetailDto`.
+  * Các trường cốt lõi của cảnh (`ImageAssetId`, `VideoAssetId`, `PromptText`, `TargetDurationSeconds`, v.v.) đồng bộ trực tiếp vào bảng `Scenes`.
+- **Đánh giá tính phù hợp:**
+  * *Atomicity & Durability:* Mọi thao tác lưu cấu hình chạy trong giao dịch SQLite WAL với foreign keys ON và busy timeout 5000ms.
+  * *Concurrency Control:* Sử dụng Optimistic Concurrency Control qua `ExpectedRevision` so khớp với `scene.UpdatedAtUtc`. Lệch revision ném `SceneConcurrencyConflictException`, bảo toàn 100% bản nháp của người dùng.
+  * *Recovery:* Sau crash hoặc restart, `GetWorkflowConfigAsync` và `ListSceneWorkflowDetailsAsync` đọc dữ liệu bền vững từ DB SQLite.
+  * *Kết luận:* Storage hiện tại trong `AppSettings` đáp ứng trọn vẹn yêu cầu kỹ thuật, không cần thay đổi schema hay viết lại.

@@ -13,7 +13,10 @@ public sealed record SettingsDto(
     string? ScriptProvider,
     string? VideoPromptProvider,
     string ThemePreference,
-    string EffectiveTheme
+    string EffectiveTheme,
+    long Revision = 1,
+    int MaxOpenBrowsers = 4,
+    int MaxConcurrentJobs = 8
 );
 
 public sealed record SettingsSaveRequest(
@@ -22,7 +25,11 @@ public sealed record SettingsSaveRequest(
     string VideosPath,
     string? ImageProvider = null,
     string? ScriptProvider = null,
-    string? VideoPromptProvider = null
+    string? VideoPromptProvider = null,
+    long? ExpectedRevision = null,
+    int? MaxOpenBrowsers = null,
+    int? MaxConcurrentJobs = null,
+    string? ClientRequestId = null
 );
 
 public sealed record BrowseFolderRequest(

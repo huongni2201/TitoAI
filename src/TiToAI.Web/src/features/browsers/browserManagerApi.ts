@@ -67,10 +67,17 @@ export const browserManagerApi = {
   /**
    * Yêu cầu mở cửa sổ đăng nhập thủ công cho một profile
    */
-  async requestLogin(profileId: string): Promise<BrowserRequestLoginResponseData> {
+  async requestLogin(
+    profileId: string,
+    options?: { providerKey?: string; targetUrl?: string },
+  ): Promise<BrowserRequestLoginResponseData> {
     return await bridgeClient.invoke<BrowserRequestLoginResponseData>(
       "browser.request_login",
-      { profileId },
+      {
+        profileId,
+        providerKey: options?.providerKey ?? null,
+        targetUrl: options?.targetUrl ?? null,
+      },
     );
   },
 

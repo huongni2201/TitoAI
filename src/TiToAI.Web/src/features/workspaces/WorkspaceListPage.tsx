@@ -3,13 +3,44 @@ import { workspaceApi, type WorkspaceSummaryDto } from "./workspaceApi";
 import { WorkspaceForm } from "./WorkspaceForm";
 import { bridgeClient } from "../../services/bridgeClient";
 import type { ErrorDto } from "../../contracts/bridge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
-  IconWorkspace,
-  IconSearch,
-  IconPlus,
-  IconRefresh,
-  IconInfo,
-} from "../../components/Icons";
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogCancel,
+  AlertDialogAction,
+} from "@/components/ui/alert-dialog";
+import {
+  FolderKanban,
+  Search,
+  Plus,
+  RefreshCw,
+  MoreVertical,
+  Edit,
+  Trash2,
+  Play,
+  Pause,
+  AlertTriangle,
+  Info,
+  ChevronRight,
+  Loader2,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
 
 export interface WorkspaceListPageProps {
   selectedWorkspaceId?: string | null;
@@ -72,14 +103,10 @@ export function WorkspaceListPage({
   const [formMode, setFormMode] = useState<"create" | "edit">("create");
   const [editingWorkspace, setEditingWorkspace] = useState<WorkspaceSummaryDto | null>(null);
 
-
   // Modal xác nhận xóa
   const [deletingWorkspace, setDeletingWorkspace] = useState<WorkspaceSummaryDto | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-
-  // Menu popover dropdown cho từng card
-  const [activeMenuWorkspaceId, setActiveMenuWorkspaceId] = useState<string | null>(null);
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -129,18 +156,6 @@ export function WorkspaceListPage({
     };
   }, [fetchWorkspaces]);
 
-  // Đóng popover khi click ra ngoài
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest(".card-action-menu-wrapper")) {
-        setActiveMenuWorkspaceId(null);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
-
   // Lọc và sắp xếp danh sách
   const filteredWorkspaces = useMemo(() => {
     return workspaces
@@ -180,7 +195,6 @@ export function WorkspaceListPage({
 
   // Thao tác Tạm dừng / Tiếp tục
   const handleToggleStatus = async (ws: WorkspaceSummaryDto) => {
-    setActiveMenuWorkspaceId(null);
     const newStatus = ws.status === "Active" ? "Paused" : "Active";
     try {
       if (newStatus === "Paused") {
@@ -219,7 +233,6 @@ export function WorkspaceListPage({
 
   // Mở modal chỉnh sửa
   const handleOpenEditForm = (ws: WorkspaceSummaryDto) => {
-    setActiveMenuWorkspaceId(null);
     setEditingWorkspace(ws);
     setFormMode("edit");
     setIsFormOpen(true);
@@ -252,46 +265,35 @@ export function WorkspaceListPage({
   };
 
   return (
-    <div className="view-workspaces" style={{ paddingBottom: "2rem" }}>
+    <div className="space-y-6 pb-8">
       {/* Tiêu đề trang */}
-      <div className="page-header" style={{ marginBottom: "1.25rem" }}>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h2 className="page-title" style={{ fontSize: "1.5rem", fontWeight: 700, margin: 0 }}>
+          <h2 className="text-2xl font-bold tracking-tight text-foreground">
             Danh sách Workspace
           </h2>
-          <p className="page-desc" style={{ color: "var(--text-secondary)", marginTop: "0.25rem" }}>
+          <p className="text-sm text-muted-foreground mt-1">
             Quản lý các kênh TikTok của bạn. Mỗi workspace là một tài khoản TikTok độc lập.
           </p>
         </div>
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={handleOpenCreateForm}
-          style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
-        >
-          <IconPlus size={16} /> Tạo workspace
-        </button>
+        <Button onClick={handleOpenCreateForm} className="shrink-0 gap-2">
+          <Plus className="h-4 w-4" /> Tạo workspace
+        </Button>
       </div>
 
       {/* Thanh công cụ: Bộ lọc, Tìm kiếm, Sắp xếp */}
-      <div
-        className="filter-bar"
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          flexWrap: "wrap",
-          gap: "1rem",
-          marginBottom: "1.5rem",
-        }}
-      >
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         {/* Filter Tabs */}
-        <div className="tab-group" role="tablist" aria-label="Bộ lọc trạng thái">
+        <div className="inline-flex items-center rounded-lg bg-muted p-1 text-muted-foreground" role="tablist" aria-label="Bộ lọc trạng thái">
           <button
             type="button"
             role="tab"
             aria-selected={statusFilter === "all"}
-            className={`filter-tab ${statusFilter === "all" ? "active" : ""}`}
+            className={`inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-medium transition-all cursor-pointer ${
+              statusFilter === "all"
+                ? "bg-background text-foreground shadow-xs font-semibold"
+                : "hover:text-foreground"
+            }`}
             onClick={() => setStatusFilter("all")}
           >
             Tất cả ({workspaces.length})
@@ -300,7 +302,11 @@ export function WorkspaceListPage({
             type="button"
             role="tab"
             aria-selected={statusFilter === "Active"}
-            className={`filter-tab ${statusFilter === "Active" ? "active" : ""}`}
+            className={`inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-medium transition-all cursor-pointer ${
+              statusFilter === "Active"
+                ? "bg-background text-foreground shadow-xs font-semibold"
+                : "hover:text-foreground"
+            }`}
             onClick={() => setStatusFilter("Active")}
           >
             Đang hoạt động ({activeCount})
@@ -309,7 +315,11 @@ export function WorkspaceListPage({
             type="button"
             role="tab"
             aria-selected={statusFilter === "Paused"}
-            className={`filter-tab ${statusFilter === "Paused" ? "active" : ""}`}
+            className={`inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-medium transition-all cursor-pointer ${
+              statusFilter === "Paused"
+                ? "bg-background text-foreground shadow-xs font-semibold"
+                : "hover:text-foreground"
+            }`}
             onClick={() => setStatusFilter("Paused")}
           >
             Tạm dừng ({pausedCount})
@@ -317,31 +327,20 @@ export function WorkspaceListPage({
         </div>
 
         {/* Search & Sort Controls */}
-        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
-          <div style={{ position: "relative", minWidth: 240 }}>
-            <IconSearch
-              size={16}
-              style={{
-                position: "absolute",
-                left: 10,
-                top: "50%",
-                transform: "translateY(-50%)",
-                color: "var(--text-muted)",
-              }}
-            />
-            <input
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <div className="relative min-w-[240px] flex-1 sm:flex-initial">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
               type="text"
-              className="form-control"
               placeholder="Tìm workspace theo tên, handle…"
-              style={{ paddingLeft: "2rem" }}
+              className="pl-9"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
           </div>
 
           <select
-            className="form-control"
-            style={{ width: "auto" }}
+            className="flex h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring cursor-pointer"
             value={sortOption}
             onChange={(e) => setSortOption(e.target.value as SortOption)}
           >
@@ -350,301 +349,172 @@ export function WorkspaceListPage({
             <option value="name_asc">Tên (A-Z)</option>
           </select>
 
-          <button
+          <Button
             type="button"
-            className="btn btn-secondary btn-icon"
+            variant="outline"
+            size="icon"
             onClick={fetchWorkspaces}
             title="Làm mới danh sách"
             disabled={isLoading}
           >
-            <IconRefresh size={16} className={isLoading ? "spin" : ""} />
-          </button>
+            <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
+          </Button>
         </div>
       </div>
 
       {/* Nội dung danh sách */}
       {isLoading ? (
-        <div className="loading-card">
-          <IconRefresh size={28} className="spin" />
-          <p>Đang tải danh sách Workspace từ Host…</p>
-        </div>
+        <Card className="flex flex-col items-center justify-center p-12 text-center">
+          <Loader2 className="h-8 w-8 animate-spin text-primary mb-3" />
+          <p className="text-sm text-muted-foreground">Đang tải danh sách Workspace từ Host…</p>
+        </Card>
       ) : errorMessage ? (
-        <div className="empty-card error-card">
-          <h3>Không thể tải danh sách Workspace</h3>
-          <p>{errorMessage}</p>
-          <button type="button" className="btn btn-secondary" onClick={fetchWorkspaces}>
-            <IconRefresh size={16} /> Thử lại
-          </button>
-        </div>
+        <Alert variant="destructive" className="flex flex-col items-center p-6 text-center">
+          <AlertTriangle className="h-6 w-6 mb-2" />
+          <h3 className="text-base font-semibold">Không thể tải danh sách Workspace</h3>
+          <AlertDescription className="mt-1 text-sm">{errorMessage}</AlertDescription>
+          <Button variant="outline" size="sm" className="mt-4 gap-2" onClick={fetchWorkspaces}>
+            <RefreshCw className="h-4 w-4" /> Thử lại
+          </Button>
+        </Alert>
       ) : workspaces.length === 0 ? (
-        <div className="empty-card">
-          <div className="empty-icon">
-            <IconWorkspace size={44} />
+        <Card className="flex flex-col items-center justify-center p-12 text-center border-dashed">
+          <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-primary mb-4">
+            <FolderKanban className="h-7 w-7" />
           </div>
-          <h3>Chưa có Workspace nào</h3>
-          <p>
+          <h3 className="text-lg font-semibold text-foreground">Chưa có Workspace nào</h3>
+          <p className="text-sm text-muted-foreground mt-1 max-w-md">
             Bạn chưa tạo kênh TikTok nào. Hãy bắt đầu bằng cách tạo Workspace đầu tiên để
             quản lý kịch bản, prompt và render video.
           </p>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={handleOpenCreateForm}
-            style={{ marginTop: "1rem" }}
-          >
-            <IconPlus size={16} /> Tạo Workspace Đầu Tiên
-          </button>
-        </div>
+          <Button onClick={handleOpenCreateForm} className="mt-5 gap-2">
+            <Plus className="h-4 w-4" /> Tạo Workspace Đầu Tiên
+          </Button>
+        </Card>
       ) : filteredWorkspaces.length === 0 ? (
-        <div className="empty-card">
-          <h3>Không tìm thấy kết quả phù hợp</h3>
-          <p>Không có workspace nào khớp với bộ lọc hoặc từ khóa tìm kiếm của bạn.</p>
-          <button
-            type="button"
-            className="btn btn-secondary"
+        <Card className="flex flex-col items-center justify-center p-12 text-center border-dashed">
+          <h3 className="text-lg font-semibold text-foreground">Không tìm thấy kết quả phù hợp</h3>
+          <p className="text-sm text-muted-foreground mt-1">
+            Không có workspace nào khớp với bộ lọc hoặc từ khóa tìm kiếm của bạn.
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            className="mt-4"
             onClick={() => {
               setStatusFilter("all");
               setSearchQuery("");
             }}
           >
             Xóa bộ lọc tìm kiếm
-          </button>
-        </div>
+          </Button>
+        </Card>
       ) : (
-        /* Grid các card Workspace (3 cột / 2 cột / 1 cột co giãn) */
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))",
-            gap: "1.25rem",
-          }}
-        >
+        /* Grid các card Workspace (co giãn linh hoạt 1-5 cột theo màn hình) */
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-5">
           {filteredWorkspaces.map((ws) => {
             const isSelected = selectedWorkspaceId === ws.workspaceId;
             const isActive = ws.status === "Active";
-            const isMenuOpen = activeMenuWorkspaceId === ws.workspaceId;
             const avatarColor = getAvatarBgColor(ws.name);
             const initials = getInitials(ws.name);
 
             return (
-              <div
+              <Card
                 key={ws.workspaceId}
-                className="workspace-card"
-                style={{
-                  backgroundColor: "var(--surface-card)",
-                  border: isSelected
-                    ? "2px solid var(--accent)"
-                    : "1px solid var(--border-subtle)",
-                  borderRadius: "var(--radius-lg)",
-                  padding: "1.25rem",
-                  display: "flex",
-                  flexDirection: "column",
-                  justifyContent: "space-between",
-                  boxShadow: "0 2px 8px rgba(0, 0, 0, 0.08)",
-                  position: "relative",
-                  transition: "transform 150ms ease, border-color 150ms ease",
-                }}
+                className={cn(
+                  "flex flex-col justify-between transition-colors shadow-xs hover:border-primary/50",
+                  isSelected && "border-primary ring-2 ring-primary/20"
+                )}
               >
                 {/* Header Card: Avatar, Thông tin, Menu 3 chấm */}
-                <div>
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "flex-start",
-                      justifyContent: "space-between",
-                      gap: "0.75rem",
-                      marginBottom: "0.75rem",
-                    }}
-                  >
-                    <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
+                <CardHeader className="p-5 pb-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
                       <div
-                        style={{
-                          width: 44,
-                          height: 44,
-                          borderRadius: "50%",
-                          backgroundColor: avatarColor,
-                          color: "#ffffff",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          fontWeight: 700,
-                          fontSize: "1rem",
-                          flexShrink: 0,
-                          boxShadow: "0 2px 4px rgba(0,0,0,0.15)",
-                        }}
+                        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-base font-bold text-white shadow-xs"
+                        style={{ backgroundColor: avatarColor }}
                       >
                         {initials}
                       </div>
-                      <div style={{ overflow: "hidden" }}>
+                      <div className="min-w-0">
                         <h4
-                          style={{
-                            margin: 0,
-                            fontSize: "1.05rem",
-                            fontWeight: 700,
-                            color: "var(--text-primary)",
-                            whiteSpace: "nowrap",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                          }}
+                          className="text-base font-bold text-foreground truncate"
                           title={ws.name}
                         >
                           {ws.name}
                         </h4>
-                        <div
-                          style={{
-                            fontSize: "0.8rem",
-                            color: "var(--text-muted)",
-                            whiteSpace: "nowrap",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                          }}
-                        >
+                        <p className="text-xs text-muted-foreground truncate">
                           {ws.channelHandle}
-                        </div>
+                        </p>
                       </div>
                     </div>
 
-                    {/* Nút hành động 3 chấm và popover */}
-                    <div className="card-action-menu-wrapper" style={{ position: "relative" }}>
-                      <button
-                        type="button"
-                        className="btn-icon"
-                        style={{ width: 28, height: 28 }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setActiveMenuWorkspaceId(isMenuOpen ? null : ws.workspaceId);
-                        }}
-                        aria-label="Tùy chọn thao tác"
-                      >
-                        ···
-                      </button>
-
-                      {isMenuOpen && (
-                        <div
-                          className="action-dropdown"
-                          style={{
-                            position: "absolute",
-                            right: 0,
-                            top: 32,
-                            width: 170,
-                            backgroundColor: "var(--surface-card)",
-                            border: "1px solid var(--border)",
-                            borderRadius: "var(--radius-md)",
-                            boxShadow: "var(--shadow-dropdown)",
-                            zIndex: 20,
-                            display: "flex",
-                            flexDirection: "column",
-                            padding: "0.25rem 0",
+                    {/* Nút hành động 3 chấm và dropdown */}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                          aria-label="Tùy chọn thao tác"
+                        >
+                          <MoreVertical className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-48">
+                        <DropdownMenuItem onClick={() => handleOpenEditForm(ws)}>
+                          <Edit className="h-4 w-4 mr-2" /> Sửa thông tin
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => handleToggleStatus(ws)}>
+                          {isActive ? (
+                            <>
+                              <Pause className="h-4 w-4 mr-2" /> Tạm dừng kênh
+                            </>
+                          ) : (
+                            <>
+                              <Play className="h-4 w-4 mr-2" /> Kích hoạt lại
+                            </>
+                          )}
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          className="text-destructive focus:bg-destructive/10 focus:text-destructive"
+                          onClick={() => {
+                            setDeletingWorkspace(ws);
+                            setDeleteError(null);
                           }}
                         >
-                          <button
-                            type="button"
-                            className="dropdown-item"
-                            style={{
-                              background: "transparent",
-                              border: "none",
-                              textAlign: "left",
-                              padding: "0.5rem 0.85rem",
-                              fontSize: "0.82rem",
-                              color: "var(--text-primary)",
-                              cursor: "pointer",
-                            }}
-                            onClick={() => handleOpenEditForm(ws)}
-                          >
-                            ✏️ Sửa thông tin
-                          </button>
-                          <button
-                            type="button"
-                            className="dropdown-item"
-                            style={{
-                              background: "transparent",
-                              border: "none",
-                              textAlign: "left",
-                              padding: "0.5rem 0.85rem",
-                              fontSize: "0.82rem",
-                              color: "var(--text-primary)",
-                              cursor: "pointer",
-                            }}
-                            onClick={() => handleToggleStatus(ws)}
-                          >
-                            {isActive ? "⏸️ Tạm dừng kênh" : "▶️ Kích hoạt lại"}
-                          </button>
-                          <hr
-                            style={{
-                              border: "none",
-                              borderTop: "1px solid var(--border-subtle)",
-                              margin: "0.25rem 0",
-                            }}
-                          />
-                          <button
-                            type="button"
-                            className="dropdown-item"
-                            style={{
-                              background: "transparent",
-                              border: "none",
-                              textAlign: "left",
-                              padding: "0.5rem 0.85rem",
-                              fontSize: "0.82rem",
-                              color: "var(--status-error)",
-                              cursor: "pointer",
-                            }}
-                            onClick={() => {
-                              setActiveMenuWorkspaceId(null);
-                              setDeletingWorkspace(ws);
-                              setDeleteError(null);
-                            }}
-                          >
-                            🗑️ Xóa kênh
-                          </button>
-                        </div>
-                      )}
-                    </div>
+                          <Trash2 className="h-4 w-4 mr-2" /> Xóa kênh
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
+                </CardHeader>
 
-                  {/* Chủ đề / Niche & Trạng thái */}
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      marginBottom: "0.75rem",
-                    }}
-                  >
-                    <span
-                      style={{
-                        fontSize: "0.8rem",
-                        color: "var(--text-secondary)",
-                        backgroundColor: "var(--surface-card-subtle)",
-                        padding: "0.2rem 0.5rem",
-                        borderRadius: "var(--radius-sm)",
-                      }}
-                    >
+                {/* Card Content: Topic & Status */}
+                <CardContent className="p-5 pt-0 pb-4">
+                  <div className="flex items-center justify-between gap-2 pt-2">
+                    <span className="inline-flex items-center rounded-full bg-muted/60 px-2.5 py-0.5 text-xs text-muted-foreground border border-border/50 truncate max-w-[180px]">
                       {ws.topic || "Chưa đặt chủ đề"}
                     </span>
 
-                    <span
-                      className={`badge ${isActive ? "badge-success" : "badge-neutral"}`}
-                      style={{ display: "flex", alignItems: "center", gap: "0.3rem" }}
-                    >
-                      <span>●</span> {isActive ? "Đang hoạt động" : "Tạm dừng"}
-                    </span>
+                    <Badge variant={isActive ? "success" : "secondary"}>
+                      <span className="mr-1 text-[8px]">●</span>
+                      {isActive ? "Đang hoạt động" : "Tạm dừng"}
+                    </Badge>
                   </div>
-                </div>
+                </CardContent>
 
-                {/* Phần liên kết tài khoản và Footer */}
-                <div style={{ marginTop: "0.75rem", borderTop: "1px solid var(--border-subtle)", paddingTop: "0.75rem" }}>
-
-                  {/* Nút hành động chính: Mở workspace */}
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    style={{ width: "100%", justifyContent: "center" }}
+                {/* Card Footer: Nút mở Workspace */}
+                <CardFooter className="p-5 pt-3 border-t border-border">
+                  <Button
+                    className="w-full justify-center gap-1.5"
                     onClick={() => handleSelectWorkspace(ws)}
                   >
-                    Mở workspace
-                  </button>
-                </div>
-              </div>
+                    Mở Workspace <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </CardFooter>
+              </Card>
             );
           })}
         </div>
@@ -665,89 +535,62 @@ export function WorkspaceListPage({
       />
 
       {/* Modal Xác Nhận Xóa Workspace */}
-      {deletingWorkspace && (
-        <div
-          className="modal-backdrop"
-          role="presentation"
-          onClick={(e) => {
-            if (e.target === e.currentTarget && !isDeleting) {
-              setDeletingWorkspace(null);
-            }
-          }}
-        >
-          <div
-            className="modal-container"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="delete-dialog-title"
-            style={{ maxWidth: 460 }}
-          >
-            <div className="modal-header">
-              <h3 id="delete-dialog-title" style={{ margin: 0, color: "var(--status-error)" }}>
-                Xác nhận xóa Workspace
-              </h3>
-            </div>
-            <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-              {deleteError && (
-                <div
-                  className="notice-box"
-                  style={{
-                    backgroundColor: "rgba(239, 68, 68, 0.12)",
-                    border: "1px solid var(--status-error)",
-                    color: "var(--status-error)",
-                  }}
-                  role="alert"
-                >
-                  <span>⚠️</span>
-                  <div>{deleteError}</div>
-                </div>
-              )}
-              <p style={{ margin: 0 }}>
-                Bạn có chắc chắn muốn xóa kênh <strong>{deletingWorkspace.name}</strong> (
-                {deletingWorkspace.channelHandle})?
-              </p>
-              <div
-                className="notice-box info"
-                style={{
-                  backgroundColor: "rgba(239, 68, 68, 0.08)",
-                  border: "1px solid var(--border)",
-                  color: "var(--text-secondary)",
-                }}
-              >
-                <IconInfo size={16} />
-                <div>
-                  Hành động này sẽ xóa các dự án, cảnh và tệp cục bộ liên quan của Workspace. Không thể hoàn tác.
-                </div>
-              </div>
-            </div>
-            <div className="modal-footer" style={{ justifyContent: "flex-end", gap: "0.5rem" }}>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => setDeletingWorkspace(null)}
-                disabled={isDeleting}
-              >
-                Hủy
-              </button>
-              <button
-                type="button"
-                className="btn btn-primary"
-                style={{ backgroundColor: "var(--status-error)" }}
-                onClick={handleConfirmDelete}
-                disabled={isDeleting}
-              >
-                {isDeleting ? (
-                  <>
-                    <IconRefresh size={16} className="spin" /> Đang xóa…
-                  </>
-                ) : (
-                  "Xác nhận xóa"
+      <AlertDialog
+        open={!!deletingWorkspace}
+        onOpenChange={(open) => {
+          if (!open && !isDeleting) {
+            setDeletingWorkspace(null);
+            setDeleteError(null);
+          }
+        }}
+      >
+        <AlertDialogContent className="sm:max-w-[460px]">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-lg font-bold text-destructive">
+              Xác nhận xóa Workspace
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-3 pt-2 text-sm text-foreground">
+                {deleteError && (
+                  <Alert variant="destructive">
+                    <AlertTriangle className="h-4 w-4" />
+                    <AlertDescription>{deleteError}</AlertDescription>
+                  </Alert>
                 )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+                <p>
+                  Bạn có chắc chắn muốn xóa kênh <strong>{deletingWorkspace?.name}</strong> (
+                  {deletingWorkspace?.channelHandle})?
+                </p>
+                <Alert variant="warning">
+                  <Info className="h-4 w-4" />
+                  <AlertDescription className="text-xs">
+                    Hành động này sẽ xóa các dự án, cảnh và tệp cục bộ liên quan của Workspace. Không thể hoàn tác.
+                  </AlertDescription>
+                </Alert>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting}>Hủy</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={(e) => {
+                e.preventDefault();
+                handleConfirmDelete();
+              }}
+              disabled={isDeleting}
+            >
+              {isDeleting ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> Đang xóa…
+                </>
+              ) : (
+                "Xác nhận xóa"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

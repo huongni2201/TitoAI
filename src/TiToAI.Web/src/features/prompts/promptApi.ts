@@ -83,7 +83,7 @@ export interface PromptCreateVersionRequest {
 
 export interface PromptCreateVersionResponseData {
   template: PromptTemplateDto;
-  version: PromptVersionDto;
+  prompt: PromptVersionDto;
 }
 
 export interface PromptPreviewRequest {
@@ -194,8 +194,8 @@ export function extractTemplateVariables(templateText: string | null | undefined
       }
 
       const varName = templateText.substring(i + 1, closeIndex).trim();
-      // T10 quy định tên biến hợp lệ: ^[a-zA-Z0-9_]+$
-      if (/^[a-zA-Z0-9_]+$/.test(varName)) {
+      // Cho phép chữ Unicode để hỗ trợ tên biến tiếng Việt.
+      if (/^[\p{L}\p{M}\p{N}_]+$/u.test(varName)) {
         if (!seen.has(varName)) {
           seen.add(varName);
           detected.push(varName);
@@ -288,7 +288,7 @@ export const promptApi = {
   },
 
   /**
-   * Tạo một phiên bản mới cho template (bất biến và đơn điệu)
+   * Lưu nội dung hiện hành của template.
    */
   async createVersion(
     request: PromptCreateVersionRequest,
@@ -296,7 +296,7 @@ export const promptApi = {
     signal?: AbortSignal
   ): Promise<PromptCreateVersionResponseData> {
     return await transport.invoke<PromptCreateVersionResponseData, PromptCreateVersionRequest>(
-      "prompt.create_version",
+      "prompt.save_template",
       request,
       { workspaceId: request.workspaceId ?? null, signal }
     );

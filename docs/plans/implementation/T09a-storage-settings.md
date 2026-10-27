@@ -1,5 +1,7 @@
 # Cài đặt ba thư mục lưu trữ và lịch sử root
 
+> **Delta hiện hành:** [plan queue/Settings 1.2](../QUEUE_EXECUTION_SETTINGS_PLAN.md) thay popup Settings, nhóm account shared/private, connect tại Workspace và round-robin Workspace. Dùng [TASKS](../../agents/TASKS.md) cho trạng thái/gate; Baseline/checkbox dưới không là evidence đã chạy.
+
 - Task gốc: **T09 (Lưu trữ)** · Ưu tiên: **P0 / G2**.
 - Điều kiện mở: T08 DONE.
 - Baseline 2026-10-26: AppSetting và Asset.StorageRootId đã có; popup mới là placeholder.
@@ -12,7 +14,7 @@ Chọn độc lập root tài liệu/ảnh/video, lưu bền vững và restart 
 ## File và dữ liệu
 
 - Tạo đề xuất: `src/TiToAI.Infrastructure/Storage/{StorageRootRegistry.cs,StoragePathGuard.cs}`, `src/TiToAI.Infrastructure/Settings/SettingsStore.cs`, `src/TiToAI.Desktop/Bridge/Handlers/SettingsHandlers.cs`.
-- UI mới: `src/TiToAI.Web/src/features/settings/StorageSettingsPanel.tsx`; sửa SettingsModal.tsx qua UI owner.
+- UI mới: `src/TiToAI.Web/src/features/settings/StorageSettingsPanel.tsx`; sửa SettingsPage.tsx (đích Q2, kiểm tra file hiện có trước tạo) qua UI owner.
 - Dùng app_settings keys tại contracts §5; mapping absolute path chỉ host quản lý, SettingsDto được phép hiển thị ba selected paths, không trả profile/secrets.
 - Commands settings.get/save/browse_folder/validate_roots. SettingsStore dùng chung với T18b/T27a, một handler save cho toàn draft.
 

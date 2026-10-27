@@ -1,0 +1,280 @@
+using System.Text.Json;
+using TiToAI.Application.Content;
+using TiToAI.Application.Workspaces;
+using TiToAI.Contracts.Bridge;
+using TiToAI.Contracts.Content;
+
+namespace TiToAI.Desktop.Bridge.Handlers;
+
+/// <summary>
+/// Bridge Handlers điều phối quy trình sản xuất video từ ảnh (workflow.*) theo PRODUCT_IMAGE_VIDEO_WORKFLOW_PLAN.
+/// </summary>
+public sealed class VideoWorkflowHandlers
+{
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
+    private readonly ProjectWorkflowService _workflowService;
+
+    public VideoWorkflowHandlers(ProjectWorkflowService workflowService)
+    {
+        _workflowService = workflowService ?? throw new ArgumentNullException(nameof(workflowService));
+    }
+
+    /// <summary>
+    /// Đăng ký toàn bộ danh mục lệnh workflow.* vào BridgeDispatcher và mở Allow-list.
+    /// </summary>
+    public void Register(IBridgeDispatcher dispatcher)
+    {
+        ArgumentNullException.ThrowIfNull(dispatcher);
+
+        dispatcher.AllowCommand("workflow.get_config");
+        dispatcher.AllowCommand("workflow.save_config");
+        dispatcher.AllowCommand("workflow.start");
+        dispatcher.AllowCommand("workflow.list_scenes");
+        dispatcher.AllowCommand("workflow.update_scene_input");
+        dispatcher.AllowCommand("workflow.pause");
+        dispatcher.AllowCommand("workflow.resume");
+        dispatcher.AllowCommand("workflow.preview_ai_prompt");
+
+        dispatcher.RegisterHandler("workflow.get_config", HandleGetConfigAsync);
+        dispatcher.RegisterHandler("workflow.save_config", HandleSaveConfigAsync);
+        dispatcher.RegisterHandler("workflow.start", HandleStartWorkflowAsync);
+        dispatcher.RegisterHandler("workflow.list_scenes", HandleListScenesAsync);
+        dispatcher.RegisterHandler("workflow.update_scene_input", HandleUpdateSceneInputAsync);
+        dispatcher.RegisterHandler("workflow.pause", HandlePauseWorkflowAsync);
+        dispatcher.RegisterHandler("workflow.resume", HandleResumeWorkflowAsync);
+        dispatcher.RegisterHandler("workflow.preview_ai_prompt", HandlePreviewAiPromptAsync);
+    }
+
+    public async Task<ResponseEnvelope> HandleGetConfigAsync(RequestEnvelope request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        try
+        {
+            var payload = ParsePayload<GetProjectWorkflowConfigRequest>(request);
+            if (payload == null || string.IsNullOrWhiteSpace(payload.WorkspaceId) || string.IsNullOrWhiteSpace(payload.ProjectId))
+            {
+                return ResponseEnvelopeHelper.CreateError(
+                    request.Id,
+                    "INVALID_ARGUMENT",
+                    "Thiếu tham số bắt buộc 'workspaceId' hoặc 'projectId'.",
+                    retryable: false);
+            }
+
+            var config = await _workflowService.GetWorkflowConfigAsync(payload.WorkspaceId, payload.ProjectId, cancellationToken);
+            return ResponseEnvelopeHelper.CreateSuccess(request.Id, config);
+        }
+        catch (Exception ex)
+        {
+            return MapExceptionToError(request.Id, ex);
+        }
+    }
+
+    public async Task<ResponseEnvelope> HandleSaveConfigAsync(RequestEnvelope request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        try
+        {
+            var payload = ParsePayload<SaveProjectWorkflowConfigRequest>(request);
+            if (payload == null || string.IsNullOrWhiteSpace(payload.WorkspaceId) || string.IsNullOrWhiteSpace(payload.ProjectId))
+            {
+                return ResponseEnvelopeHelper.CreateError(
+                    request.Id,
+                    "INVALID_ARGUMENT",
+                    "Thiếu tham số bắt buộc 'workspaceId' hoặc 'projectId'.",
+                    retryable: false);
+            }
+
+            var saved = await _workflowService.SaveWorkflowConfigAsync(payload, cancellationToken);
+            return ResponseEnvelopeHelper.CreateSuccess(request.Id, saved);
+        }
+        catch (Exception ex)
+        {
+            return MapExceptionToError(request.Id, ex);
+        }
+    }
+
+    public async Task<ResponseEnvelope> HandleStartWorkflowAsync(RequestEnvelope request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        try
+        {
+            var payload = ParsePayload<StartProjectWorkflowRequest>(request);
+            if (payload == null || string.IsNullOrWhiteSpace(payload.WorkspaceId) || string.IsNullOrWhiteSpace(payload.ProjectId))
+            {
+                return ResponseEnvelopeHelper.CreateError(
+                    request.Id,
+                    "INVALID_ARGUMENT",
+                    "Thiếu tham số bắt buộc 'workspaceId' hoặc 'projectId'.",
+                    retryable: false);
+            }
+
+            var result = await _workflowService.StartWorkflowAsync(payload, cancellationToken);
+            return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
+        }
+        catch (Exception ex)
+        {
+            return MapExceptionToError(request.Id, ex);
+        }
+    }
+
+    public async Task<ResponseEnvelope> HandleListScenesAsync(RequestEnvelope request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        try
+        {
+            var payload = ParsePayload<GetProjectWorkflowConfigRequest>(request);
+            if (payload == null || string.IsNullOrWhiteSpace(payload.WorkspaceId) || string.IsNullOrWhiteSpace(payload.ProjectId))
+            {
+                return ResponseEnvelopeHelper.CreateError(
+                    request.Id,
+                    "INVALID_ARGUMENT",
+                    "Thiếu tham số bắt buộc 'workspaceId' hoặc 'projectId'.",
+                    retryable: false);
+            }
+
+            var scenes = await _workflowService.ListSceneWorkflowDetailsAsync(payload.WorkspaceId, payload.ProjectId, cancellationToken);
+            return ResponseEnvelopeHelper.CreateSuccess(request.Id, new { scenes });
+        }
+        catch (Exception ex)
+        {
+            return MapExceptionToError(request.Id, ex);
+        }
+    }
+
+    public async Task<ResponseEnvelope> HandleUpdateSceneInputAsync(RequestEnvelope request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        try
+        {
+            var payload = ParsePayload<UpdateSceneWorkflowInputRequest>(request);
+            if (payload == null || string.IsNullOrWhiteSpace(payload.WorkspaceId) || string.IsNullOrWhiteSpace(payload.ProjectId) || string.IsNullOrWhiteSpace(payload.SceneId))
+            {
+                return ResponseEnvelopeHelper.CreateError(
+                    request.Id,
+                    "INVALID_ARGUMENT",
+                    "Thiếu tham số bắt buộc 'workspaceId', 'projectId' hoặc 'sceneId'.",
+                    retryable: false);
+            }
+
+            var updated = await _workflowService.UpdateSceneWorkflowInputAsync(payload, cancellationToken);
+            return ResponseEnvelopeHelper.CreateSuccess(request.Id, updated);
+        }
+        catch (Exception ex)
+        {
+            return MapExceptionToError(request.Id, ex);
+        }
+    }
+
+    public async Task<ResponseEnvelope> HandlePauseWorkflowAsync(RequestEnvelope request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        try
+        {
+            var payload = ParsePayload<GetProjectWorkflowConfigRequest>(request);
+            if (payload == null || string.IsNullOrWhiteSpace(payload.WorkspaceId) || string.IsNullOrWhiteSpace(payload.ProjectId))
+            {
+                return ResponseEnvelopeHelper.CreateError(
+                    request.Id,
+                    "INVALID_ARGUMENT",
+                    "Thiếu tham số bắt buộc 'workspaceId' hoặc 'projectId'.",
+                    retryable: false);
+            }
+
+            var result = await _workflowService.PauseWorkflowAsync(payload.WorkspaceId, payload.ProjectId, cancellationToken);
+            return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
+        }
+        catch (Exception ex)
+        {
+            return MapExceptionToError(request.Id, ex);
+        }
+    }
+
+    public async Task<ResponseEnvelope> HandleResumeWorkflowAsync(RequestEnvelope request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        try
+        {
+            var payload = ParsePayload<GetProjectWorkflowConfigRequest>(request);
+            if (payload == null || string.IsNullOrWhiteSpace(payload.WorkspaceId) || string.IsNullOrWhiteSpace(payload.ProjectId))
+            {
+                return ResponseEnvelopeHelper.CreateError(
+                    request.Id,
+                    "INVALID_ARGUMENT",
+                    "Thiếu tham số bắt buộc 'workspaceId' hoặc 'projectId'.",
+                    retryable: false);
+            }
+
+            var result = await _workflowService.ResumeWorkflowAsync(payload.WorkspaceId, payload.ProjectId, cancellationToken);
+            return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
+        }
+        catch (Exception ex)
+        {
+            return MapExceptionToError(request.Id, ex);
+        }
+    }
+
+    public async Task<ResponseEnvelope> HandlePreviewAiPromptAsync(RequestEnvelope request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        try
+        {
+            var payload = ParsePayload<PreviewAiPromptRequest>(request);
+            if (payload == null || string.IsNullOrWhiteSpace(payload.WorkspaceId) || string.IsNullOrWhiteSpace(payload.ProjectId))
+            {
+                return ResponseEnvelopeHelper.CreateError(
+                    request.Id,
+                    "INVALID_ARGUMENT",
+                    "Thiếu tham số bắt buộc 'workspaceId' hoặc 'projectId'.",
+                    retryable: false);
+            }
+
+            var result = await _workflowService.PreviewAiPromptAsync(payload, cancellationToken);
+            return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
+        }
+        catch (Exception ex)
+        {
+            return MapExceptionToError(request.Id, ex);
+        }
+    }
+
+    private static T? ParsePayload<T>(RequestEnvelope request)
+    {
+        if (request.Payload is JsonElement jsonElement)
+        {
+            return JsonSerializer.Deserialize<T>(jsonElement.GetRawText(), JsonOptions);
+        }
+
+        var serialized = JsonSerializer.Serialize(request.Payload, JsonOptions);
+        return JsonSerializer.Deserialize<T>(serialized, JsonOptions);
+    }
+
+    private static ResponseEnvelope MapExceptionToError(Guid requestId, Exception ex)
+    {
+        return ex switch
+        {
+            ProjectWorkflowValidationException vex => ResponseEnvelopeHelper.CreateError(
+                requestId, "VALIDATION_FAILED", vex.Message, retryable: false),
+
+            UnauthorizedAccessException uex => ResponseEnvelopeHelper.CreateError(
+                requestId, "UNAUTHORIZED_WORKSPACE", uex.Message, retryable: false),
+
+            SceneConcurrencyConflictException cex => ResponseEnvelopeHelper.CreateError(
+                requestId, "CONCURRENCY_CONFLICT", cex.Message, retryable: false),
+
+            _ => ResponseEnvelopeHelper.CreateError(
+                requestId, "INTERNAL_ERROR", "Đã xảy ra lỗi nội bộ khi xử lý quy trình sản xuất video.", retryable: false)
+        };
+    }
+}

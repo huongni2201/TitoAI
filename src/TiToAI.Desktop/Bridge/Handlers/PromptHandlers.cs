@@ -53,7 +53,7 @@ public sealed class PromptHandlers
     }
 
     /// <summary>
-    /// Đăng ký toàn bộ 7 lệnh prompt vào Bridge Dispatcher.
+    /// Đăng ký các lệnh quản lý prompt hiện hành vào Bridge Dispatcher.
     /// </summary>
     public void Register(IBridgeDispatcher dispatcher)
     {
@@ -65,17 +65,11 @@ public sealed class PromptHandlers
         dispatcher.AllowCommand("prompt.get_template");
         dispatcher.RegisterHandler("prompt.get_template", HandleGetTemplateAsync);
 
-        dispatcher.AllowCommand("prompt.list_versions");
-        dispatcher.RegisterHandler("prompt.list_versions", HandleListVersionsAsync);
-
-        dispatcher.AllowCommand("prompt.create_version");
-        dispatcher.RegisterHandler("prompt.create_version", HandleCreateVersionAsync);
+        dispatcher.AllowCommand("prompt.save_template");
+        dispatcher.RegisterHandler("prompt.save_template", HandleCreateVersionAsync);
 
         dispatcher.AllowCommand("prompt.preview");
         dispatcher.RegisterHandler("prompt.preview", HandlePreviewAsync);
-
-        dispatcher.AllowCommand("prompt.rollback_version");
-        dispatcher.RegisterHandler("prompt.rollback_version", HandleRollbackVersionAsync);
 
         dispatcher.AllowCommand("prompt.delete_override");
         dispatcher.RegisterHandler("prompt.delete_override", HandleDeleteOverrideAsync);
@@ -90,10 +84,8 @@ public sealed class PromptHandlers
 
         dispatcher.UnregisterHandler("prompt.list_templates");
         dispatcher.UnregisterHandler("prompt.get_template");
-        dispatcher.UnregisterHandler("prompt.list_versions");
-        dispatcher.UnregisterHandler("prompt.create_version");
+        dispatcher.UnregisterHandler("prompt.save_template");
         dispatcher.UnregisterHandler("prompt.preview");
-        dispatcher.UnregisterHandler("prompt.rollback_version");
         dispatcher.UnregisterHandler("prompt.delete_override");
     }
 

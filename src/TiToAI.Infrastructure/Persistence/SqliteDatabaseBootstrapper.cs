@@ -49,6 +49,12 @@ public class SqliteDatabaseBootstrapper : ISqliteDatabaseBootstrapper
         using (var dbContext = new TiToAIDbContext(optionsBuilder.Options))
         {
             var pending = (await dbContext.Database.GetPendingMigrationsAsync(cancellationToken).ConfigureAwait(false)).ToList();
+            if (pending.Count > 0 && await HasUserTablesAsync(connectionString, cancellationToken).ConfigureAwait(false))
+            {
+                var backupPath = CreateMigrationBackup(dbPath, connectionString, cancellationToken);
+                _logger?.LogInformation("Created pre-migration SQLite backup at {BackupPath}", backupPath);
+            }
+
             await dbContext.Database.MigrateAsync(cancellationToken).ConfigureAwait(false);
             appliedMigrations = pending.AsReadOnly();
         }
@@ -102,6 +108,19 @@ public class SqliteDatabaseBootstrapper : ISqliteDatabaseBootstrapper
                 synchronousMode = Convert.ToInt32(syn);
             }
 
+            // Đồng bộ dữ liệu cũ: N luôn lấy từ max_tabs làm nguồn cấu hình duy nhất,
+            // đồng bộ max_concurrent_jobs theo max_tabs nếu có sự sai lệch từ phiên bản cũ
+            try
+            {
+                using var syncCmd = verifyConn.CreateCommand();
+                syncCmd.CommandText = "UPDATE ProviderAccount SET max_concurrent_jobs = max_tabs WHERE max_concurrent_jobs != max_tabs;";
+                await syncCmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Bỏ qua nếu bảng ProviderAccount chưa tồn tại trong migration đầu
+            }
+
             await verifyDbContext.Database.CloseConnectionAsync().ConfigureAwait(false);
         }
 
@@ -130,5 +149,27 @@ public class SqliteDatabaseBootstrapper : ISqliteDatabaseBootstrapper
             SynchronousMode: synchronousMode,
             AppliedMigrations: appliedMigrations,
             IsBootstrapSuccessful: isSuccess);
+    }
+
+    private static async Task<bool> HasUserTablesAsync(string connectionString, CancellationToken cancellationToken)
+    {
+        await using var connection = new SqliteConnection(connectionString);
+        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%');";
+        return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false)) != 0;
+    }
+
+    private static string CreateMigrationBackup(string databasePath, string connectionString, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var suffix = DateTime.UtcNow.ToString("yyyyMMddTHHmmssfffZ") + "-" + Guid.NewGuid().ToString("N");
+        var backupPath = $"{databasePath}.pre-migration-{suffix}.bak";
+        using var source = new SqliteConnection(connectionString);
+        using var destination = new SqliteConnection(DatabasePathHelper.BuildConnectionString(backupPath));
+        source.Open();
+        destination.Open();
+        source.BackupDatabase(destination);
+        return backupPath;
     }
 }

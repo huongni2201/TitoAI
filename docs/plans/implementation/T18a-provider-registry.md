@@ -1,5 +1,7 @@
 # Provider registry, capability và cấu hình có version
 
+> **Delta hiện hành:** [plan queue/Settings 1.2](../QUEUE_EXECUTION_SETTINGS_PLAN.md) thay popup Settings, nhóm account shared/private, connect tại Workspace và round-robin Workspace. Dùng [TASKS](../../agents/TASKS.md) cho trạng thái/gate; Baseline/checkbox dưới không là evidence đã chạy.
+
 - Task gốc: **T18 (registry)** · Ưu tiên: **P0 / G3**.
 - Điều kiện mở: T09,T10,T16 DONE.
 - Baseline 2026-10-26: Chưa có provider registry/config/workflow version runtime.

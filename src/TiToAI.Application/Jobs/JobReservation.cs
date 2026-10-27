@@ -29,10 +29,17 @@ public sealed record JobReservationResult(
     public static JobReservationResult Failure(string reason) => new(false, null, null, reason);
 }
 
+public sealed record JobCommitSuccessResult(
+    string State,
+    string? ReasonCode,
+    bool WasCancelRequested
+);
+
 /// <summary>
 /// Quản lý việc cấp phát độc quyền (Atomic Reservation), thời hạn thuê (Lease),
-/// nhịp tim định kỳ (Heartbeat), lựa chọn ProviderAccount từ Pool toàn ứng dụng
-/// và bảo vệ chống Zombie Worker bằng Fencing Token đơn điệu theo kiến trúc v1.1.
+/// nhịp tim định kỳ (Heartbeat), lựa chọn ProviderAccount từ Pool toàn ứng dụng,
+/// quản lý slot DB qua ActiveSlotOccupancy và bảo vệ chống Zombie Worker bằng Fencing Token đơn điệu
+/// theo H1–H2 và plan 1.2 §2.2.
 /// </summary>
 public sealed class JobReservation
 {
@@ -51,15 +58,16 @@ public sealed class JobReservation
 
     /// <summary>
     /// Thực hiện cấp quyền thuê độc quyền (Atomic Compare-and-Set) thông qua SQLite BEGIN IMMEDIATE.
-    /// Lựa chọn ProviderAccount eligible từ pool toàn ứng dụng, tạo ExecutionBinding bất biến
-    /// và chuyển trạng thái từ 'Queued' sang 'Reserved'.
-    /// Nếu pool đầy, giữ nguyên 'Queued', không tăng attempts và trả Acquired = false.
+    /// Lựa chọn ProviderAccount eligible từ pool toàn ứng dụng, tạo ExecutionBinding bất biến,
+    /// chiếm slot rảnh cụ thể trong ActiveSlotOccupancy và chuyển trạng thái từ 'Queued' sang 'Reserved'.
+    /// Nếu pool đầy hoặc thiếu budget, giữ nguyên 'Queued', không tăng attempts và trả Acquired = false.
     /// </summary>
     public async Task<JobReservationResult> TryReserveJobAsync(
         string jobId,
         string workerId,
         TimeSpan leaseDuration,
         Func<string, bool>? isProfileAvailable = null,
+        Func<IReadOnlySet<string>>? getOpenProfileIds = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
@@ -103,8 +111,20 @@ public sealed class JobReservation
                     return JobReservationResult.Failure("Job đã được chiếm bởi tiến trình khác hoặc không còn ở trạng thái Queued.");
                 }
 
-                // BẢO VỆ CHỐNG RESEND MÙ: Tuyệt đối không reserve lại job đã submit side effect mà chưa đối soát.
-                if (job.SideEffectSubmitted == 1 && string.IsNullOrWhiteSpace(job.ResultReference))
+                // PV-R4: Kiểm tra trạng thái Workflow run của dự án: Chặn đứng reservation mới nếu quy trình đang Paused hoặc Idle
+                var wfConfigKey = $"project.workflow.config.{job.ProjectId}";
+                var wfSetting = await dbContext.AppSettings
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(s => s.Key == wfConfigKey, cancellationToken).ConfigureAwait(false);
+
+                if (wfSetting != null && wfSetting.Value.Contains("\"runState\":\"Paused\"", StringComparison.OrdinalIgnoreCase))
+                {
+                    await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
+                    return JobReservationResult.Failure("Workflow run của dự án đang ở trạng thái Paused.");
+                }
+
+                // BẢO VỆ CHỐNG RESEND MÙ: Tuyệt đối không reserve lại job đã submit side effect mà chưa có kết quả/checkpoint đối soát.
+                if (job.SideEffectSubmitted == 1 && string.IsNullOrWhiteSpace(job.ResultReference) && string.IsNullOrWhiteSpace(job.ResultText))
                 {
                     job.State = JobState.AwaitingUser;
                     job.ReasonCode = JobReasonCode.ReconcileRequired;
@@ -117,6 +137,100 @@ public sealed class JobReservation
                     return JobReservationResult.Failure("reconcile_required");
                 }
 
+                // H1: Đọc và kiểm tra Global App Budget (toàn ứng dụng)
+                int maxConcurrentJobsGlobal = 5;
+                int maxOpenBrowsersGlobal = 3;
+
+                var globalSettings = await dbContext.AppSettings
+                    .AsNoTracking()
+                    .Where(s => s.Key == "scheduler.max_concurrent_jobs" || s.Key == "scheduler.max_open_browsers")
+                    .ToDictionaryAsync(s => s.Key, s => s.Value, cancellationToken).ConfigureAwait(false);
+
+                if (globalSettings.TryGetValue("scheduler.max_concurrent_jobs", out var mcjStr) && int.TryParse(mcjStr, out var mcjVal) && mcjVal > 0)
+                {
+                    maxConcurrentJobsGlobal = mcjVal;
+                }
+                if (globalSettings.TryGetValue("scheduler.max_open_browsers", out var mobStr) && int.TryParse(mobStr, out var mobVal) && mobVal > 0)
+                {
+                    maxOpenBrowsersGlobal = mobVal;
+                }
+
+                // Đọc toàn bộ active slot occupancies hiện hành
+                var currentOccupancies = await dbContext.ActiveSlotOccupancies
+                    .Include(o => o.Job)
+                    .ToListAsync(cancellationToken).ConfigureAwait(false);
+
+                // Loại bỏ bất kỳ occupancy mồ côi mà job đã ở trạng thái kết thúc (Succeeded/Failed/Canceled)
+                // LƯU Ý BẢO VỆ T16: Không bao giờ xóa occupancy của job có side effect unresolved (SideEffectSubmitted == 1 và chưa có kết quả)
+                var orphanOccupancies = currentOccupancies
+                    .Where(o => o.Job != null &&
+                        (o.Job.State == JobState.Succeeded ||
+                         ((o.Job.State == JobState.Failed || o.Job.State == JobState.Canceled) &&
+                          !(o.Job.SideEffectSubmitted == 1 && string.IsNullOrWhiteSpace(o.Job.ResultReference) && string.IsNullOrWhiteSpace(o.Job.ResultText)))))
+                    .ToList();
+                if (orphanOccupancies.Count > 0)
+                {
+                    dbContext.ActiveSlotOccupancies.RemoveRange(orphanOccupancies);
+                    await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                    currentOccupancies.RemoveAll(o => orphanOccupancies.Contains(o));
+                }
+
+                // Lọc active occupancies (Reserved, Running, AwaitingUser)
+                int currentGlobalActiveCount = currentOccupancies.Count(o => o.JobId != jobId);
+                if (currentGlobalActiveCount >= maxConcurrentJobsGlobal)
+                {
+                    // Toàn app hết budget job: Giữ Queued, KHÔNG tăng attempts
+                    job.ReasonCode = "waiting_for_global_capacity";
+                    job.UpdatedAtUtc = nowIso;
+                    await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                    await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+
+                    return JobReservationResult.Failure("global_job_budget_reached");
+                }
+
+                // H1: Đếm profile đang mở từ dữ liệu được truy vấn rõ ràng, không dựa vào navigation chưa nạp
+                var activeOccupancyProfileIds = await dbContext.ActiveSlotOccupancies
+                    .AsNoTracking()
+                    .Where(o => o.JobId != jobId)
+                    .Join(dbContext.ProviderAccounts.AsNoTracking(),
+                        o => o.ProviderAccountId,
+                        a => a.Id,
+                        (o, a) => a.ProfileId)
+                    .Where(p => !string.IsNullOrWhiteSpace(p))
+                    .Distinct()
+                    .ToListAsync(cancellationToken).ConfigureAwait(false);
+
+                // Thêm các profile của các job ở trạng thái AwaitingUser (uncertain / checkpoint chưa giải phóng tài nguyên)
+                var uncertainProfileIds = await dbContext.Jobs
+                    .AsNoTracking()
+                    .Where(j => j.State == JobState.AwaitingUser && j.Id != jobId)
+                    .Join(dbContext.ExecutionBindings.AsNoTracking(),
+                        j => j.Id,
+                        b => b.JobId,
+                        (j, b) => b.ProfileId)
+                    .Where(p => !string.IsNullOrWhiteSpace(p))
+                    .Distinct()
+                    .ToListAsync(cancellationToken).ConfigureAwait(false);
+
+                var currentlyOpenProfileIds = new HashSet<string>(activeOccupancyProfileIds, StringComparer.OrdinalIgnoreCase);
+                foreach (var p in uncertainProfileIds)
+                {
+                    currentlyOpenProfileIds.Add(p);
+                }
+
+                // Bổ sung các profile đang active ở runtime (đang VisibleActive/VisibleWaiting login, Quiescing, Closing, running process)
+                var runtimeActiveProfiles = getOpenProfileIds?.Invoke();
+                if (runtimeActiveProfiles != null)
+                {
+                    foreach (var p in runtimeActiveProfiles)
+                    {
+                        if (!string.IsNullOrWhiteSpace(p))
+                        {
+                            currentlyOpenProfileIds.Add(p);
+                        }
+                    }
+                }
+
                 // 2. Kiểm tra xem Job đã có ExecutionBinding chưa (trường hợp retry / reconcile)
                 var existingBinding = await dbContext.ExecutionBindings
                     .Include(b => b.ProviderAccount)
@@ -125,10 +239,107 @@ public sealed class JobReservation
 
                 if (existingBinding != null)
                 {
+                    var boundAccount = await dbContext.ProviderAccounts
+                        .FirstOrDefaultAsync(a => a.Id == existingBinding.ProviderAccountId, cancellationToken).ConfigureAwait(false);
+
+                    if (boundAccount == null || !boundAccount.Enabled || boundAccount.Lifecycle != "Active")
+                    {
+                        job.ReasonCode = "account_disabled";
+                        job.UpdatedAtUtc = nowIso;
+                        await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                        return JobReservationResult.Failure("account_disabled");
+                    }
+
                     if (isProfileAvailable != null && !isProfileAvailable(existingBinding.ProfileId))
                     {
-                        await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
+                        job.ReasonCode = "profile_unavailable";
+                        job.UpdatedAtUtc = nowIso;
+                        await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
                         return JobReservationResult.Failure("profile_unavailable");
+                    }
+
+                    // H1 Check Global Browser Budget trên nhánh retry
+                    bool boundProfileIsOpen = currentlyOpenProfileIds.Contains(boundAccount.ProfileId);
+                    if (!boundProfileIsOpen && currentlyOpenProfileIds.Count >= maxOpenBrowsersGlobal)
+                    {
+                        // Profile của job retry chưa mở và đã chạm ngưỡng max_open_browsers toàn app -> Giữ Queued, không tăng attempts
+                        job.ReasonCode = "waiting_for_global_browser_budget";
+                        job.UpdatedAtUtc = nowIso;
+                        await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                        return JobReservationResult.Failure("global_browser_budget_reached");
+                    }
+
+                    // H1 Check Account Capacity & limits trên đường retry
+                    var accountOtherOccupancies = currentOccupancies
+                        .Where(o => o.ProviderAccountId == boundAccount.Id && o.JobId != jobId)
+                        .ToList();
+
+                    // Sử dụng MaxTabs làm nguồn cấu hình N duy nhất cho tài khoản, không bị Max Jobs cũ chặn ngầm
+                    int boundCapacity = boundAccount.MaxTabs > 0 ? boundAccount.MaxTabs : 1;
+                    if (accountOtherOccupancies.Count >= boundCapacity)
+                    {
+                        job.ReasonCode = "waiting_for_capacity";
+                        job.UpdatedAtUtc = nowIso;
+                        await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                        return JobReservationResult.Failure("account_capacity_reached");
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(boundAccount.PerTaskLimitsJson))
+                    {
+                        try
+                        {
+                            var limits = JsonSerializer.Deserialize<Dictionary<string, int>>(boundAccount.PerTaskLimitsJson);
+                            if (limits != null && limits.TryGetValue(job.TaskType, out int taskLimit))
+                            {
+                                int currentTaskCount = accountOtherOccupancies.Count(o => o.Job != null && o.Job.TaskType == job.TaskType);
+                                if (currentTaskCount >= taskLimit)
+                                {
+                                    job.ReasonCode = "waiting_for_capacity";
+                                    job.UpdatedAtUtc = nowIso;
+                                    await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                                    await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                                    return JobReservationResult.Failure("account_task_limit_reached");
+                                }
+                            }
+                        }
+                        catch
+                        {
+                            // Bỏ qua lỗi parse
+                        }
+                    }
+
+                    // Đảm bảo slot của existingBinding được ghi nhận trong ActiveSlotOccupancy
+                    var existingOccupancy = currentOccupancies.FirstOrDefault(o => o.JobId == jobId);
+                    if (existingOccupancy == null)
+                    {
+                        // Kiểm tra xem slot có bị job khác chiếm không
+                        bool slotTakenByOther = accountOtherOccupancies.Any(o => o.TabSlotId == existingBinding.TabSlotId);
+                        string targetSlot = slotTakenByOther
+                            ? FindSmallestAvailableSlot(boundAccount, accountOtherOccupancies.Select(o => o.TabSlotId).ToHashSet())
+                            : existingBinding.TabSlotId;
+
+                        existingBinding.TabSlotId = targetSlot;
+
+                        var newOcc = new ActiveSlotOccupancy
+                        {
+                            ProviderAccountId = boundAccount.Id,
+                            TabSlotId = targetSlot,
+                            JobId = job.Id,
+                            LeaseOwnerId = workerId,
+                            LeaseToken = job.FencingToken + 1,
+                            AcquiredAtUtc = nowIso
+                        };
+                        dbContext.ActiveSlotOccupancies.Add(newOcc);
+                    }
+                    else
+                    {
+                        existingOccupancy.LeaseOwnerId = workerId;
+                        existingOccupancy.LeaseToken = job.FencingToken + 1;
+                        existingOccupancy.AcquiredAtUtc = nowIso;
                     }
 
                     // v1.1 §3.1: Giữ nguyên binding đã cấp cho các lần retry/reconcile, không đổi account ngầm
@@ -168,21 +379,8 @@ public sealed class JobReservation
                     return JobReservationResult.Failure("provider_account_required");
                 }
 
-                // Tìm các job đang chiếm slot (Reserved hoặc Running) và loại tác vụ của chúng (tránh N+1 query)
-                var activeJobsInfo = await dbContext.Jobs
-                    .Where(j => j.State == JobState.Reserved || j.State == JobState.Running)
-                    .Select(j => new { j.Id, j.TaskType })
-                    .ToListAsync(cancellationToken).ConfigureAwait(false);
-
-                var activeJobIds = activeJobsInfo.Select(j => j.Id).ToList();
-                var activeJobTaskTypes = activeJobsInfo.ToDictionary(j => j.Id, j => j.TaskType);
-
-                var activeBindings = await dbContext.ExecutionBindings
-                    .Where(b => activeJobIds.Contains(b.JobId))
-                    .ToListAsync(cancellationToken).ConfigureAwait(false);
-
-                // Lọc các account còn slot trống và đáp ứng perTaskLimits
-                var candidatePool = new List<(ProviderAccount Account, int ActiveCount)>();
+                // Lọc các account còn slot trống và đáp ứng perTaskLimits + global browser limits
+                var candidatePool = new List<(ProviderAccount Account, int ActiveCount, string AvailableSlotId)>();
 
                 foreach (var account in eligibleAccounts)
                 {
@@ -191,12 +389,23 @@ public sealed class JobReservation
                         continue;
                     }
 
-                    var accountBindings = activeBindings.Where(b => b.ProviderAccountId == account.Id).ToList();
-                    int activeCount = accountBindings.Count;
+                    var accountOccupancies = currentOccupancies.Where(o => o.ProviderAccountId == account.Id).ToList();
+                    int activeCount = accountOccupancies.Count;
 
-                    if (activeCount >= account.MaxConcurrentJobs)
+                    // Sử dụng MaxTabs làm nguồn cấu hình N duy nhất (Số tác vụ chạy đồng thời), không lấy min(MaxJobs, MaxTabs)
+                    int effectiveCap = account.MaxTabs > 0 ? account.MaxTabs : 1;
+                    if (activeCount >= effectiveCap)
                     {
                         continue; // Hết capacity
+                    }
+
+                    // Nếu profile của account chưa mở, kiểm tra xem có vượt globalMaxOpenBrowsers không
+                    if (!currentlyOpenProfileIds.Contains(account.ProfileId))
+                    {
+                        if (currentlyOpenProfileIds.Count >= maxOpenBrowsersGlobal)
+                        {
+                            continue; // Vượt ngân sách mở trình duyệt toàn app
+                        }
                     }
 
                     // Kiểm tra perTaskLimitsJson nếu có
@@ -207,8 +416,8 @@ public sealed class JobReservation
                             var limits = JsonSerializer.Deserialize<Dictionary<string, int>>(account.PerTaskLimitsJson);
                             if (limits != null && limits.TryGetValue(job.TaskType, out int taskLimit))
                             {
-                                int currentRoleCount = accountBindings
-                                    .Count(b => activeJobTaskTypes.TryGetValue(b.JobId, out var tt) && tt == job.TaskType);
+                                int currentRoleCount = accountOccupancies
+                                    .Count(o => o.Job != null && o.Job.TaskType == job.TaskType);
 
                                 if (currentRoleCount >= taskLimit)
                                 {
@@ -222,18 +431,29 @@ public sealed class JobReservation
                         }
                     }
 
-                    candidatePool.Add((account, activeCount));
+                    // H2: Tìm slot rảnh nhỏ nhất, không bao giờ dùng ActiveCount + 1 gây trùng slot!
+                    var occupiedSlotIds = accountOccupancies.Select(o => o.TabSlotId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    string availableSlot = FindSmallestAvailableSlot(account, occupiedSlotIds);
+
+                    candidatePool.Add((account, activeCount, availableSlot));
                 }
 
                 if (candidatePool.Count == 0)
                 {
-                    // Toàn bộ pool đã đầy: Giữ nguyên trạng thái Queued, KHÔNG tăng attempts
-                    job.ReasonCode = "waiting_for_capacity";
+                    bool blockedByBrowserBudget = eligibleAccounts.Any(a =>
+                    {
+                        int cap = a.MaxTabs > 0 ? a.MaxTabs : 1;
+                        int cur = currentOccupancies.Count(o => o.ProviderAccountId == a.Id);
+                        return cur < cap && !currentlyOpenProfileIds.Contains(a.ProfileId) && currentlyOpenProfileIds.Count >= maxOpenBrowsersGlobal;
+                    });
+
+                    // Toàn bộ pool đã đầy hoặc chạm budget browser: Giữ nguyên trạng thái Queued, KHÔNG tăng attempts
+                    job.ReasonCode = blockedByBrowserBudget ? "waiting_for_global_browser_budget" : "waiting_for_capacity";
                     job.UpdatedAtUtc = nowIso;
                     await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
                     await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
 
-                    return JobReservationResult.Failure("pool_capacity_reached");
+                    return JobReservationResult.Failure(blockedByBrowserBudget ? "global_browser_budget_reached" : "pool_capacity_reached");
                 }
 
                 // Phân phối công bằng: Chọn account có ít active job nhất, rồi theo UpdatedAt, rồi Id
@@ -244,7 +464,7 @@ public sealed class JobReservation
                     .First();
 
                 var chosenAccount = selectedCandidate.Account;
-                int slotNumber = selectedCandidate.ActiveCount + 1;
+                string chosenSlotId = selectedCandidate.AvailableSlotId;
 
                 // 4. Tạo ExecutionBinding bất biến
                 var newBinding = new ExecutionBinding
@@ -254,13 +474,25 @@ public sealed class JobReservation
                     ProfileId = chosenAccount.ProfileId,
                     Identity = chosenAccount.VerifiedIdentity,
                     CapacityConfigRevision = chosenAccount.Revision,
-                    TabSlotId = $"slot-{slotNumber}",
+                    TabSlotId = chosenSlotId,
                     AssignedAtUtc = nowIso,
                     LeaseOwnerId = workerId,
                     LeaseToken = job.FencingToken + 1
                 };
 
                 dbContext.ExecutionBindings.Add(newBinding);
+
+                // H2: Chiếm slot trong ActiveSlotOccupancy (PK ngăn chặn trùng tuyệt đối cấp SQLite)
+                var newOccupancy = new ActiveSlotOccupancy
+                {
+                    ProviderAccountId = chosenAccount.Id,
+                    TabSlotId = chosenSlotId,
+                    JobId = job.Id,
+                    LeaseOwnerId = workerId,
+                    LeaseToken = job.FencingToken + 1,
+                    AcquiredAtUtc = nowIso
+                };
+                dbContext.ActiveSlotOccupancies.Add(newOccupancy);
 
                 // 5. Cập nhật Job sang trạng thái Reserved
                 job.State = JobState.Reserved;
@@ -290,6 +522,43 @@ public sealed class JobReservation
 
                 return JobReservationResult.Failure($"Lỗi giao dịch reservation: {ex.Message}");
             }
+        }
+    }
+
+    /// <summary>
+    /// Tìm slot rảnh có số thứ tự nhỏ nhất từ slot-1, slot-2, ...
+    /// </summary>
+    private static string FindSmallestAvailableSlot(ProviderAccount account, HashSet<string> occupiedSlotIds)
+    {
+        int maxSlots = account.MaxTabs > 0 ? account.MaxTabs : 3;
+
+        for (int k = 1; k <= maxSlots + 5; k++)
+        {
+            string candidateSlot = $"slot-{k}";
+            if (!occupiedSlotIds.Contains(candidateSlot))
+            {
+                return candidateSlot;
+            }
+        }
+
+        return $"slot-{occupiedSlotIds.Count + 1}";
+    }
+
+    /// <summary>
+    /// Giải phóng vị trí slot khỏi ActiveSlotOccupancy trong DB khi job hoàn tất hoặc bị hủy.
+    /// </summary>
+    public async Task ReleaseOccupancyAsync(string jobId, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(jobId)) return;
+
+        await using var dbContext = new TiToAIDbContext(_dbOptions);
+        var occupancy = await dbContext.ActiveSlotOccupancies
+            .FirstOrDefaultAsync(o => o.JobId == jobId, cancellationToken).ConfigureAwait(false);
+
+        if (occupancy != null)
+        {
+            dbContext.ActiveSlotOccupancies.Remove(occupancy);
+            await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -413,10 +682,12 @@ public sealed class JobReservation
     }
 
     /// <summary>
-    /// Cam kết kết quả hoàn thành thành công (Succeeded), xóa lease và lưu kết quả đầu ra (Asset ID hoặc Result Text).
+    /// Cam kết kết quả hoàn thành thành công (Succeeded), xóa lease và giải phóng slot occupancy.
+    /// Nếu CancelRequested = 1 (kết quả muộn sau khi người dùng hủy): chuyển Canceled, giữ kết quả,
+    /// đánh dấu Asset liên quan dạng Unlinked để không làm mất tài nguyên của người dùng theo T16.
     /// Bắt buộc phải có ít nhất ResultReference hoặc ResultText hợp lệ theo v1.1.
     /// </summary>
-    public async Task CommitSuccessAsync(
+    public async Task<JobCommitSuccessResult> CommitSuccessAsync(
         string jobId,
         long fencingToken,
         string? resultReference,
@@ -431,11 +702,15 @@ public sealed class JobReservation
         await using var dbContext = new TiToAIDbContext(_dbOptions);
         var nowIso = UtcNow.ToString("o");
 
+        await using var transaction = await dbContext.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+
         const string updateSql = @"
             UPDATE Job
-            SET state = 'Succeeded',
+            SET state = CASE WHEN cancel_requested = 1 THEN 'Canceled' ELSE 'Succeeded' END,
+                reason_code = CASE WHEN cancel_requested = 1 THEN 'user_canceled' ELSE NULL END,
                 result_reference = @resultRef,
                 result_text = @resultText,
+                lease_owner_id = NULL,
                 lease_expires_at_utc = NULL,
                 updated_at_utc = @now
             WHERE id = @jobId
@@ -456,14 +731,50 @@ public sealed class JobReservation
 
         if (rows == 0)
         {
+            await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
             throw new FencingTokenStaleException(jobId, fencingToken);
         }
+
+        var committedJob = await dbContext.Jobs
+            .AsNoTracking()
+            .FirstOrDefaultAsync(j => j.Id == jobId, cancellationToken).ConfigureAwait(false);
+
+        bool wasCancelRequested = committedJob?.State == JobState.Canceled;
+        string targetState = wasCancelRequested ? JobState.Canceled : JobState.Succeeded;
+        string? reasonCode = wasCancelRequested ? JobReasonCode.UserCanceled : null;
+
+        // Nếu bị hủy mà có Asset sinh ra, đánh dấu Unlinked để không làm mất file vật lý
+        if (wasCancelRequested && !string.IsNullOrWhiteSpace(resultReference))
+        {
+            var asset = await dbContext.Assets
+                .FirstOrDefaultAsync(a => a.Id == resultReference || a.RelativePath == resultReference, cancellationToken)
+                .ConfigureAwait(false);
+            if (asset != null)
+            {
+                asset.Status = "Unlinked";
+                await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        // Giải phóng slot occupancy vì kết quả đã được ghi nhận an toàn
+        var occupancy = await dbContext.ActiveSlotOccupancies
+            .FirstOrDefaultAsync(o => o.JobId == jobId, cancellationToken).ConfigureAwait(false);
+        if (occupancy != null)
+        {
+            dbContext.ActiveSlotOccupancies.Remove(occupancy);
+            await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+
+        return new JobCommitSuccessResult(targetState, reasonCode, wasCancelRequested);
     }
 
     /// <summary>
     /// Xử lý thất bại khi thực thi tác vụ:
-    /// Nếu canRetry == true (chưa đạt max_attempts và side_effect_submitted == 0): trả về Queued kèm retry_after_utc.
+    /// Nếu canRetry == true: trả về Queued kèm retry_after_utc.
     /// Ngược lại: đánh dấu Failed kèm reason_code.
+    /// Cả 2 trường hợp này giải phóng slot occupancy.
     /// </summary>
     public async Task CommitFailureAsync(
         string jobId,
@@ -536,11 +847,20 @@ public sealed class JobReservation
                 throw new FencingTokenStaleException(jobId, fencingToken);
             }
         }
+
+        // Giải phóng slot occupancy
+        var occupancy = await dbContext.ActiveSlotOccupancies
+            .FirstOrDefaultAsync(o => o.JobId == jobId, cancellationToken).ConfigureAwait(false);
+        if (occupancy != null)
+        {
+            dbContext.ActiveSlotOccupancies.Remove(occupancy);
+            await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <summary>
     /// Hoàn trả Job về trạng thái Queued khi không chiếm được tab lease (ví dụ role tab đang bận).
-    /// Giảm attempts đi 1 vì tác vụ chưa từng thực sự được chạy trên worker.
+    /// Giảm attempts đi 1 vì tác vụ chưa từng thực sự được chạy trên worker và giải phóng slot occupancy.
     /// </summary>
     public async Task ReleaseReservationDueToNoCapacityAsync(
         string jobId,
@@ -571,5 +891,14 @@ public sealed class JobReservation
                 new SqliteParameter("@token", fencingToken)
             },
             cancellationToken).ConfigureAwait(false);
+
+        // Giải phóng slot occupancy
+        var occupancy = await dbContext.ActiveSlotOccupancies
+            .FirstOrDefaultAsync(o => o.JobId == jobId, cancellationToken).ConfigureAwait(false);
+        if (occupancy != null)
+        {
+            dbContext.ActiveSlotOccupancies.Remove(occupancy);
+            await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        }
     }
 }

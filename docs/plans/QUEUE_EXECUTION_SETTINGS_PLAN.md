@@ -14,7 +14,8 @@ Ngày 2026-10-26 (UTC+07). Phiên bản yêu cầu **1.2**. Trạng thái: **PLA
 | Thực thi | Một luồng logic độc lập: producer tạo job → durable queue → dispatcher → executor → kết quả theo job |
 | Tài khoản chạy job | Dispatcher chọn tài khoản hợp lệ còn capacity của provider khi reserve, không chọn theo Workspace/TikTok |
 | Workspace | Tổ chức nội dung, quyền truy cập và địa chỉ trả kết quả. Không tạo queue, pool hoặc cấu hình tài khoản AI riêng cho từng Workspace |
-| Đồng thời | Một luồng logic không có nghĩa chỉ chạy một job. Mức đồng thời do budget, account capacity và capability quyết định |
+| Đồng thời | Mỗi tác vụ sử dụng một tab riêng, vì vậy chỉ cần một giới hạn duy nhất ($N$) lấy từ **Max Tabs**, đổi nhãn hiển thị thành “Số tác vụ chạy đồng thời”. Bỏ ô “Tối đa tác vụ đồng thời (Max Jobs)” khỏi form thêm/sửa tài khoản. Mức đồng thời do budget toàn app, per-task limits và account capacity $N$ quyết định |
+| Vòng đời Browser | Không tự khởi chạy browser khi mở app/tải danh sách tài khoản/bật nhận việc. Chỉ mở browser automation khi đã reserve job đủ điều kiện (chạy ẩn). Mỗi job 1 tab riêng; cùng tài khoản dùng chung browser/profile. Khi hết job (idle), đóng browser và giải phóng tài nguyên (không giữ chạy nền). Đóng browser không làm mất phiên đăng nhập đã lưu trong profile |
 | Stack | Tận dụng modular monolith/.NET/SQLite/Channel/browser hiện có; không cần tiến trình, service hoặc broker mới |
 
 Thay yêu cầu popup trong SETTINGS_PLAN §1, UI_BROWSER_PLAN §2, ENGINEERING_RULES và các plan UI liên quan. Thay cách trình bày account “global/shared/riêng” và round-robin theo Workspace trong execution-contract-v1.1 §1.2/§3.2 và T15 plan. Các invariant về snapshot, xác minh identity, isolation, lease/fencing, chống resend, storage và backup vẫn giữ.
@@ -46,10 +47,12 @@ flowchart LR
 1. Một queue SQLite chung. Chọn **job đủ điều kiện cũ nhất theo createdAtUtc rồi jobId**; các job chờ provider/login/quota/backoff/input không chặn job khác đủ điều kiện. Không dùng vòng round-robin Workspace hoặc hàng đợi lâu dài theo account.
 2. Workspace pause hiện có vẫn ngăn job nguồn đó được dispatch; không hủy job đã submit. Pause là điều kiện eligibility của job, không tạo tài khoản/queue riêng cho Workspace.
 3. Với job chưa bind, chọn account đúng provider: enabled, identity đã xác minh, session/capability phù hợp, không login/quiescing/closing/quarantine và còn slot. Chọn ít job đang giữ tài nguyên nhất, rồi lastAssignedAt/id để thứ tự ổn định.
-4. Trong một transaction SQLite ngắn: kiểm lại budget toàn app, maxTabs/maxConcurrentJobs/perTaskLimits, chiếm **slot cụ thể đang rảnh**, tạo binding nếu chưa có, chuyển Queued→Reserved và tăng lease token/attempt một lần. Không gọi browser/network trong transaction.
+4. Trong một transaction SQLite ngắn: kiểm lại budget toàn app, capacity $N$ từ `max_tabs` (đồng bộ `max_concurrent_jobs = N`), `perTaskLimits`, chiếm **slot cụ thể đang rảnh**, tạo binding nếu chưa có, chuyển Queued→Reserved và tăng lease token/attempt một lần. Dữ liệu cũ dùng nguyên $N = max\_tabs$, không lấy $\min(max\_concurrent\_jobs, max\_tabs)$. Giảm $N$ không hủy job đang chạy, chỉ dừng nhận thêm đến khi còn capacity. Không gọi browser/network trong transaction.
 5. Binding là dấu vết **job → account/profile/slot đã reserve**, phục vụ retry/reconcile; không phải mapping Workspace → account. Job đã bind giữ đúng account khi retry, nhưng mọi giới hạn hiện hành vẫn phải được kiểm lại.
 6. Slot runtime có một owner duy nhất bằng ràng buộc/CAS ở DB. Binding lịch sử không phải slot đang chiếm. Không suy slot ID từ số job đang chạy; không chỉ khóa bằng RAM.
 7. Heartbeat/progress/submit/result commit kiểm owner, token, state và lease expiry. Worker mất lease không được tự hồi sinh hoặc ghi kết quả muộn.
+8. **Vòng đời Browser Automation:** Tuyệt đối không tự khởi chạy browser khi mở app, tải danh sách tài khoản hoặc chỉ vì tài khoản đang bật nhận việc. Chỉ mở browser automation khi đã reserve được job đủ điều kiện (chạy ẩn `Headless = true`). Mỗi job dùng một tab riêng; các job cùng tài khoản dùng chung browser context/profile.
+9. Khi một job hoàn tất, đóng tab của job đó. Khi không còn job cần giữ browser (idle: `activeJobCount == 0` và không còn job active/uncertain), đóng browser context và giải phóng tài nguyên ngay lập tức; không giữ browser chạy nền chờ việc (bỏ mọi cơ chế keep-warm hoặc idle delay timeout). Lưu profile/cookie để lần chạy sau dùng lại phiên đăng nhập (đóng browser không đăng xuất). Không đóng browser khi còn job đang chạy hoặc job chưa rõ kết quả cần đối soát (`AwaitingUser` với `SideEffectSubmitted == 1`). Xử lý an toàn trường hợp job mới đến trong lúc browser đang closing (`_profileLaunchCloseLocks` semaphore), không tạo 2 browser cùng sở hữu 1 profile. Cho phép người dùng chủ động mở browser đăng nhập/kiểm tra phiên thủ công; xong thì đóng và giải phóng tài nguyên. UI phân biệt rõ trạng thái tiến trình ("Đã dừng" vs "Đang chạy ẩn") và phiên đăng nhập ("Đã kết nối").
 
 ### 2.3. Kết thúc và recovery
 
@@ -72,9 +75,11 @@ flowchart LR
 
 ### 3.2. Tài khoản
 
-- Một danh sách tài khoản với tên/nhãn, provider, identity/session, enabled, capacity/đang bận và lỗi. Lọc provider là công cụ tìm kiếm, không phải chia tài khoản theo Workspace.
+- Một danh sách tài khoản với tên/nhãn, provider, identity/session, enabled, capacity/đang bận và lỗi. Trên danh sách tài khoản, hiển thị “Đồng thời: tối đa N tác vụ” (với $N$ lấy từ Max Tabs), loại bỏ hoàn toàn nhãn cũ “Hạn mức: X tác vụ / Y tab”.
+- Thêm và sửa tài khoản AI: Giữ trường Max Tabs làm nguồn cấu hình duy nhất $N$, đổi nhãn hiển thị thành “Số tác vụ chạy đồng thời”. Bỏ ô “Tối đa tác vụ đồng thời (Max Jobs)” khỏi form thêm và sửa tài khoản. Thêm mô tả: “Mỗi tác vụ sử dụng một tab riêng. Các tác vụ vượt giới hạn sẽ chờ trong hàng đợi.”
+- Khi tạo/sửa tài khoản, backend đồng bộ `max_concurrent_jobs = N` để tương thích và bảo đảm $N$ giới hạn đồng thời cả số job chạy và số tab automation. Dữ liệu cũ giữ nguyên `MaxTabs` làm $N$, không lấy $\min(MaxJobs, MaxTabs)$.
 - Thêm tài khoản AI: chọn provider, nhãn → profile riêng → login thủ công → probe identity → cho bật nhận job. Không hỏi Workspace; nhãn không phải bằng chứng identity.
-- Không đăng nhập giả hoặc enable chỉ từ cookie/metadata cũ. Một login visible toàn app; quiesce đúng profile, automation chạy ẩn.
+- Không đăng nhập giả hoặc enable chỉ từ cookie/metadata cũ. Người dùng chủ động mở đăng nhập đồng thời nhiều profile độc lập; quiesce đúng profile, automation chạy ẩn, tuân thủ ngân sách tài nguyên max_open_browsers.
 - Bật/tắt nhận job mới/giảm cap không kill tác vụ đã chạy. Account đang có binding/checkpoint/lịch sử dùng archive/disable theo contract, không hard-delete.
 - Mọi CTA connect/link/login và quản lý tài khoản ở Workspace cards/overview/scene/sidebar Trình duyệt AI được chuyển vào tab này. Trang công việc có thể dẫn **Đến Cài đặt → Tài khoản** khi thiếu phiên, không chứa form connect riêng.
 - TikTok nếu nghiệp vụ cần liên kết kênh: form liên kết nằm trong tab này, tách rõ provider/task capability; không cho chọn SharedAI làm profile TikTok và không link MuseAI với Workspace.

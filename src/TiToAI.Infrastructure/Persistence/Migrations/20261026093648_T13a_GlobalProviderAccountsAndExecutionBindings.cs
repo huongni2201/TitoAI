@@ -13,6 +13,9 @@ namespace TiToAI.Infrastructure.Persistence.Migrations
             // Đảm bảo bảng Scene có Unique Index trước để Foreign Key composite từ Job không bị lỗi foreign key mismatch trên SQLite
             migrationBuilder.Sql("CREATE UNIQUE INDEX IF NOT EXISTS \"uq_scene_id_project_workspace\" ON \"Scene\" (\"id\", \"project_id\", \"workspace_id\");");
 
+            // Bảo toàn dữ liệu Script legacy: Chuyển các Job Script legacy có SceneId về scope Project (scene_id = NULL) trước khi add constraint và foreign key
+            migrationBuilder.Sql("UPDATE \"Job\" SET \"scene_id\" = NULL WHERE \"task_type\" = 'Script' AND \"scene_id\" IS NOT NULL;");
+
             migrationBuilder.DropForeignKey(
                 name: "FK_Job_Scene_scene_id_workspace_id",
                 table: "Job");
@@ -85,9 +88,26 @@ namespace TiToAI.Infrastructure.Persistence.Migrations
             migrationBuilder.Sql(
                 "INSERT INTO \"ProviderAccount\" (\"id\", \"provider_key\", \"profile_id\", \"display_name\", \"verified_identity\", \"identity_verified_at_utc\", \"enabled\", \"lifecycle\", \"max_concurrent_jobs\", \"max_tabs\", \"revision\", \"created_at_utc\", \"updated_at_utc\") " +
                 "SELECT \"id\", 'museai', \"id\", COALESCE(\"display_name\", 'MuseAI Account'), \"account_identity\", " +
-                "CASE WHEN \"session_status\" = 'Verified' THEN \"updated_at_utc\" ELSE NULL END, " +
-                "CASE WHEN \"session_status\" = 'Verified' THEN 1 ELSE 0 END, 'Active', 1, 1, 1, \"created_at_utc\", \"updated_at_utc\" " +
+                "CASE WHEN \"session_status\" IN ('Connected', 'Verified') THEN \"updated_at_utc\" ELSE NULL END, " +
+                "CASE WHEN \"session_status\" IN ('Connected', 'Verified') THEN 1 ELSE 0 END, 'Active', 1, 1, 1, \"created_at_utc\", \"updated_at_utc\" " +
                 "FROM \"BrowserProfile\" WHERE \"kind\" = 'MuseAI' AND NOT EXISTS (SELECT 1 FROM \"ProviderAccount\" pa WHERE pa.\"profile_id\" = \"BrowserProfile\".\"id\");");
+
+            // Xử lý duplicate identity trước khi tạo Unique Index:
+            // Với các profile MuseAI trùng account_identity, giữ lại profile cũ nhất ở Active,
+            // các profile duplicate chuyển sang QuarantinedDuplicate để không vi phạm partial unique index
+            migrationBuilder.Sql(@"
+                UPDATE ""ProviderAccount""
+                SET ""lifecycle"" = 'QuarantinedDuplicate'
+                WHERE ""id"" IN (
+                    SELECT pa1.""id""
+                    FROM ""ProviderAccount"" pa1
+                    JOIN ""ProviderAccount"" pa2 ON pa1.""provider_key"" = pa2.""provider_key""
+                                              AND pa1.""verified_identity"" = pa2.""verified_identity""
+                                              AND pa1.""id"" != pa2.""id""
+                    WHERE pa1.""verified_identity"" IS NOT NULL
+                      AND (pa1.""created_at_utc"" > pa2.""created_at_utc"" OR (pa1.""created_at_utc"" = pa2.""created_at_utc"" AND pa1.""id"" > pa2.""id""))
+                );
+            ");
 
             migrationBuilder.CreateTable(
                 name: "ExecutionBinding",

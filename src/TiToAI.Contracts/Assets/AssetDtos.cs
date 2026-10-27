@@ -36,6 +36,20 @@ public sealed record SelectReferenceImageResponse(
     AssetDto? Asset
 );
 
+public sealed record UploadAssetRequest(
+    string WorkspaceId,
+    string? ProjectId = null,
+    string AssetType = "Image", // Image | Audio
+    string? FileName = null,
+    string? Base64Data = null,
+    string? SourceFilePath = null
+);
+
+public sealed record UploadAssetResponse(
+    AssetDto? Asset,
+    bool Canceled = false
+);
+
 public sealed record GetAssetMetadataRequest(
     string AssetId,
     string WorkspaceId
@@ -49,4 +63,38 @@ public sealed record OpenFolderRequest(
 public sealed record OpenFolderResponse(
     bool Success,
     string? FolderPath = null
+);
+
+public sealed record ListAssetsRequest(
+    string WorkspaceId,
+    string? ProjectId = null,
+    string? AssetType = null,
+    int Page = 1,
+    int PageSize = 20,
+    string? Search = null
+);
+
+public sealed record ListAssetsResponse(
+    IReadOnlyList<AssetDto> Assets,
+    int TotalCount,
+    int Page,
+    int PageSize
+);
+
+public sealed record GetAssetPreviewRequest(
+    string AssetId,
+    string WorkspaceId
+);
+
+public sealed record GetAssetPreviewResponse(
+    string AssetId,
+    string WorkspaceId,
+    string AssetType,
+    string RelativePath,
+    string? MimeType,
+    long ByteSize,
+    string Sha256Hash,
+    bool FileExists,
+    bool IsRootOffline,
+    string Status
 );

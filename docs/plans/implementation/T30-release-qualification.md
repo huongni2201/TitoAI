@@ -1,5 +1,7 @@
 # Nghiệm thu phát hành: dữ liệu, tải, browser, UI và máy sạch
 
+> **Delta hiện hành:** [plan queue/Settings 1.2](../QUEUE_EXECUTION_SETTINGS_PLAN.md) thay popup Settings, nhóm account shared/private, connect tại Workspace và round-robin Workspace. Dùng [TASKS](../../agents/TASKS.md) cho trạng thái/gate; Baseline/checkbox dưới không là evidence đã chạy.
+
 - Task gốc: **T30** · Ưu tiên: **P0 / G4**.
 - Điều kiện mở: T24,T29 DONE; bằng chứng T26–T28 tích hợp.
 - Baseline 2026-10-26: Chưa có release qualification; build/smoke chưa thay bộ nghiệm thu.

@@ -3,12 +3,46 @@ import { projectApi, type ProjectSummaryDto } from "./projectApi";
 import { ProjectForm } from "./ProjectForm";
 import type { ErrorDto } from "../../contracts/bridge";
 import {
-  IconProject,
-  IconSearch,
-  IconPlus,
-  IconRefresh,
-  IconInfo,
-} from "../../components/Icons";
+  Card,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+  CardContent,
+  CardFooter,
+} from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogCancel,
+} from "@/components/ui/alert-dialog";
+import {
+  ArrowLeft,
+  Plus,
+  Search,
+  RefreshCw,
+  Loader2,
+  AlertCircle,
+  MoreHorizontal,
+  Pencil,
+  Trash2,
+  Info,
+  Film,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
 
 export interface ProjectListPageProps {
   workspaceId: string;
@@ -31,7 +65,7 @@ export function ProjectListPage({
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 
-  // Modals & Menu
+  // Modals & Form
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [formMode, setFormMode] = useState<"create" | "edit">("create");
   const [editingProject, setEditingProject] = useState<ProjectSummaryDto | null>(null);
@@ -40,8 +74,6 @@ export function ProjectListPage({
   const [deletingProject, setDeletingProject] = useState<ProjectSummaryDto | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-
-  const [activeMenuProjectId, setActiveMenuProjectId] = useState<string | null>(null);
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -82,18 +114,6 @@ export function ProjectListPage({
     };
   }, [fetchProjects]);
 
-  // Đóng action menu khi click ngoài
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest(".card-action-menu-wrapper")) {
-        setActiveMenuProjectId(null);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
-
   const filteredProjects = useMemo(() => {
     return projects.filter((prj) => {
       if (statusFilter !== "all" && prj.status !== statusFilter) {
@@ -132,70 +152,61 @@ export function ProjectListPage({
   };
 
   return (
-    <div className="view-projects" style={{ paddingBottom: "2rem" }}>
+    <div className="space-y-6 pb-10">
       {/* Header */}
-      <div
-        className="page-header"
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          marginBottom: "1.25rem",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div className="flex items-start sm:items-center gap-3">
           {onBackToWorkspaces && (
-            <button
+            <Button
               type="button"
-              className="btn btn-secondary btn-sm"
+              variant="outline"
+              size="sm"
               onClick={onBackToWorkspaces}
-              style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}
+              className="gap-1.5"
             >
-              ← Danh sách kênh
-            </button>
+              <ArrowLeft className="h-4 w-4" /> Danh sách kênh
+            </Button>
           )}
           <div>
-            <h2 className="page-title" style={{ fontSize: "1.5rem", fontWeight: 700, margin: 0 }}>
+            <h2 className="text-2xl font-bold tracking-tight text-foreground">
               Dự Án Video
             </h2>
-            <p className="page-desc" style={{ color: "var(--text-secondary)", marginTop: "0.25rem" }}>
+            <p className="text-sm text-muted-foreground mt-0.5">
               Quản lý kịch bản phân cảnh, prompt chuyển động và video hoàn chỉnh cho kênh.
             </p>
           </div>
         </div>
 
-        <button
+        <Button
           type="button"
-          className="btn btn-primary"
           onClick={() => {
             setEditingProject(null);
             setFormMode("create");
             setIsFormOpen(true);
           }}
-          style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
+          className="gap-1.5 self-start sm:self-auto"
         >
-          <IconPlus size={16} /> Tạo Dự Án Mới
-        </button>
+          <Plus className="h-4 w-4" /> Tạo Dự Án Mới
+        </Button>
       </div>
 
       {/* Filter & Search Bar */}
-      <div
-        className="filter-bar"
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          flexWrap: "wrap",
-          gap: "1rem",
-          marginBottom: "1.5rem",
-        }}
-      >
-        <div className="tab-group" role="tablist" aria-label="Lọc theo trạng thái dự án">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div
+          className="inline-flex h-9 items-center rounded-lg bg-muted p-1 text-muted-foreground w-fit overflow-x-auto"
+          role="tablist"
+          aria-label="Lọc theo trạng thái dự án"
+        >
           <button
             type="button"
             role="tab"
             aria-selected={statusFilter === "all"}
-            className={`filter-tab ${statusFilter === "all" ? "active" : ""}`}
+            className={cn(
+              "inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-xs font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+              statusFilter === "all"
+                ? "bg-background text-foreground shadow-xs"
+                : "text-muted-foreground hover:text-foreground"
+            )}
             onClick={() => setStatusFilter("all")}
           >
             Tất cả ({projects.length})
@@ -204,7 +215,12 @@ export function ProjectListPage({
             type="button"
             role="tab"
             aria-selected={statusFilter === "InProgress"}
-            className={`filter-tab ${statusFilter === "InProgress" ? "active" : ""}`}
+            className={cn(
+              "inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-xs font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+              statusFilter === "InProgress"
+                ? "bg-background text-foreground shadow-xs"
+                : "text-muted-foreground hover:text-foreground"
+            )}
             onClick={() => setStatusFilter("InProgress")}
           >
             Đang sản xuất ({projects.filter((p) => p.status === "InProgress").length})
@@ -213,7 +229,12 @@ export function ProjectListPage({
             type="button"
             role="tab"
             aria-selected={statusFilter === "Completed"}
-            className={`filter-tab ${statusFilter === "Completed" ? "active" : ""}`}
+            className={cn(
+              "inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-xs font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+              statusFilter === "Completed"
+                ? "bg-background text-foreground shadow-xs"
+                : "text-muted-foreground hover:text-foreground"
+            )}
             onClick={() => setStatusFilter("Completed")}
           >
             Hoàn thành ({projects.filter((p) => p.status === "Completed").length})
@@ -222,277 +243,179 @@ export function ProjectListPage({
             type="button"
             role="tab"
             aria-selected={statusFilter === "Draft"}
-            className={`filter-tab ${statusFilter === "Draft" ? "active" : ""}`}
+            className={cn(
+              "inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-xs font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+              statusFilter === "Draft"
+                ? "bg-background text-foreground shadow-xs"
+                : "text-muted-foreground hover:text-foreground"
+            )}
             onClick={() => setStatusFilter("Draft")}
           >
             Nháp ({projects.filter((p) => p.status === "Draft").length})
           </button>
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-          <div style={{ position: "relative", minWidth: 260 }}>
-            <IconSearch
-              size={16}
-              style={{
-                position: "absolute",
-                left: 10,
-                top: "50%",
-                transform: "translateY(-50%)",
-                color: "var(--text-muted)",
-              }}
-            />
-            <input
+        <div className="flex items-center gap-2">
+          <div className="relative w-full md:w-72">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
               type="text"
-              className="form-control"
               placeholder="Tìm dự án theo tên hoặc mô tả…"
-              style={{ paddingLeft: "2rem" }}
+              className="pl-9 h-9"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
           </div>
 
-          <button
+          <Button
             type="button"
-            className="btn btn-secondary btn-icon"
+            variant="outline"
+            size="icon"
+            className="h-9 w-9 shrink-0"
             onClick={fetchProjects}
             title="Tải lại danh sách"
             disabled={isLoading}
           >
-            <IconRefresh size={16} className={isLoading ? "spin" : ""} />
-          </button>
+            <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} />
+          </Button>
         </div>
       </div>
 
       {/* Danh sách dự án */}
       {isLoading ? (
-        <div className="loading-card">
-          <IconRefresh size={28} className="spin" />
-          <p>Đang tải danh sách Dự án từ Host…</p>
-        </div>
+        <Card className="flex flex-col items-center justify-center p-12 text-center">
+          <Loader2 className="h-8 w-8 animate-spin text-primary mb-3" />
+          <p className="text-sm text-muted-foreground">Đang tải danh sách Dự án từ Host…</p>
+        </Card>
       ) : errorMessage ? (
-        <div className="empty-card error-card">
-          <h3>Không thể tải danh sách Dự án</h3>
-          <p>{errorMessage}</p>
-          <button type="button" className="btn btn-secondary" onClick={fetchProjects}>
-            <IconRefresh size={16} /> Thử lại
-          </button>
-        </div>
+        <Card className="p-8 text-center border-destructive/50 bg-destructive/5">
+          <AlertCircle className="h-10 w-10 text-destructive mx-auto mb-3" />
+          <h3 className="text-lg font-semibold text-foreground mb-1">Không thể tải danh sách Dự án</h3>
+          <p className="text-sm text-muted-foreground mb-4">{errorMessage}</p>
+          <Button variant="outline" onClick={fetchProjects}>
+            <RefreshCw className="mr-2 h-4 w-4" /> Thử lại
+          </Button>
+        </Card>
       ) : projects.length === 0 ? (
-        <div className="empty-card">
-          <div className="empty-icon">
-            <IconProject size={44} />
+        <Card className="flex flex-col items-center justify-center p-12 text-center">
+          <div className="rounded-full bg-primary/10 p-4 mb-4 text-primary">
+            <Film className="h-10 w-10" />
           </div>
-          <h3>Chưa có dự án nào trong kênh này</h3>
-          <p>
+          <h3 className="text-lg font-semibold text-foreground mb-1">Chưa có dự án nào trong kênh này</h3>
+          <p className="text-sm text-muted-foreground max-w-md mb-4">
             Hãy tạo dự án video đầu tiên để bắt đầu xây dựng kịch bản phân cảnh và tự động sinh prompt.
           </p>
-          <button
-            type="button"
-            className="btn btn-primary"
-            style={{ marginTop: "1rem" }}
+          <Button
             onClick={() => {
               setEditingProject(null);
               setFormMode("create");
               setIsFormOpen(true);
             }}
           >
-            <IconPlus size={16} /> Tạo Dự Án Mới
-          </button>
-        </div>
+            <Plus className="mr-2 h-4 w-4" /> Tạo Dự Án Mới
+          </Button>
+        </Card>
       ) : filteredProjects.length === 0 ? (
-        <div className="empty-card">
-          <h3>Không có dự án phù hợp</h3>
-          <p>Không tìm thấy dự án nào khớp với điều kiện lọc hiện tại.</p>
-          <button
-            type="button"
-            className="btn btn-secondary"
+        <Card className="flex flex-col items-center justify-center p-12 text-center">
+          <h3 className="text-lg font-semibold text-foreground mb-1">Không có dự án phù hợp</h3>
+          <p className="text-sm text-muted-foreground mb-4">Không tìm thấy dự án nào khớp với điều kiện lọc hiện tại.</p>
+          <Button
+            variant="outline"
             onClick={() => {
               setStatusFilter("all");
               setSearchQuery("");
             }}
           >
             Xóa bộ lọc tìm kiếm
-          </button>
-        </div>
+          </Button>
+        </Card>
       ) : (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))",
-            gap: "1.25rem",
-          }}
-        >
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-5">
           {filteredProjects.map((prj) => {
-            const isMenuOpen = activeMenuProjectId === prj.projectId;
             return (
-              <div
+              <Card
                 key={prj.projectId}
-                style={{
-                  backgroundColor: "var(--surface-card)",
-                  border: "1px solid var(--border-subtle)",
-                  borderRadius: "var(--radius-lg)",
-                  padding: "1.25rem",
-                  display: "flex",
-                  flexDirection: "column",
-                  justifyContent: "space-between",
-                  boxShadow: "0 2px 8px rgba(0, 0, 0, 0.06)",
-                }}
+                className="flex flex-col justify-between hover:border-primary/50 transition-colors shadow-xs"
               >
-                <div>
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "flex-start",
-                      gap: "0.5rem",
-                      marginBottom: "0.5rem",
-                    }}
-                  >
-                    <h4
-                      style={{
-                        margin: 0,
-                        fontSize: "1.05rem",
-                        fontWeight: 700,
-                        color: "var(--text-primary)",
-                      }}
-                    >
+                <CardHeader className="p-5 pb-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <CardTitle className="text-base font-bold text-foreground line-clamp-1">
                       {prj.name}
-                    </h4>
+                    </CardTitle>
 
-                    <div className="card-action-menu-wrapper" style={{ position: "relative" }}>
-                      <button
-                        type="button"
-                        className="btn-icon"
-                        style={{ width: 28, height: 28 }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setActiveMenuProjectId(isMenuOpen ? null : prj.projectId);
-                        }}
-                        aria-label="Tùy chọn"
-                      >
-                        ···
-                      </button>
-
-                      {isMenuOpen && (
-                        <div
-                          style={{
-                            position: "absolute",
-                            right: 0,
-                            top: 32,
-                            width: 150,
-                            backgroundColor: "var(--surface-card)",
-                            border: "1px solid var(--border)",
-                            borderRadius: "var(--radius-md)",
-                            boxShadow: "var(--shadow-dropdown)",
-                            zIndex: 20,
-                            display: "flex",
-                            flexDirection: "column",
-                            padding: "0.25rem 0",
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 -mr-2 text-muted-foreground hover:text-foreground shrink-0"
+                        >
+                          <MoreHorizontal className="h-4 w-4" />
+                          <span className="sr-only">Tùy chọn</span>
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem
+                          onClick={() => {
+                            setEditingProject(prj);
+                            setFormMode("edit");
+                            setIsFormOpen(true);
                           }}
                         >
-                          <button
-                            type="button"
-                            style={{
-                              background: "none",
-                              border: "none",
-                              padding: "0.5rem 0.85rem",
-                              textAlign: "left",
-                              fontSize: "0.82rem",
-                              color: "var(--text-primary)",
-                              cursor: "pointer",
-                            }}
-                            onClick={() => {
-                              setActiveMenuProjectId(null);
-                              setEditingProject(prj);
-                              setFormMode("edit");
-                              setIsFormOpen(true);
-                            }}
-                          >
-                            ✏️ Sửa thông tin
-                          </button>
-                          <button
-                            type="button"
-                            style={{
-                              background: "none",
-                              border: "none",
-                              padding: "0.5rem 0.85rem",
-                              textAlign: "left",
-                              fontSize: "0.82rem",
-                              color: "var(--status-error)",
-                              cursor: "pointer",
-                            }}
-                            onClick={() => {
-                              setActiveMenuProjectId(null);
-                              setDeletingProject(prj);
-                              setDeleteError(null);
-                            }}
-                          >
-                            🗑️ Xóa dự án
-                          </button>
-                        </div>
-                      )}
-                    </div>
+                          <Pencil className="mr-2 h-4 w-4" /> Sửa thông tin
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          className="text-destructive focus:text-destructive"
+                          onClick={() => {
+                            setDeletingProject(prj);
+                            setDeleteError(null);
+                          }}
+                        >
+                          <Trash2 className="mr-2 h-4 w-4" /> Xóa dự án
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
 
-                  <p
-                    style={{
-                      margin: "0 0 0.85rem 0",
-                      fontSize: "0.82rem",
-                      color: "var(--text-secondary)",
-                      lineHeight: 1.45,
-                    }}
-                  >
+                  <CardDescription className="line-clamp-2 text-xs leading-relaxed mt-1">
                     {prj.description || "Chưa có mô tả chi tiết."}
-                  </p>
+                  </CardDescription>
+                </CardHeader>
 
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      fontSize: "0.8rem",
-                      marginBottom: "1rem",
-                    }}
-                  >
-                    <span className="badge badge-neutral">
-                      🎬 {prj.sceneCount} cảnh
-                    </span>
-                    <span
-                      className={`badge ${
+                <CardContent className="p-5 pt-0 pb-3">
+                  <div className="flex items-center justify-between text-xs">
+                    <Badge variant="secondary" className="gap-1 font-medium">
+                      <Film className="h-3 w-3 text-muted-foreground" />
+                      {prj.sceneCount} cảnh
+                    </Badge>
+                    <Badge
+                      variant={
                         prj.status === "Completed"
-                          ? "badge-success"
+                          ? "success"
                           : prj.status === "InProgress"
-                          ? "badge-info"
-                          : "badge-neutral"
-                      }`}
+                          ? "info"
+                          : "secondary"
+                      }
                     >
                       ● {prj.status}
-                    </span>
+                    </Badge>
                   </div>
-                </div>
+                </CardContent>
 
-                <div
-                  style={{
-                    borderTop: "1px solid var(--border-subtle)",
-                    paddingTop: "0.75rem",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                  }}
-                >
-                  <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                <CardFooter className="p-5 pt-3 border-t border-border flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground">
                     Cập nhật: {new Date(prj.updatedAtUtc).toLocaleDateString("vi-VN")}
                   </span>
 
-                  <button
+                  <Button
                     type="button"
-                    className="btn btn-primary btn-sm"
+                    size="sm"
                     onClick={() => onSelectProject(prj.projectId)}
                   >
                     Mở dự án →
-                  </button>
-                </div>
-              </div>
+                  </Button>
+                </CardFooter>
+              </Card>
             );
           })}
         </div>
@@ -512,88 +435,60 @@ export function ProjectListPage({
       />
 
       {/* Modal xác nhận xóa */}
-      {deletingProject && (
-        <div
-          className="modal-backdrop"
-          role="presentation"
-          onClick={(e) => {
-            if (e.target === e.currentTarget && !isDeleting) {
-              setDeletingProject(null);
-            }
-          }}
-        >
-          <div
-            className="modal-container"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="delete-prj-dialog-title"
-            style={{ maxWidth: 460 }}
-          >
-            <div className="modal-header">
-              <h3 id="delete-prj-dialog-title" style={{ margin: 0, color: "var(--status-error)" }}>
-                Xác nhận xóa Dự Án
-              </h3>
-            </div>
-            <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+      <AlertDialog
+        open={!!deletingProject}
+        onOpenChange={(open) => {
+          if (!open && !isDeleting) {
+            setDeletingProject(null);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-destructive">
+              Xác nhận xóa Dự Án
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-3 text-sm">
               {deleteError && (
-                <div
-                  className="notice-box"
-                  style={{
-                    backgroundColor: "rgba(239, 68, 68, 0.12)",
-                    border: "1px solid var(--status-error)",
-                    color: "var(--status-error)",
-                  }}
-                  role="alert"
-                >
-                  <span>⚠️</span>
-                  <div>{deleteError}</div>
-                </div>
+                <Alert variant="destructive">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription>{deleteError}</AlertDescription>
+                </Alert>
               )}
-              <p style={{ margin: 0 }}>
-                Bạn có chắc chắn muốn xóa dự án <strong>{deletingProject.name}</strong>?
-              </p>
-              <div
-                className="notice-box info"
-                style={{
-                  backgroundColor: "rgba(239, 68, 68, 0.08)",
-                  border: "1px solid var(--border)",
-                  color: "var(--text-secondary)",
-                }}
-              >
-                <IconInfo size={16} />
-                <div>
+              <span className="block text-foreground">
+                Bạn có chắc chắn muốn xóa dự án <strong>{deletingProject?.name}</strong>?
+              </span>
+              <Alert variant="default" className="bg-muted/40">
+                <Info className="h-4 w-4 text-muted-foreground" />
+                <AlertDescription className="text-xs text-muted-foreground">
                   Toàn bộ các cảnh và tài nguyên phân cảnh trong dự án này sẽ bị xóa.
-                </div>
-              </div>
-            </div>
-            <div className="modal-footer" style={{ justifyContent: "flex-end", gap: "0.5rem" }}>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => setDeletingProject(null)}
-                disabled={isDeleting}
-              >
-                Hủy
-              </button>
-              <button
-                type="button"
-                className="btn btn-primary"
-                style={{ backgroundColor: "var(--status-error)" }}
-                onClick={handleDelete}
-                disabled={isDeleting}
-              >
-                {isDeleting ? (
-                  <>
-                    <IconRefresh size={16} className="spin" /> Đang xóa…
-                  </>
-                ) : (
-                  "Xác nhận xóa"
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+                </AlertDescription>
+              </Alert>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              disabled={isDeleting}
+              onClick={() => setDeletingProject(null)}
+            >
+              Hủy
+            </AlertDialogCancel>
+            <Button
+              variant="destructive"
+              disabled={isDeleting}
+              onClick={handleDelete}
+            >
+              {isDeleting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Đang xóa…
+                </>
+              ) : (
+                "Xác nhận xóa"
+              )}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

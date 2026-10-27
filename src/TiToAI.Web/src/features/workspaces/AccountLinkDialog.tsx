@@ -2,7 +2,20 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { workspaceApi, type AccountDto } from "./workspaceApi";
 import { browserManagerApi, type BrowserProfileDto } from "../browsers/browserManagerApi";
 import type { ErrorDto } from "../../contracts/bridge";
-import { IconClose, IconRefresh, IconCheck, IconInfo } from "../../components/Icons";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Label } from "@/components/ui/label";
+import { IconTikTok } from "../../components/Icons";
+import { AlertTriangle, CheckCircle2, Info, Loader2, Sparkles } from "lucide-react";
 
 export interface AccountLinkDialogProps {
   isOpen: boolean;
@@ -154,166 +167,108 @@ export function AccountLinkDialog({
     }
   };
 
-  if (!isOpen) return null;
-
   // Lọc profile hợp lệ cho provider đang chọn
   const candidateProfiles = profiles.filter(
     (p) => p.kind === selectedProvider || p.kind === "SharedAI",
   );
 
   return (
-    <div
-      className="modal-backdrop"
-      role="presentation"
-      onClick={(e) => {
-        if (e.target === e.currentTarget && !isLinking && !unlinkingAccountId) {
+    <Dialog
+      open={isOpen}
+      onOpenChange={(open) => {
+        if (!open && !isLinking && !unlinkingAccountId) {
           onClose();
         }
       }}
     >
-      <div
-        className="modal-container"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="account-link-title"
-        style={{ maxWidth: 560 }}
-      >
-        <div className="modal-header">
-          <div className="modal-title-group">
-            <h2 id="account-link-title">Liên Kết Tài Khoản Mạng Xã Hội & AI</h2>
-            <p className="modal-subtitle">
-              Không gian làm việc: <strong>{workspaceName || workspaceId}</strong>
-            </p>
-          </div>
-          <button
-            type="button"
-            className="btn-icon"
-            onClick={onClose}
-            disabled={isLinking || !!unlinkingAccountId}
-            aria-label="Đóng"
-          >
-            <IconClose size={18} />
-          </button>
-        </div>
+      <DialogContent className="sm:max-w-[560px]">
+        <DialogHeader>
+          <DialogTitle className="text-xl font-bold tracking-tight">
+            Liên Kết Tài Khoản Mạng Xã Hội & AI
+          </DialogTitle>
+          <DialogDescription className="text-sm text-muted-foreground">
+            Không gian làm việc: <strong className="text-foreground">{workspaceName || workspaceId}</strong>
+          </DialogDescription>
+        </DialogHeader>
 
-        <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
+        <div className="space-y-4 py-1">
           {errorMessage && (
-            <div
-              className="notice-box"
-              style={{
-                backgroundColor: "rgba(239, 68, 68, 0.12)",
-                border: "1px solid var(--status-error)",
-                color: "var(--status-error)",
-              }}
-              role="alert"
-            >
-              <span>⚠️</span>
-              <div>{errorMessage}</div>
-            </div>
+            <Alert variant="destructive">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertDescription>{errorMessage}</AlertDescription>
+            </Alert>
           )}
 
           {successMessage && (
-            <div
-              className="notice-box"
-              style={{
-                backgroundColor: "rgba(34, 197, 94, 0.12)",
-                border: "1px solid var(--status-success)",
-                color: "var(--status-success)",
-              }}
-              role="status"
-            >
-              <IconCheck size={16} />
-              <div>{successMessage}</div>
-            </div>
+            <Alert variant="success">
+              <CheckCircle2 className="h-4 w-4" />
+              <AlertDescription>{successMessage}</AlertDescription>
+            </Alert>
           )}
 
           {/* Danh sách tài khoản đã liên kết */}
-          <div>
-            <h4 style={{ margin: "0 0 0.5rem 0", fontSize: "0.9rem", color: "var(--text-primary)" }}>
+          <div className="space-y-2">
+            <h4 className="text-sm font-semibold text-foreground">
               Tài khoản đang liên kết ({accounts.length})
             </h4>
 
             {isLoading ? (
-              <div className="loading-card" style={{ padding: "1rem" }}>
-                <IconRefresh size={18} className="spin" />
-                <span style={{ fontSize: "0.85rem" }}>Đang tải danh sách tài khoản…</span>
+              <div className="flex items-center justify-center gap-2 rounded-lg border border-border bg-muted/20 p-4 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span>Đang tải danh sách tài khoản…</span>
               </div>
             ) : accounts.length === 0 ? (
-              <div
-                style={{
-                  padding: "1rem",
-                  backgroundColor: "var(--surface-card-subtle)",
-                  borderRadius: "var(--radius-md)",
-                  border: "1px dashed var(--border)",
-                  textAlign: "center",
-                  fontSize: "0.85rem",
-                  color: "var(--text-muted)",
-                }}
-              >
+              <div className="rounded-lg border border-dashed border-border bg-muted/20 p-4 text-center text-sm text-muted-foreground">
                 Chưa có tài khoản nào được liên kết với Workspace này.
               </div>
             ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+              <div className="space-y-2">
                 {accounts.map((acc) => {
                   const isConnected = acc.status === "Connected";
                   return (
                     <div
                       key={acc.accountId}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        padding: "0.75rem 1rem",
-                        backgroundColor: "var(--surface-card-subtle)",
-                        border: "1px solid var(--border-subtle)",
-                        borderRadius: "var(--radius-md)",
-                      }}
+                      className="flex items-center justify-between rounded-lg border border-border bg-card p-3 shadow-xs"
                     >
-                      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                      <div className="flex items-center gap-3">
                         <div
-                          style={{
-                            width: 32,
-                            height: 32,
-                            borderRadius: "50%",
-                            backgroundColor:
-                              acc.provider === "TikTok" ? "#000000" : "var(--accent-subtle)",
-                            color: acc.provider === "TikTok" ? "#ffffff" : "var(--accent)",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            fontWeight: 700,
-                            fontSize: "0.8rem",
-                          }}
+                          className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold ${
+                            acc.provider === "TikTok"
+                              ? "bg-black text-white dark:bg-white dark:text-black"
+                              : "bg-primary/15 text-primary"
+                          }`}
                         >
-                          {acc.provider === "TikTok" ? "TT" : "AI"}
+                          {acc.provider === "TikTok" ? (
+                            <IconTikTok size={14} />
+                          ) : (
+                            <Sparkles className="h-4 w-4" />
+                          )}
                         </div>
                         <div>
-                          <div style={{ fontWeight: 600, color: "var(--text-primary)", fontSize: "0.85rem" }}>
+                          <div className="text-sm font-semibold text-foreground">
                             {acc.provider} — {acc.accountIdentity || acc.profileId}
                           </div>
-                          <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                          <div className="text-xs text-muted-foreground">
                             Profile: {acc.profileId}
                           </div>
                         </div>
                       </div>
 
-                      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-                        <span
-                          className={`badge ${isConnected ? "badge-success" : "badge-neutral"}`}
-                          style={{ textTransform: "capitalize" }}
-                        >
+                      <div className="flex items-center gap-2">
+                        <Badge variant={isConnected ? "success" : "secondary"}>
                           {isConnected ? "● Đã kết nối" : `● ${acc.status}`}
-                        </span>
+                        </Badge>
 
-                        <button
+                        <Button
                           type="button"
-                          className="btn btn-secondary btn-sm"
-                          style={{ color: "var(--status-error)" }}
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
                           onClick={() => handleUnlink(acc.accountId, acc.provider)}
                           disabled={unlinkingAccountId === acc.accountId}
                         >
                           {unlinkingAccountId === acc.accountId ? "Đang hủy…" : "Hủy liên kết"}
-                        </button>
+                        </Button>
                       </div>
                     </div>
                   );
@@ -322,57 +277,73 @@ export function AccountLinkDialog({
             )}
           </div>
 
-          <hr style={{ border: "none", borderTop: "1px solid var(--border-subtle)", margin: 0 }} />
+          <div className="h-px bg-border" />
 
           {/* Form thêm liên kết mới */}
-          <form onSubmit={handleLink} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-            <h4 style={{ margin: 0, fontSize: "0.9rem", color: "var(--text-primary)" }}>
+          <form onSubmit={handleLink} className="space-y-4">
+            <h4 className="text-sm font-semibold text-foreground">
               + Thêm liên kết tài khoản mới
             </h4>
 
             {/* Chọn Provider */}
-            <div className="form-group">
-              <label>Nhà cung cấp / Nền tảng</label>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground">Nhà cung cấp / Nền tảng</Label>
+              <div className="grid grid-cols-2 gap-3">
                 <button
                   type="button"
-                  className={`theme-option-card ${selectedProvider === "MuseAI" ? "selected" : ""}`}
-                  style={{ padding: "0.75rem", cursor: "pointer" }}
+                  className={`flex flex-col items-start rounded-lg border p-3 text-left transition-all ${
+                    selectedProvider === "MuseAI"
+                      ? "border-primary bg-primary/10 text-foreground ring-1 ring-primary"
+                      : "border-border bg-card text-muted-foreground hover:bg-accent hover:text-foreground"
+                  }`}
                   onClick={() => handleProviderChange("MuseAI")}
                 >
-                  <div style={{ fontWeight: 600, fontSize: "0.85rem" }}>MuseAI Video</div>
-                  <p style={{ fontSize: "0.75rem", margin: "0.25rem 0 0 0" }}>Tự động render video từ prompt</p>
+                  <div className="flex items-center gap-1.5 text-sm font-semibold">
+                    <Sparkles className="h-4 w-4 text-primary" />
+                    MuseAI Video
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Tự động render video từ prompt
+                  </p>
                 </button>
+
                 <button
                   type="button"
-                  className={`theme-option-card ${selectedProvider === "TikTok" ? "selected" : ""}`}
-                  style={{ padding: "0.75rem", cursor: "pointer" }}
+                  className={`flex flex-col items-start rounded-lg border p-3 text-left transition-all ${
+                    selectedProvider === "TikTok"
+                      ? "border-primary bg-primary/10 text-foreground ring-1 ring-primary"
+                      : "border-border bg-card text-muted-foreground hover:bg-accent hover:text-foreground"
+                  }`}
                   onClick={() => handleProviderChange("TikTok")}
                 >
-                  <div style={{ fontWeight: 600, fontSize: "0.85rem" }}>TikTok Channel</div>
-                  <p style={{ fontSize: "0.75rem", margin: "0.25rem 0 0 0" }}>Đăng tải video & phân tích kênh</p>
+                  <div className="flex items-center gap-1.5 text-sm font-semibold">
+                    <IconTikTok size={14} className="text-foreground" />
+                    TikTok Channel
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Đăng tải video & phân tích kênh
+                  </p>
                 </button>
               </div>
             </div>
 
             {/* Chọn Profile */}
-            <div className="form-group">
-              <label htmlFor="profile-select">Hồ sơ trình duyệt (Browser Profile)</label>
+            <div className="space-y-2">
+              <Label htmlFor="profile-select" className="text-xs text-muted-foreground">
+                Hồ sơ trình duyệt (Browser Profile)
+              </Label>
               {candidateProfiles.length === 0 ? (
-                <div
-                  className="notice-box info"
-                  style={{ fontSize: "0.8rem", padding: "0.5rem 0.75rem" }}
-                >
-                  <IconInfo size={16} />
-                  <div>
+                <Alert variant="info">
+                  <Info className="h-4 w-4" />
+                  <AlertDescription className="text-xs">
                     Chưa có hồ sơ trình duyệt nào cho nền tảng <strong>{selectedProvider}</strong>.
-                    Vui lòng vào tab <strong>Quản lý trình duyệt</strong> để khởi tạo hồ sơ và đăng nhập tài khoản.
-                  </div>
-                </div>
+                    Vui lòng vào <strong>Cài đặt → Tài khoản</strong> để khởi tạo hồ sơ và đăng nhập tài khoản.
+                  </AlertDescription>
+                </Alert>
               ) : (
                 <select
                   id="profile-select"
-                  className="form-control"
+                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                   value={selectedProfileId}
                   onChange={(e) => setSelectedProfileId(e.target.value)}
                   disabled={isLinking}
@@ -384,36 +355,38 @@ export function AccountLinkDialog({
                   ))}
                 </select>
               )}
-              <span className="field-hint">
+              <p className="text-xs text-muted-foreground">
                 Chọn hồ sơ đã đăng nhập để TiToAI có thể tự động đồng bộ mà không cần lưu mật khẩu.
-              </span>
+              </p>
             </div>
 
-            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "0.5rem" }}>
-              <button
+            <div className="flex justify-end pt-1">
+              <Button
                 type="submit"
-                className="btn btn-primary"
                 disabled={isLinking || !selectedProfileId || candidateProfiles.length === 0}
               >
                 {isLinking ? (
                   <>
-                    <IconRefresh size={16} className="spin" /> Đang liên kết…
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Đang liên kết…
                   </>
                 ) : (
                   `Xác nhận liên kết ${selectedProvider}`
                 )}
-              </button>
+              </Button>
             </div>
           </form>
         </div>
 
-        <div className="modal-footer">
-          <span className="footer-status">Hệ thống bảo vệ phiên đăng nhập an toàn qua Playwright</span>
-          <button type="button" className="btn btn-secondary" onClick={onClose}>
+        <DialogFooter className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3 pt-2">
+          <span className="text-xs text-muted-foreground">
+            Hệ thống bảo vệ phiên đăng nhập an toàn qua Playwright
+          </span>
+          <Button type="button" variant="outline" onClick={onClose}>
             Đóng
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

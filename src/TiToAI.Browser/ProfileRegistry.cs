@@ -49,6 +49,18 @@ public sealed class ProfileRegistry : IProfileRegistry
 
         if (entity == null) return null;
 
+        if (string.IsNullOrWhiteSpace(entity.ProviderKey))
+        {
+            var providerAccount = await db.ProviderAccounts
+                .AsNoTracking()
+                .FirstOrDefaultAsync(a => a.ProfileId == profileId, cancellationToken);
+
+            if (providerAccount != null && !string.IsNullOrWhiteSpace(providerAccount.ProviderKey))
+            {
+                entity.ProviderKey = providerAccount.ProviderKey;
+            }
+        }
+
         return MapToInfo(entity);
     }
 
