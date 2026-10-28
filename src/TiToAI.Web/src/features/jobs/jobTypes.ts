@@ -54,6 +54,7 @@ export type JobReasonCode =
   | "canceled_late_result"
   | "tab_capacity_unavailable"
   | "waiting_for_capacity"
+  | "waiting_for_reconcile"
   | "global_job_budget_reached"
   | "lease_expired_retry"
   | "reconcile_rejected"
@@ -75,6 +76,7 @@ export interface JobSummaryDto {
   profileId?: string | null;
   isHydrating?: boolean;
   resultReference?: string | null;
+  resultText?: string | null;
   progressPercent: number | null;
   currentStep: string | null;
   revision?: number;
@@ -348,6 +350,8 @@ export function formatReasonCode(reasonCode?: string | null): string {
       return "Tài khoản hiện đang bận hết tab đồng thời. Đang chờ tab rảnh.";
     case "waiting_for_capacity":
       return "Đang chờ tài khoản AI khả dụng hoặc giải phóng hạn ngạch.";
+    case "waiting_for_reconcile":
+      return "Đang chờ tác vụ cần đối soát trên cùng tài khoản AI được xử lý xong.";
     case "global_job_budget_reached":
       return "Đạt giới hạn tác vụ đồng thời toàn ứng dụng.";
     case "lease_expired_retry":

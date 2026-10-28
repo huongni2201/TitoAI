@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using TiToAI.Application.Jobs;
+using TiToAI.Application.Providers;
 using TiToAI.Contracts.Content;
 using TiToAI.Contracts.Jobs;
 using TiToAI.Contracts.Scenes;
@@ -312,8 +313,7 @@ public sealed partial class ProjectWorkflowService
                 }, cancellationToken).ConfigureAwait(false);
             }
 
-            // Pause at ReadyForVideo until the real video adapter has been verified.
-            // The selected image and motion prompt remain persisted for a later render job.
+            // The selected image and motion prompt stay persisted; the render is enqueued once after the commit below.
         }
         // 4. Áp dụng kết quả VideoRender -> Lưu video và kiểm tra hoàn tất run
         else if (job.TaskType == JobTaskType.VideoRender)
@@ -445,6 +445,14 @@ public sealed partial class ProjectWorkflowService
 
         // ATOMIC TRANSACTION: Commit scene changes + applied marker + continuation intent
         await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await new JobActivityLog(_dbOptions).WriteAsync(job.Id, "result", "Đã lưu kết quả vào CSDL và cập nhật bảng dự án.", cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Nhật ký chỉ phục vụ theo dõi; lỗi ghi log không được chặn dispatch continuation đã commit.
+        }
 
         // Dispatch continuation intent nếu có
         if (continuationIntent != null && _jobService != null)
@@ -474,7 +482,157 @@ public sealed partial class ProjectWorkflowService
             }
         }
 
+        if (job.TaskType == JobTaskType.VideoPrompt && !isPaused)
+        {
+            await TryAutoEnqueueVideoRenderAsync(job, cancellationToken).ConfigureAwait(false);
+        }
+
         return true;
+    }
+
+    /// <summary>
+    /// Khi mọi phân cảnh đã có ảnh và prompt, đưa render một lần cho cả Project vào hàng đợi (MuseAI).
+    /// Khóa AppSettings theo run đảm bảo chỉ một lượt apply gửi render; bấm "Tạo video" vẫn là đường thủ công.
+    /// </summary>
+    private const int AutoRenderMaxRetries = 3;
+
+    private Task TryAutoEnqueueVideoRenderAsync(Job job, CancellationToken cancellationToken) =>
+        TryAutoEnqueueVideoRenderForProjectAsync(job.ProjectId, GetWorkflowRunId(job.ConfigSnapshotJson) ?? "none", job.Id, cancellationToken);
+
+    /// <summary>
+    /// Khởi động lại app: nếu run đang chạy mà render tự động chưa được đưa vào hàng đợi (app dừng sau khi apply VideoPrompt,
+    /// hoặc lần enqueue trước lỗi và đã bỏ khóa), thử lại. Khóa theo run vẫn ngăn gửi trùng.
+    /// </summary>
+    public async Task<int> RunAutoRenderRecoverySweepAsync(CancellationToken cancellationToken = default)
+    {
+        if (!MuseAiTrialMode.Enabled || _jobService == null) return 0;
+
+        await using var dbContext = new TiToAIDbContext(_dbOptions);
+        var configKeys = await dbContext.AppSettings.AsNoTracking()
+            .Where(s => s.Key.StartsWith("project.workflow.config.") && s.Value.Contains("\"runState\":\"Running\""))
+            .Select(s => s.Key)
+            .ToListAsync(cancellationToken).ConfigureAwait(false);
+
+        var recovered = 0;
+        foreach (var key in configKeys)
+        {
+            var projectId = key["project.workflow.config.".Length..];
+            try
+            {
+                var config = await GetWorkflowConfigAsync(projectId, cancellationToken).ConfigureAwait(false);
+                if (config.RunState != WorkflowRunState.Running || string.IsNullOrWhiteSpace(config.CurrentRunId) || config.FinalVideoAssetId != null)
+                {
+                    continue;
+                }
+                await TryAutoEnqueueVideoRenderForProjectAsync(projectId, config.CurrentRunId, null, cancellationToken).ConfigureAwait(false);
+                recovered++;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Một Project lỗi không chặn các Project khác; lần khởi động sau sẽ thử lại.
+            }
+        }
+        return recovered;
+    }
+
+    /// <summary>
+    /// Đưa render một lần cho cả Project khi mọi phân cảnh đã có ảnh và prompt. Khóa AppSettings theo run chặn gửi trùng.
+    /// Nếu enqueue lỗi, khóa được bỏ để lượt apply hoặc lần khởi động sau thử lại.
+    /// </summary>
+    private async Task TryAutoEnqueueVideoRenderForProjectAsync(string projectId, string runId, string? logJobId, CancellationToken cancellationToken, int attempt = 0)
+    {
+        if (!MuseAiTrialMode.Enabled || _jobService == null) return;
+
+        var claimKey = $"workflow.auto_render.{projectId}.{runId}";
+
+        await using var dbContext = new TiToAIDbContext(_dbOptions);
+        var scenes = await dbContext.Scenes.AsNoTracking()
+            .Where(s => s.ProjectId == projectId)
+            .ToListAsync(cancellationToken).ConfigureAwait(false);
+        var allReady = scenes.Count > 0 && scenes.All(s => !string.IsNullOrWhiteSpace(s.ImageAssetId) && !string.IsNullOrWhiteSpace(s.PromptText));
+        var anyPendingPrep = await dbContext.Jobs.AsNoTracking().AnyAsync(j =>
+            j.ProjectId == projectId &&
+            (j.TaskType == JobTaskType.Image || j.TaskType == JobTaskType.VideoPrompt) &&
+            (j.State == JobState.Queued || j.State == JobState.Reserved || j.State == JobState.Running || j.State == JobState.AwaitingUser),
+            cancellationToken).ConfigureAwait(false);
+        var anyPendingRender = await dbContext.Jobs.AsNoTracking().AnyAsync(j =>
+            j.ProjectId == projectId &&
+            j.TaskType == JobTaskType.VideoRender &&
+            (j.State == JobState.Queued || j.State == JobState.Reserved || j.State == JobState.Running || j.State == JobState.AwaitingUser),
+            cancellationToken).ConfigureAwait(false);
+        if (!allReady || anyPendingPrep || anyPendingRender) return;
+
+        dbContext.AppSettings.Add(new AppSetting { Key = claimKey, Value = runId, UpdatedAtUtc = DateTimeOffset.UtcNow.ToString("o") });
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (DbUpdateException)
+        {
+            return; // Lượt apply khác của cùng run đã giữ khóa.
+        }
+
+        try
+        {
+            await CreateSceneVideoAsync(new CreateSceneVideoRequest(projectId), cancellationToken).ConfigureAwait(false);
+            await WriteAutoRenderLogAsync(logJobId, "result", "Đã tự đưa render MuseAI vào hàng đợi cho Project.", cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            await ReleaseAutoRenderClaimAsync(claimKey, CancellationToken.None).ConfigureAwait(false);
+            await WriteAutoRenderLogAsync(logJobId, "error", $"Chưa tự động tạo video: {ex.Message}. Sẽ thử lại tự động; có thể bấm Tạo video.", CancellationToken.None).ConfigureAwait(false);
+            ScheduleAutoRenderRetry(projectId, runId, attempt);
+        }
+    }
+
+    /// <summary>
+    /// Thử lại render tự động sau lỗi enqueue, lùi dần 30s/60s/90s. Quá số lần thì để lượt apply, khởi động lại hoặc nút "Tạo video" xử lý.
+    /// </summary>
+    private void ScheduleAutoRenderRetry(string projectId, string runId, int attempt)
+    {
+        if (attempt >= AutoRenderMaxRetries) return;
+        var delay = TimeSpan.FromSeconds(30 * (attempt + 1));
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(delay).ConfigureAwait(false);
+                await TryAutoEnqueueVideoRenderForProjectAsync(projectId, runId, null, CancellationToken.None, attempt + 1).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Lượt thử kế tiếp hoặc lần khởi động sau sẽ xử lý.
+            }
+        });
+    }
+
+    private async Task ReleaseAutoRenderClaimAsync(string claimKey, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var dbContext = new TiToAIDbContext(_dbOptions);
+            var claim = await dbContext.AppSettings.FirstOrDefaultAsync(s => s.Key == claimKey, cancellationToken).ConfigureAwait(false);
+            if (claim is null) return;
+            dbContext.AppSettings.Remove(claim);
+            await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Khóa còn lại chỉ làm chậm lượt thử sau; không che lỗi enqueue gốc.
+        }
+    }
+
+    private async Task WriteAutoRenderLogAsync(string? jobId, string kind, string message, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(jobId)) return;
+        try
+        {
+            await new JobActivityLog(_dbOptions).WriteAsync(jobId, kind, message, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            /* Nhật ký chỉ phục vụ theo dõi. */
+        }
     }
 
     /// <summary>

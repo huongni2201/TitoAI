@@ -112,7 +112,7 @@ public static class PromptEngineSmokeTests
             Assert(dispatcher.IsCommandAllowed(command), $"{command} phải nằm trong allow-list.");
         var request = new RequestEnvelope(Guid.NewGuid(), "request", "prompt.save_template",
             JsonSerializer.SerializeToElement(new { purpose = "Image", name = "Ảnh", templateText = "{prompt}", variableDefinitionsJson = "invalid" }),
-            DateTimeOffset.UtcNow, "1.0.4");
+            DateTimeOffset.UtcNow, "1.1.0");
         var response = await dispatcher.DispatchAsync(request, CancellationToken.None);
         Assert(response.Success, "Lưu template qua bridge phải thành công.");
         await using var db = new TiToAIDbContext(fixture.Options);
@@ -120,7 +120,7 @@ public static class PromptEngineSmokeTests
             "Bridge không được cho client ghi đè định nghĩa biến.");
         var second = await new PromptTemplateService(db).SaveTemplateAsync(new PromptSaveTemplateRequest("Image", "Ảnh thứ hai", "Mẫu 2", null));
         var activate = new RequestEnvelope(Guid.NewGuid(), "request", "prompt.activate_template",
-            JsonSerializer.SerializeToElement(new PromptActivateTemplateRequest(second.Template.TemplateId)), DateTimeOffset.UtcNow, "1.0.4");
+            JsonSerializer.SerializeToElement(new PromptActivateTemplateRequest(second.Template.TemplateId)), DateTimeOffset.UtcNow, "1.1.0");
         var activated = await dispatcher.DispatchAsync(activate, CancellationToken.None);
         Assert(activated.Success, "Chọn mẫu qua bridge phải thành công.");
         await using var verify = new TiToAIDbContext(fixture.Options);

@@ -81,23 +81,26 @@ public sealed class GeminiPlaywrightAutomation
             var initialAssistantCount = await assistantMessages.CountAsync().ConfigureAwait(false);
             if (imagePaths.Count > 0)
             {
-                var fileInput = page.Locator("input[type='file']").First;
+                // Gemini renders its file inputs only after the upload menu opens; the first input is the document picker, so target the image one.
+                var fileInput = page.Locator("input[type='file'][accept*='image']").First;
                 if (await fileInput.CountAsync().ConfigureAwait(false) == 0)
                 {
                     var attach = page.Locator("button[aria-label*='Upload' i], button[aria-label*='Tải' i], button[aria-label*='Add files' i]").First;
                     await attach.ClickAsync().WaitAsync(ct).ConfigureAwait(false);
                 }
+                await fileInput.WaitForAsync(new() { State = WaitForSelectorState.Attached, Timeout = 15000 }).WaitAsync(ct).ConfigureAwait(false);
                 await fileInput.SetInputFilesAsync(imagePaths).WaitAsync(ct).ConfigureAwait(false);
                 await page.WaitForFunctionAsync(
-                    "expected => document.querySelector('input[type=file]')?.files?.length === expected",
+                    "expected => document.querySelector('input[type=file][accept*=image]')?.files?.length === expected",
                     imagePaths.Count, new() { Timeout = 30000 }).WaitAsync(ct).ConfigureAwait(false);
             }
             await composer.ClickAsync().WaitAsync(ct).ConfigureAwait(false);
             await page.Keyboard.InsertTextAsync(prompt).WaitAsync(ct).ConfigureAwait(false);
-            var send = page.Locator("button[aria-label*='Send' i], button[aria-label*='Gửi' i], button.send-button").First;
+            var send = page.Locator("button[aria-label*='Send' i]:visible, button[aria-label*='Gửi' i]:visible, button.send-button:visible").First;
             await send.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 10000 }).WaitAsync(ct).ConfigureAwait(false);
-            await page.WaitForFunctionAsync("() => { const button = document.querySelector('button[aria-label*=Send i], button[aria-label*=Gửi i], button.send-button'); return button && !button.disabled && button.getAttribute('aria-disabled') !== 'true'; }",
-                null, new() { Timeout = 30000 }).WaitAsync(ct).ConfigureAwait(false);
+            // Send is "Gửi tin nhắn" in Vietnamese UI; uploads can take well over 30 seconds, so wait longer.
+            await page.WaitForFunctionAsync("() => [...document.querySelectorAll('button[aria-label*=Send i], button[aria-label*=Gửi i], button.send-button')].some(button => button.getClientRects().length && !button.disabled && button.getAttribute('aria-disabled') !== 'true')",
+                null, new() { Timeout = 120000 }).WaitAsync(ct).ConfigureAwait(false);
             await beforeSubmit().ConfigureAwait(false);
             await _activity.WriteAsync(job.JobId, "submit", "Đã ghi checkpoint trước khi gửi.", ct).ConfigureAwait(false);
             submitted = true; // The checkpoint is durable before the click; an uncertain click must never be retried blindly.
@@ -109,7 +112,8 @@ public sealed class GeminiPlaywrightAutomation
                 initialAssistantCount, new() { Timeout = 120000 }).WaitAsync(ct).ConfigureAwait(false);
             var response = assistantMessages.Last;
             await response.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 120000 }).WaitAsync(ct).ConfigureAwait(false);
-            await page.Locator("button[aria-label*='Copy' i], button[aria-label*='Sao chép' i]").Last
+            // The prompt's own "Sao chép câu lệnh" button sits before the reply, so the copy gate is scoped to the reply container.
+            await page.Locator("response-container").Last.Locator("button[aria-label*='Copy' i], button[aria-label*='Sao chép' i]").First
                 .WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 180000 }).WaitAsync(ct).ConfigureAwait(false);
             if (job.TaskType == JobTaskType.Image)
             {
@@ -144,9 +148,9 @@ public sealed class GeminiPlaywrightAutomation
                     dataUrl = $"data:{contentType};base64,{Convert.ToBase64String(imageBytes)}";
                 }
                 var (fileName, base64) = ValidateGeneratedImage(dataUrl);
-                var uploaded = await _assets.UploadAssetAsync(new UploadAssetRequest(job.ProjectId, "Image", fileName, base64), ct).ConfigureAwait(false);
+                var uploaded = await _assets.UploadAssetAsync(new UploadAssetRequest(job.ProjectId, "Image", fileName, base64, StorageRootId: job.StorageRootId), ct).ConfigureAwait(false);
                 if (uploaded.Asset is null)
-                    return new(false, ResultReference: page.Url, ReasonCode: "asset_save_failed", ErrorMessage: "Không lưu được ảnh Gemini.", SideEffectSubmitted: true);
+                    return new(false, ReasonCode: "asset_save_failed", ErrorMessage: "Không lưu được ảnh Gemini.", SideEffectSubmitted: true);
                 await _activity.WriteAsync(job.JobId, "result", "Đã lưu ảnh kết quả thành Asset.", ct).ConfigureAwait(false);
                 return new(true, ResultReference: uploaded.Asset.AssetId, SideEffectSubmitted: true);
             }
@@ -164,22 +168,19 @@ public sealed class GeminiPlaywrightAutomation
         catch (PlaywrightException ex)
         {
             await RecordFailureAsync(job.JobId, submitted ? "Lỗi sau khi gửi; cần đối soát." : "Lỗi thao tác browser trước khi gửi.").ConfigureAwait(false);
-            return new(false, ResultReference: submitted ? page?.Url : null,
-                ReasonCode: submitted ? "reconcile_required" : "automation_blocked",
+            return new(false, ReasonCode: submitted ? "reconcile_required" : "automation_blocked",
                 ErrorMessage: $"Không thể hoàn tất thao tác Gemini Web: {ex.Message}", SideEffectSubmitted: submitted);
         }
         catch (TimeoutException ex)
         {
             await RecordFailureAsync(job.JobId, submitted ? "Hết thời gian sau khi gửi; cần đối soát." : "Hết thời gian trước khi gửi.").ConfigureAwait(false);
-            return new(false, ResultReference: submitted ? page?.Url : null,
-                ReasonCode: submitted ? "reconcile_required" : "automation_blocked",
+            return new(false, ReasonCode: submitted ? "reconcile_required" : "automation_blocked",
                 ErrorMessage: $"Quá thời gian chờ Gemini Web: {ex.Message}", SideEffectSubmitted: submitted);
         }
         catch (Exception ex)
         {
             await RecordFailureAsync(job.JobId, submitted ? "Tác vụ lỗi sau khi gửi; cần đối soát." : "Tác vụ lỗi trước khi gửi.").ConfigureAwait(false);
-            return new(false, ResultReference: submitted ? page?.Url : null,
-                ReasonCode: submitted ? "reconcile_required" : "automation_blocked",
+            return new(false, ReasonCode: submitted ? "reconcile_required" : "automation_blocked",
                 ErrorMessage: $"Không hoàn tất được tác vụ Gemini Web: {ex.Message}", SideEffectSubmitted: submitted);
         }
         finally

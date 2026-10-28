@@ -116,6 +116,7 @@ public static class VideoWorkflowSmokeTests
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine("FAIL");
             Console.WriteLine($"      -> Lỗi: {ex.GetType().Name}: {ex.Message}");
+            Console.WriteLine($"      -> Vị trí: {string.Join(" | ", (ex.StackTrace ?? "").Split('\n').Take(3))}");
             Console.ResetColor();
             _failCount++;
         }
@@ -748,7 +749,7 @@ public static class VideoWorkflowSmokeTests
                 Command: "workflow.get_config",
                 Payload: JsonSerializer.SerializeToElement(new { projectId = prjId }),
                 ClientTimestampUtc: DateTimeOffset.UtcNow,
-                ContractVersion: "1.0.4"
+                ContractVersion: "1.1.0"
             );
 
             var resGet = await dispatcher.DispatchAsync(reqGet, CancellationToken.None);
@@ -770,7 +771,7 @@ public static class VideoWorkflowSmokeTests
                     targetDurationPerSceneSeconds = 15
                 })).RootElement,
                 ClientTimestampUtc: DateTimeOffset.UtcNow,
-                ContractVersion: "1.0.4"
+                ContractVersion: "1.1.0"
             );
 
             var resSave = await dispatcher.DispatchAsync(reqSave, CancellationToken.None);
@@ -783,7 +784,7 @@ public static class VideoWorkflowSmokeTests
                 Command: "workflow.preview_ai_prompt",
                 Payload: JsonSerializer.SerializeToElement(new { projectId = prjId }),
                 ClientTimestampUtc: DateTimeOffset.UtcNow,
-                ContractVersion: "1.0.4"
+                ContractVersion: "1.1.0"
             );
             var resPreview = await dispatcher.DispatchAsync(reqPreview, CancellationToken.None);
             Assert(resPreview.Success, "workflow.preview_ai_prompt qua BridgeDispatcher phải trả Success = true.");
@@ -795,7 +796,7 @@ public static class VideoWorkflowSmokeTests
                 Command: "workflow.start",
                 Payload: JsonSerializer.SerializeToElement(new { projectId = prjId }),
                 ClientTimestampUtc: DateTimeOffset.UtcNow,
-                ContractVersion: "1.0.4"
+                ContractVersion: "1.1.0"
             );
 
             var resStart = await dispatcher.DispatchAsync(reqStart, CancellationToken.None);
@@ -808,7 +809,7 @@ public static class VideoWorkflowSmokeTests
                 Command: "workflow.list_scenes",
                 Payload: JsonSerializer.SerializeToElement(new { projectId = prjId }),
                 ClientTimestampUtc: DateTimeOffset.UtcNow,
-                ContractVersion: "1.0.4"
+                ContractVersion: "1.1.0"
             );
 
             var resList = await dispatcher.DispatchAsync(reqList, CancellationToken.None);
@@ -1170,7 +1171,7 @@ public static class VideoWorkflowSmokeTests
             }
             Assert(blockedLegacy5s, "Bắt đầu với duration 5s chưa được hỗ trợ phải bị chặn và yêu cầu chọn lại.");
 
-            // CD06: Thử chọn duration 30s (chưa xác minh direct clip 30s) -> Bị chặn
+            // CD06: 30s hiện là thời lượng provider hỗ trợ nên cấu hình được chấp nhận; cảnh 5s cũ vẫn chặn Start
             bool blocked30s = false;
             try
             {
@@ -1188,11 +1189,11 @@ public static class VideoWorkflowSmokeTests
                 ));
                 await service.StartWorkflowAsync(new StartProjectWorkflowRequest(prjId));
             }
-            catch (ProjectWorkflowValidationException ex) when (ex.Message.Contains("30 giây không được nhà cung cấp video hỗ trợ"))
+            catch (ProjectWorkflowValidationException ex) when (ex.Message.Contains("Cảnh 'Cảnh cũ 5s'"))
             {
                 blocked30s = true;
             }
-            Assert(blocked30s, "Duration 30s chưa xác minh trực tiếp phải bị chặn ở backend.");
+            Assert(blocked30s, "Cấu hình 30s được chấp nhận; Start vẫn phải bị chặn bởi cảnh 5s cũ.");
 
             // Cập nhật cảnh cũ và cấu hình sang 15s (hoặc 10s) theo capability MuseAI
             await service.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
@@ -1329,13 +1330,34 @@ public static class VideoWorkflowSmokeTests
             }
             await workflowService.ApplyJobOutputAsync(promptJobId);
 
-            // Adapter video chưa được xác minh: giữ prompt, không tự tạo job render.
+            // Đủ ảnh và prompt: tự đưa đúng một job render MuseAI vào hàng đợi.
             using (var db = new TiToAIDbContext(dbOptions))
             {
-                var renderJob = await db.Jobs.FirstOrDefaultAsync(j => j.SceneId == sceneId && j.TaskType == JobTaskType.VideoRender);
-                Assert(renderJob == null, "Không enqueue render khi adapter video chưa được xác minh.");
+                var renderJobs = await db.Jobs.Where(j => j.SceneId == sceneId && j.TaskType == JobTaskType.VideoRender).ToListAsync();
+                Assert(renderJobs.Count == 1, "Phải tự enqueue đúng một job render khi mọi đầu vào đã sẵn sàng.");
+                Assert(renderJobs[0].State == JobState.Queued, "Job render tự động phải ở trạng thái Queued.");
                 var scene = await db.Scenes.FirstAsync(s => s.Id == sceneId);
                 Assert(scene.PromptText == "Camera slow-motion 60fps trượt nhẹ ngang qua chi tiết cổ áo lụa xanh.", "Phải lưu prompt đã tạo.");
+            }
+
+            // Bấm lặp khi render còn chờ: phải bị chặn, không tạo thêm job.
+            bool duplicateBlocked = false;
+            try { await workflowService.CreateSceneVideoAsync(new CreateSceneVideoRequest(prjId)); }
+            catch (ProjectWorkflowValidationException) { duplicateBlocked = true; }
+            Assert(duplicateBlocked, "Bấm lặp khi render đang chờ phải bị chặn.");
+
+            // Tạo lại sau khi job render thất bại: phải tạo job mới, không replay job cũ.
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                var failedJob = await db.Jobs.FirstAsync(j => j.SceneId == sceneId && j.TaskType == JobTaskType.VideoRender);
+                failedJob.State = JobState.Failed;
+                await db.SaveChangesAsync();
+            }
+            await workflowService.CreateSceneVideoAsync(new CreateSceneVideoRequest(prjId));
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                var renderCount = await db.Jobs.CountAsync(j => j.SceneId == sceneId && j.TaskType == JobTaskType.VideoRender);
+                Assert(renderCount == 2, "Tạo lại sau job thất bại phải tạo job render mới, không replay job cũ.");
             }
         }
         finally

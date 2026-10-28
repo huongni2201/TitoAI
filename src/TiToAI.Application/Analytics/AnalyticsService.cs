@@ -343,15 +343,21 @@ public sealed class AnalyticsService : IAnalyticsService
 
         foreach (var group in groups)
         {
+            // Mỗi video chỉ lấy observation mới nhất trong nhóm; nhiều snapshot cùng ngày không được cộng dồn
+            var latestPerVideo = group
+                .GroupBy(r => r.VideoKey)
+                .Select(g => g.OrderByDescending(r => r.CapturedAtUtc).First())
+                .ToList();
+
             double? pointValue = metric switch
             {
-                "views" => group.Any(r => r.Views.HasValue) ? group.Sum(r => (double)r.Views.GetValueOrDefault()) : null,
-                "likes" => group.Any(r => r.Likes.HasValue) ? group.Sum(r => (double)r.Likes.GetValueOrDefault()) : null,
-                "comments" => group.Any(r => r.Comments.HasValue) ? group.Sum(r => (double)r.Comments.GetValueOrDefault()) : null,
-                "shares" => group.Any(r => r.Shares.HasValue) ? group.Sum(r => (double)r.Shares.GetValueOrDefault()) : null,
-                "gmv" => group.Any(r => r.GmvAmount.HasValue) ? (double)group.Sum(r => r.GmvAmount.GetValueOrDefault()) : null,
-                "clicks" => group.Any(r => r.AffiliateClicks.HasValue) ? group.Sum(r => (double)r.AffiliateClicks.GetValueOrDefault()) : null,
-                _ => group.Any(r => r.Views.HasValue) ? group.Sum(r => (double)r.Views.GetValueOrDefault()) : null
+                "views" => latestPerVideo.Any(r => r.Views.HasValue) ? latestPerVideo.Sum(r => (double)r.Views.GetValueOrDefault()) : null,
+                "likes" => latestPerVideo.Any(r => r.Likes.HasValue) ? latestPerVideo.Sum(r => (double)r.Likes.GetValueOrDefault()) : null,
+                "comments" => latestPerVideo.Any(r => r.Comments.HasValue) ? latestPerVideo.Sum(r => (double)r.Comments.GetValueOrDefault()) : null,
+                "shares" => latestPerVideo.Any(r => r.Shares.HasValue) ? latestPerVideo.Sum(r => (double)r.Shares.GetValueOrDefault()) : null,
+                "gmv" => latestPerVideo.Any(r => r.GmvAmount.HasValue) ? (double)latestPerVideo.Sum(r => r.GmvAmount.GetValueOrDefault()) : null,
+                "clicks" => latestPerVideo.Any(r => r.AffiliateClicks.HasValue) ? latestPerVideo.Sum(r => (double)r.AffiliateClicks.GetValueOrDefault()) : null,
+                _ => latestPerVideo.Any(r => r.Views.HasValue) ? latestPerVideo.Sum(r => (double)r.Views.GetValueOrDefault()) : null
             };
 
             points.Add(new AnalyticsTimeseriesPointDto(

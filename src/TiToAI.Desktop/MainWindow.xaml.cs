@@ -362,6 +362,7 @@ public partial class MainWindow : Window
             await jobService.RunCrashRecoverySweepAsync(ct).ConfigureAwait(false);
             await workflowService.RunWorkflowApplySweepAsync(ct).ConfigureAwait(false);
             await workflowService.RunWorkflowContinuationSweepAsync(ct).ConfigureAwait(false);
+            await workflowService.RunAutoRenderRecoverySweepAsync(ct).ConfigureAwait(false);
 
             _jobScheduler = scheduler;
             _jobStateChangedHandler = payload =>

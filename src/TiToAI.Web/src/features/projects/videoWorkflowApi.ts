@@ -54,6 +54,7 @@ export interface ProjectWorkflowConfigDto {
   updatedAtUtc: string;
   scriptPromptText?: string | null;
   videoPromptText?: string | null;
+  finalVideoAssetId?: string | null;
 }
 
 export interface SaveProjectWorkflowConfigRequest {
@@ -142,6 +143,8 @@ export interface VideoContentItemDto {
   status: string;
   createdAtUtc: string;
   updatedAtUtc: string;
+  contentText?: string | null;
+  imagePrompt?: string | null;
 }
 
 export interface StoryboardContent {
@@ -238,11 +241,18 @@ export const videoWorkflowApi = {
   },
 
   async listContentItems(projectId: string): Promise<VideoContentItemDto[]> {
-    const res = await bridgeClient.invoke<{ items: VideoContentItemDto[] }>(
-      "workflow.list_content_items",
-      { projectId },
-    );
-    return res?.items || [];
+    // Backend trả mảng thuần và giữ tên snake_case của schema AI cho kịch bản/prompt
+    const items = await bridgeClient.invoke<
+      (Omit<VideoContentItemDto, "videoScript" | "videoPrompt"> & {
+        video_script?: string;
+        video_prompt?: string;
+      })[]
+    >("workflow.list_content_items", { projectId });
+    return (items ?? []).map((item) => ({
+      ...item,
+      videoScript: item.video_script ?? "",
+      videoPrompt: item.video_prompt ?? "",
+    }));
   },
 
   async updateContentItem(req: UpdateVideoContentItemRequest): Promise<VideoContentItemDto> {

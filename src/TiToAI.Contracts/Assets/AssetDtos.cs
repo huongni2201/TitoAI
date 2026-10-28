@@ -38,7 +38,8 @@ public sealed record UploadAssetRequest(
     string AssetType = "Image", // Image | Audio
     string? FileName = null,
     string? Base64Data = null,
-    string? SourceFilePath = null
+    string? SourceFilePath = null,
+    string? StorageRootId = null // Root đã chụp trong job; null thì dùng Settings hiện hành
 );
 
 public sealed record UploadAssetResponse(

@@ -20,8 +20,9 @@ namespace TiToAI.Application.Providers;
 public sealed class MuseAiPlaywrightAutomation
 {
     private const string NewChatUrl = "https://muse.ai/thread/new";
+    private const string AttachSnapshotScript = "() => JSON.stringify({ blobImages: document.querySelectorAll('img[src^=\"blob:\"]').length, fileInputs: [...document.querySelectorAll(\"input[type='file']\")].map(i => ({ multiple: i.multiple, files: i.files.length })) })";
     private static readonly Regex ThreadUrl = new(@"/thread/[0-9a-f-]{36}$", RegexOptions.IgnoreCase);
-    private static readonly float RenderTimeoutMs = (float)TimeSpan.FromMinutes(25).TotalMilliseconds;
+    private static readonly float RenderTimeoutMs = (float)TimeSpan.FromMinutes(30).TotalMilliseconds;
 
     private readonly IBrowserProcessController _browser;
     private readonly IProfileRegistry _profiles;
@@ -76,8 +77,18 @@ public sealed class MuseAiPlaywrightAutomation
             var composer = page.Locator("textarea[placeholder='Message']");
             await composer.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 20000 }).WaitAsync(ct).ConfigureAwait(false);
             await page.Locator("input[type='file']").First.SetInputFilesAsync(imagePaths.ToArray()).WaitAsync(ct).ConfigureAwait(false);
-            await page.WaitForFunctionAsync("n => document.querySelectorAll('img[src^=\"blob:\"]').length >= n",
-                imagePaths.Count, new() { Timeout = 60000 }).WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                await page.WaitForFunctionAsync("n => document.querySelectorAll('img[src^=\"blob:\"]').length >= n",
+                    imagePaths.Count, new() { Timeout = 60000 }).WaitAsync(ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Selectors come from an unverified DOM read; the snapshot shows what the page actually has.
+                var snapshot = await page.EvaluateAsync<string>(AttachSnapshotScript).ConfigureAwait(false);
+                await _activity.WriteAsync(job.JobId, "media", $"Không thấy đủ ảnh đính kèm: {snapshot}", ct).ConfigureAwait(false);
+                throw new InvalidOperationException($"Không xác nhận được {imagePaths.Count} ảnh trong composer MuseAI: {snapshot}", ex);
+            }
             await _activity.WriteAsync(job.JobId, "media", $"Đã đính kèm {imagePaths.Count} ảnh theo thứ tự.", ct).ConfigureAwait(false);
 
             await composer.FillAsync(fullPrompt).WaitAsync(ct).ConfigureAwait(false);
@@ -107,7 +118,7 @@ public sealed class MuseAiPlaywrightAutomation
             try
             {
                 await download.SaveAsAsync(downloaded).WaitAsync(ct).ConfigureAwait(false);
-                var asset = await _assets.SaveVideoAssetAsync(job.ProjectId, downloaded, ct).ConfigureAwait(false);
+                var asset = await _assets.SaveVideoAssetAsync(job.ProjectId, downloaded, job.StorageRootId, ct).ConfigureAwait(false);
                 await _activity.WriteAsync(job.JobId, "result", "Đã lưu video MuseAI thành Asset.", ct).ConfigureAwait(false);
                 return new(true, ResultReference: asset.AssetId, SideEffectSubmitted: true);
             }
@@ -123,22 +134,19 @@ public sealed class MuseAiPlaywrightAutomation
         catch (PlaywrightException ex)
         {
             await RecordFailureAsync(job.JobId, submitted ? "Lỗi sau khi gửi; cần đối soát." : "Lỗi thao tác browser trước khi gửi.").ConfigureAwait(false);
-            return new(false, ResultReference: submitted ? page?.Url : null,
-                ReasonCode: submitted ? "reconcile_required" : "automation_blocked",
+            return new(false, ReasonCode: submitted ? "reconcile_required" : "automation_blocked",
                 ErrorMessage: $"Không thể hoàn tất thao tác MuseAI: {ex.Message}", SideEffectSubmitted: submitted);
         }
         catch (TimeoutException ex)
         {
             await RecordFailureAsync(job.JobId, submitted ? "Hết thời gian sau khi gửi; cần đối soát." : "Hết thời gian trước khi gửi.").ConfigureAwait(false);
-            return new(false, ResultReference: submitted ? page?.Url : null,
-                ReasonCode: submitted ? "reconcile_required" : "automation_blocked",
+            return new(false, ReasonCode: submitted ? "reconcile_required" : "automation_blocked",
                 ErrorMessage: $"Quá thời gian chờ MuseAI: {ex.Message}", SideEffectSubmitted: submitted);
         }
         catch (Exception ex)
         {
             await RecordFailureAsync(job.JobId, submitted ? "Tác vụ lỗi sau khi gửi; cần đối soát." : "Tác vụ lỗi trước khi gửi.").ConfigureAwait(false);
-            return new(false, ResultReference: submitted ? page?.Url : null,
-                ReasonCode: submitted ? "reconcile_required" : "automation_blocked",
+            return new(false, ReasonCode: submitted ? "reconcile_required" : "automation_blocked",
                 ErrorMessage: $"Không hoàn tất được render MuseAI: {ex.Message}", SideEffectSubmitted: submitted);
         }
         finally

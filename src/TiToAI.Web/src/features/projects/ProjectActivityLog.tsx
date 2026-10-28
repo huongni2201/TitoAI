@@ -5,6 +5,13 @@ import type { JobActivityEntryDto, JobSummaryDto } from "../jobs/jobTypes";
 
 type ActivityLine = JobActivityEntryDto & { jobId: string; taskType: string };
 
+const taskToneClass: Record<string, string> = {
+  Script: "bg-sky-500/15 text-sky-700 dark:text-sky-300",
+  Image: "bg-violet-500/15 text-violet-700 dark:text-violet-300",
+  VideoPrompt: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
+  VideoRender: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
+};
+
 export function ProjectActivityLog({ projectId }: { projectId: string }) {
   const [lines, setLines] = useState<ActivityLine[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -56,7 +63,7 @@ export function ProjectActivityLog({ projectId }: { projectId: string }) {
       {lines.length > 0 && <ol className="mt-3 max-h-64 space-y-2 overflow-y-auto" aria-live="polite">
         {lines.map((line, index) => <li key={`${line.jobId}-${line.atUtc}-${index}`} className="flex flex-wrap gap-x-2 text-xs">
           <time className="text-muted-foreground">{new Date(line.atUtc).toLocaleTimeString("vi-VN")}</time>
-          <span className="font-medium">{line.taskType}</span>
+          <span className={`rounded px-1.5 font-medium ${taskToneClass[line.taskType] ?? "bg-muted text-muted-foreground"}`}>{line.taskType}</span>
           <span>{line.message}</span>
         </li>)}
       </ol>}

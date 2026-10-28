@@ -60,7 +60,7 @@ public static class BridgeSmokeTests
             "command": "settings.get",
             "payload": {},
             "clientTimestampUtc": "{{DateTimeOffset.UtcNow:O}}",
-            "contractVersion": "1.0.4"
+            "contractVersion": "1.1.0"
         }
         """;
 
@@ -68,13 +68,13 @@ public static class BridgeSmokeTests
         Assert(response != null, "Response không được null");
         Assert(response!.Success, "Response phải thành công");
         Assert(response.Id == reqId, "Response Id phải khớp với Request Id");
-        Assert(response.ContractVersion == "1.0.4", "Contract version phải là 1.0.4");
+        Assert(response.ContractVersion == "1.1.0", "Contract version phải là 1.1.0");
     }
 
     /// <summary>
     /// Test Case 2: Version mismatch trên cancel message
     /// Cancel message sai version (vd: 1.0.0) phải bị từ chối với INVALID_ARGUMENT
-    /// và tuyệt đối không hủy request đang chạy của version 1.0.4.
+    /// và tuyệt đối không hủy request đang chạy của version 1.1.0.
     /// </summary>
     public static async Task Test_CancelMessage_VersionMismatch_DoesNotCancelInFlight()
     {
@@ -105,7 +105,7 @@ public static class BridgeSmokeTests
             "type": "request",
             "command": "job.enqueue",
             "payload": { "projectId": "project-1" },
-            "contractVersion": "1.0.4"
+            "contractVersion": "1.1.0"
         }
         """;
 
@@ -160,7 +160,7 @@ public static class BridgeSmokeTests
             "type": "request",
             "command": "project.get",
             "payload": { "projectId": "project-test" },
-            "contractVersion": "1.0.4"
+            "contractVersion": "1.1.0"
         }
         """;
 
@@ -206,7 +206,7 @@ public static class BridgeSmokeTests
                     { "name": "item1", "cookie": "secret_cookie_val" }
                 ]
             },
-            "contractVersion": "1.0.4"
+            "contractVersion": "1.1.0"
         }
         """;
         var res1 = await router.ProcessMessageAsync(BridgeContract.Origin, jsonWithArrayCookie);
@@ -224,7 +224,7 @@ public static class BridgeSmokeTests
                     [ { "accessToken": "bearer_secret" } ]
                 ]
             },
-            "contractVersion": "1.0.4"
+            "contractVersion": "1.1.0"
         }
         """;
         var res2 = await router.ProcessMessageAsync(BridgeContract.Origin, jsonWithNestedArrayToken);
@@ -242,7 +242,7 @@ public static class BridgeSmokeTests
                     { "name": "channel_1", "userDataDir": "C:\\Users\\Admin\\AppData\\Local\\TiToAI\\Profile" }
                 ]
             },
-            "contractVersion": "1.0.4"
+            "contractVersion": "1.1.0"
         }
         """;
         var res3 = await router.ProcessMessageAsync(BridgeContract.Origin, jsonWithNestedUserDataDir);
@@ -260,7 +260,7 @@ public static class BridgeSmokeTests
                     [ { "cmd": "format c:" } ]
                 ]
             },
-            "contractVersion": "1.0.4"
+            "contractVersion": "1.1.0"
         }
         """;
         var res4 = await router.ProcessMessageAsync(BridgeContract.Origin, jsonWithNestedCmd);
@@ -277,7 +277,7 @@ public static class BridgeSmokeTests
                 "selectedPath": "D:\\TiToAI\\Media",
                 "relativeStoragePath": "audio/channel_01.mp3"
             },
-            "contractVersion": "1.0.4"
+            "contractVersion": "1.1.0"
         }
         """;
         var res5 = await router.ProcessMessageAsync(BridgeContract.Origin, jsonWithAllowedPaths);
@@ -323,7 +323,7 @@ public static class BridgeSmokeTests
             Command: "settings.get",
             Payload: default,
             ClientTimestampUtc: DateTimeOffset.UtcNow,
-            ContractVersion: "1.0.4"
+            ContractVersion: "1.1.0"
         );
 
         var response = await dispatcher.DispatchAsync(request, CancellationToken.None);
@@ -353,7 +353,7 @@ public static class BridgeSmokeTests
             Command: "system.execute_bash",
             Payload: default,
             ClientTimestampUtc: DateTimeOffset.UtcNow,
-            ContractVersion: "1.0.4"
+            ContractVersion: "1.1.0"
         );
 
         var response = await dispatcher.DispatchAsync(request, CancellationToken.None);
@@ -384,7 +384,7 @@ public static class BridgeSmokeTests
             "type": "request",
             "command": "settings.get",
             "payload": {},
-            "contractVersion": "1.0.4"
+            "contractVersion": "1.1.0"
         }
         """;
 
@@ -433,7 +433,7 @@ public static class BridgeSmokeTests
             "type": "request",
             "command": "settings.get",
             "payload": {},
-            "contractVersion": "1.0.4"
+            "contractVersion": "1.1.0"
         }
         """;
 
@@ -477,7 +477,7 @@ public static class BridgeSmokeTests
             "type": "request",
             "command": "settings.get",
             "payload": {},
-            "contractVersion": "1.0.4"
+            "contractVersion": "1.1.0"
         }
         """;
 
@@ -516,7 +516,7 @@ public static class BridgeSmokeTests
                 "type": "request",
                 "command": "settings.get",
                 "payload": {},
-                "contractVersion": "1.0.4"
+                "contractVersion": "1.1.0"
             }
             """;
 
@@ -545,9 +545,9 @@ public static class BridgeSmokeTests
 
     /// <summary>
     /// Test Case 15: Valid cancel message hủy in-flight request và dọn dẹp registration
-    /// Gửi bản tin type=cancel hợp lệ (contractVersion 1.0.4) tới một request đang chạy:
+    /// Gửi bản tin type=cancel hợp lệ (contractVersion 1.1.0) tới một request đang chạy:
     /// - Router kích hoạt CancellationToken của request đang chạy
-    /// - Router trả về null cho bản tin cancel (theo đúng contract v1.0.4, cancel là control message không sinh response envelope)
+    /// - Router trả về null cho bản tin cancel (theo đúng contract v1.1.0, cancel là control message không sinh response envelope)
     /// - Request đang chạy hoàn tất với mã lỗi INTERNAL_ERROR và thông báo bị hủy trong giới hạn thời gian (bounded timeout)
     /// - Đảm bảo registration trong router được dọn dẹp sạch sẽ để ID đó có thể tái sử dụng mà không bị CONCURRENCY_CONFLICT
     /// </summary>
@@ -587,7 +587,7 @@ public static class BridgeSmokeTests
             "type": "request",
             "command": "settings.get",
             "payload": {},
-            "contractVersion": "1.0.4"
+            "contractVersion": "1.1.0"
         }
         """;
 
@@ -602,7 +602,7 @@ public static class BridgeSmokeTests
             "id": "{{cancelId}}",
             "type": "cancel",
             "targetRequestId": "{{targetId}}",
-            "contractVersion": "1.0.4"
+            "contractVersion": "1.1.0"
         }
         """;
 
@@ -648,7 +648,7 @@ public static class BridgeSmokeTests
             "type": "request",
             "command": "settings.get",
             "payload": {},
-            "contractVersion": "1.0.4"
+            "contractVersion": "1.1.0"
         }
         """;
 
@@ -702,7 +702,7 @@ public static class BridgeSmokeTests
             "type": "request",
             "command": "settings.get",
             "payload": {},
-            "contractVersion": "1.0.4"
+            "contractVersion": "1.1.0"
         }
         """;
 

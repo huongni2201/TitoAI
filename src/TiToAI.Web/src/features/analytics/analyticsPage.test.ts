@@ -384,6 +384,13 @@ test("T25-Test 2: Xử lý giá trị null hiển thị ký tự '—' (không h
     await sleep(60);
   });
 
+  // KPI đang tải hiển thị skeleton; đợi giá trị thật thay vì ngủ cố định.
+  for (let attempt = 0; attempt < 50 && !container.querySelector('[data-testid="kpi-value-comments"]'); attempt++) {
+    await act(async () => {
+      await sleep(20);
+    });
+  }
+
   // 1. Kiểm tra KPI Cards với trường null
   const commentsKpi = container.querySelector('[data-testid="kpi-value-comments"]');
   assert.ok(commentsKpi, "Phải có thẻ KPI comments");

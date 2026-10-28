@@ -111,7 +111,8 @@ public sealed record ProjectWorkflowConfigDto(
     [property: JsonPropertyName("currentRunId")] string? CurrentRunId,
     [property: JsonPropertyName("updatedAtUtc")] string UpdatedAtUtc,
     [property: JsonPropertyName("scriptPromptText")] string? ScriptPromptText = null,
-    [property: JsonPropertyName("videoPromptText")] string? VideoPromptText = null);
+    [property: JsonPropertyName("videoPromptText")] string? VideoPromptText = null,
+    [property: JsonPropertyName("finalVideoAssetId")] string? FinalVideoAssetId = null);
 
 /// <summary>
 /// Thông tin chi tiết quy trình của một Cảnh (Scene Workflow Detail).
@@ -281,7 +282,10 @@ public sealed record VideoContentItemDto(
     [property: JsonPropertyName("audioAssetId")] string? AudioAssetId,
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("createdAtUtc")] string CreatedAtUtc,
-    [property: JsonPropertyName("updatedAtUtc")] string UpdatedAtUtc
+    [property: JsonPropertyName("updatedAtUtc")] string UpdatedAtUtc,
+    // Lấy từ Scene khi liệt kê: nội dung phân cảnh do Script AI trả về và prompt ảnh do Script AI trả về.
+    [property: JsonPropertyName("contentText")] string? ContentText = null,
+    [property: JsonPropertyName("imagePrompt")] string? ImagePrompt = null
 );
 
 /// <summary>

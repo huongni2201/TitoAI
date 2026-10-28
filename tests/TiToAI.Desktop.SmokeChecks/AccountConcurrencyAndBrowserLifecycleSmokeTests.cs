@@ -12,6 +12,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Playwright;
 using TiToAI.Application.Accounts;
 using TiToAI.Application.Jobs;
+using TiToAI.Application.Providers;
 using TiToAI.Application.Settings;
 using TiToAI.Browser;
 using TiToAI.Browser.Abstractions;
@@ -154,6 +155,10 @@ public static class AccountConcurrencyAndBrowserLifecycleSmokeTests
         await RunCaseAsync(
             "7. Vòng đời browser: Không đóng browser khi còn job chạy hoặc job chưa rõ kết quả đối soát",
             Test_BrowserLifecycle_DoesNotCloseWhenJobActiveOrUncertainAsync);
+
+        await RunCaseAsync(
+            "8. Vòng đời browser: Nhiều job cùng profile xin lease đồng thời chỉ mở một browser",
+            Test_BrowserLaunch_ConcurrentLeasesOnSameProfile_LaunchOnceAsync);
 
         Console.WriteLine("\n=================================================================");
         if (failed == 0)
@@ -757,7 +762,9 @@ public static class AccountConcurrencyAndBrowserLifecycleSmokeTests
             }
 
             Assert(processController.IsRunning(profileId), "Khi có job chạy: browser automation phải mở.");
-            Assert(fakeLauncher.LastLaunchWasHeadless == true, "Browser automation phải chạy ẩn (isHeadless = true).");
+            // ChatGPT Script đang bật thử nghiệm nên browser hiện để quan sát; khi tắt thử nghiệm phải chạy ẩn.
+            Assert(fakeLauncher.LastLaunchWasHeadless == !ChatGptTrialMode.Enabled,
+                ChatGptTrialMode.Enabled ? "ChatGPT thử nghiệm phải hiện browser (isHeadless = false)." : "Browser automation phải chạy ẩn (isHeadless = true).");
             Assert(tabPool.GetActiveJobCount(profileId) == 1, "Tab pool phải có 1 tab đang mở cho Job 1.");
 
             // 3. Hoàn tất Job 1
@@ -949,6 +956,67 @@ public static class AccountConcurrencyAndBrowserLifecycleSmokeTests
             }
 
             Assert(!processController.IsRunning(profileId), "Khi thực sự idle: browser được đóng an toàn.");
+        }
+        finally
+        {
+            CleanupTestContext(tempDir);
+        }
+    }
+
+    /// <summary>
+    /// Kịch bản 8: Nhiều job cùng profile xin lease đồng thời (scheduler cấp nhiều VideoPrompt cùng lúc).
+    /// Chỉ một lần khởi động browser; job đến sau không được thất bại vì "tiến trình đang hoạt động".
+    /// </summary>
+    public static async Task Test_BrowserLaunch_ConcurrentLeasesOnSameProfile_LaunchOnceAsync()
+    {
+        var (dbOptions, tempDir, _, _) = CreateTestContext();
+        try
+        {
+            var now = DateTimeOffset.UtcNow.ToString("o");
+            string profileId = "profile_concurrent_launch";
+
+            await using (var db = new TiToAIDbContext(dbOptions))
+            {
+                db.BrowserProfiles.Add(new BrowserProfile
+                {
+                    Id = profileId,
+                    Kind = "SharedAI",
+                    ProviderKey = "chatgpt-web",
+                    DisplayName = "Concurrent Launch Profile",
+                    SessionStatus = "Connected",
+                    OperationalState = "Stopped",
+                    VisibilityState = "Hidden",
+                    Lifecycle = "Active",
+                    CreatedAtUtc = now,
+                    UpdatedAtUtc = now
+                });
+                await db.SaveChangesAsync();
+            }
+
+            var profileRegistry = new ProfileRegistry(() => new TiToAIDbContext(dbOptions), tempDir);
+            var profileOwner = new ProfileOwner(pid => Path.Combine(tempDir, "profiles", pid));
+            var fakeLauncher = new TrackingPersistentLauncher();
+            // Khởi động chậm để hai job cùng đi qua bước mở browser trước khi browser xuất hiện.
+            var processController = new PlaywrightBrowserController(
+                profileRegistry,
+                profileOwner,
+                customPersistentLauncher: async (userDataDir, options) =>
+                {
+                    await Task.Delay(200);
+                    return await fakeLauncher.LaunchAsync(userDataDir, options);
+                });
+            var tabPool = new TabPool();
+            var loginCoordinator = new LoginCoordinator(profileRegistry, processController);
+            var gatekeeper = new HostBrowserGatekeeper(profileRegistry, loginCoordinator, tabPool, processController);
+
+            var leases = await Task.WhenAll(
+                gatekeeper.TryAcquireTabLeaseAsync(profileId, JobTaskType.Script, "job-concurrent-1"),
+                gatekeeper.TryAcquireTabLeaseAsync(profileId, JobTaskType.VideoPrompt, "job-concurrent-2"));
+
+            Assert(leases.All(lease => lease is not null), "Hai job cùng profile phải nhận được tab lease.");
+            Assert(fakeLauncher.LaunchCount == 1, "Browser của profile chỉ được khởi động một lần.");
+
+            foreach (var lease in leases) lease?.Dispose();
         }
         finally
         {

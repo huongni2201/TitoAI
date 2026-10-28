@@ -354,7 +354,7 @@ public static class StorageAndAssetSmokeTests
 
         // 4. Lấy metadata
         var metadata = await assetService.GetMetadataAsync(new GetAssetMetadataRequest(
-            AssetId: importAudioResp.Asset.AssetId,
+            AssetId: importAudioResp.Asset.AssetId
         ));
         Assert(metadata.AssetId == importAudioResp.Asset.AssetId, "GetMetadataAsync phải trả về đúng AssetId.");
 

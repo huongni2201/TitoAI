@@ -35,6 +35,7 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
     private int _isDisposed;
 
     private readonly string _schedulerId = $"scheduler-{Guid.NewGuid():N}";
+    private const int CandidatePageSize = 15;
 
     public TimeSpan LeaseDuration { get; set; } = TimeSpan.FromSeconds(45);
     public TimeSpan HeartbeatInterval { get; set; } = TimeSpan.FromSeconds(15);
@@ -193,58 +194,65 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
             .Select(k => k.Substring("project.workflow.config.".Length))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        // Lấy các ứng viên Queued cũ nhất từ queue chung
-        var candidateJobs = await dbContext.Jobs
-            .AsNoTracking()
-            .Where(j => j.State == JobState.Queued &&
-                        !pausedWorkflowProjectIds.Contains(j.ProjectId) &&
-                        (j.RetryAfterUtc == null || string.Compare(j.RetryAfterUtc, nowIso) <= 0))
-            .OrderBy(j => j.CreatedAtUtc)
-            .ThenBy(j => j.Id)
-            .Take(15)
-            .ToListAsync(cancellationToken).ConfigureAwait(false);
-
-        foreach (var candidate in candidateJobs)
+        // Duyệt theo trang cho đến khi reserve được một job: job bị chặn đầu hàng không được che job hợp lệ phía sau
+        for (var offset = 0; ; offset += CandidatePageSize)
         {
-            // Thực hiện Atomic Reservation (BEGIN IMMEDIATE + CAS) với Slot Occupancy
-            var reserveResult = await _reservation.TryReserveJobAsync(
-                candidate.Id,
-                _schedulerId,
-                LeaseDuration,
-                isProfileAvailable: profileId =>
-                    !_gatekeeper.IsDispatchPaused(profileId) &&
-                    !_gatekeeper.IsProfileBusyWithLogin(profileId) &&
-                    !_gatekeeper.IsRoleActive(profileId, candidate.TaskType),
-                getOpenProfileIds: () => _gatekeeper.GetActiveOrBusyProfileIds(),
-                cancellationToken: cancellationToken).ConfigureAwait(false);
+            var candidateJobs = await dbContext.Jobs
+                .AsNoTracking()
+                .Where(j => j.State == JobState.Queued &&
+                            !pausedWorkflowProjectIds.Contains(j.ProjectId) &&
+                            (j.RetryAfterUtc == null || string.Compare(j.RetryAfterUtc, nowIso) <= 0))
+                .OrderBy(j => j.CreatedAtUtc)
+                .ThenBy(j => j.Id)
+                .Skip(offset)
+                .Take(CandidatePageSize)
+                .ToListAsync(cancellationToken).ConfigureAwait(false);
 
-            if (reserveResult.Acquired && reserveResult.Job is not null)
+            if (candidateJobs.Count == 0)
             {
-                var assignedProfileId = reserveResult.Binding?.ProfileId ?? "default_profile";
-                var assignedAccountId = reserveResult.Binding?.ProviderAccountId;
-
-                NotifyStateChanged(reserveResult.Job.Id, reserveResult.Job.ProjectId, JobState.Queued, JobState.Reserved, null, null, reserveResult.Job.Revision);
-
-                var workerJob = reserveResult.Job;
-                var workerTask = Task.Run(async () =>
-                {
-                    try
-                    {
-                        await ExecuteWorkerAsync(workerJob, assignedProfileId, assignedAccountId).ConfigureAwait(false);
-                    }
-                    finally
-                    {
-                        _runningWorkerTasks.TryRemove(workerJob.Id, out _);
-                    }
-                });
-
-                _runningWorkerTasks.TryAdd(workerJob.Id, workerTask);
-                return true;
+                return false;
             }
-            // Nếu không reserve được do provider/capacity của job này, loop tiếp tục thử job kế tiếp (không chặn job khác!)
-        }
 
-        return false;
+            foreach (var candidate in candidateJobs)
+            {
+                // Thực hiện Atomic Reservation (BEGIN IMMEDIATE + CAS) với Slot Occupancy
+                var reserveResult = await _reservation.TryReserveJobAsync(
+                    candidate.Id,
+                    _schedulerId,
+                    LeaseDuration,
+                    isProfileAvailable: profileId =>
+                        !_gatekeeper.IsDispatchPaused(profileId) &&
+                        !_gatekeeper.IsProfileBusyWithLogin(profileId) &&
+                        !_gatekeeper.IsRoleActive(profileId, candidate.TaskType),
+                    getOpenProfileIds: () => _gatekeeper.GetActiveOrBusyProfileIds(),
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+
+                if (reserveResult.Acquired && reserveResult.Job is not null)
+                {
+                    var assignedProfileId = reserveResult.Binding?.ProfileId ?? "default_profile";
+                    var assignedAccountId = reserveResult.Binding?.ProviderAccountId;
+
+                    NotifyStateChanged(reserveResult.Job.Id, reserveResult.Job.ProjectId, JobState.Queued, JobState.Reserved, null, null, reserveResult.Job.Revision);
+
+                    var workerJob = reserveResult.Job;
+                    var workerTask = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await ExecuteWorkerAsync(workerJob, assignedProfileId, assignedAccountId).ConfigureAwait(false);
+                        }
+                        finally
+                        {
+                            _runningWorkerTasks.TryRemove(workerJob.Id, out _);
+                        }
+                    });
+
+                    _runningWorkerTasks.TryAdd(workerJob.Id, workerTask);
+                    return true;
+                }
+                // Nếu không reserve được do provider/capacity của job này, loop tiếp tục thử job kế tiếp (không chặn job khác!)
+            }
+        }
     }
 
     /// <summary>
@@ -454,14 +462,15 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
                 await using var dbContext = new TiToAIDbContext(_dbOptions);
                 var nowIso = UtcNow.ToString("o");
 
-                await dbContext.Database.ExecuteSqlRawAsync(
+                // Chỉ ghi khi worker còn sở hữu job: job đã Canceled (hủy trước submit không đổi fencing token) giữ nguyên trạng thái
+                var rows = await dbContext.Database.ExecuteSqlRawAsync(
                     @"UPDATE Job
                       SET revision = revision + 1,
                           state = 'AwaitingUser',
                           reason_code = @reason,
                           lease_expires_at_utc = NULL,
                           updated_at_utc = @now
-                      WHERE id = @id AND fencing_token = @token;",
+                      WHERE id = @id AND fencing_token = @token AND state IN ('Reserved', 'Running');",
                     new object[]
                     {
                         new SqliteParameter("@reason", decision.FinalReasonCode),
@@ -469,6 +478,10 @@ public sealed class JobScheduler : IJobWakeupNotifier, IAsyncDisposable
                         new SqliteParameter("@id", job.Id),
                         new SqliteParameter("@token", fencingToken)
                     }).ConfigureAwait(false);
+                if (rows == 0)
+                {
+                    return;
+                }
 
                 job.Revision += 1;
                 NotifyStateChanged(job.Id, job.ProjectId, JobState.Running, JobState.AwaitingUser, decision.FinalReasonCode, null, job.Revision);

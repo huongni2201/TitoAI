@@ -61,6 +61,13 @@ public sealed partial class ProjectWorkflowService
             throw new ProjectWorkflowValidationException($"Không tìm thấy dự án '{normalizedProjectId}'.");
         }
 
+        // Video cuối của Project là revision đang được chọn; UI dựa vào đây thay vì số cảnh.
+        var finalVideoAssetId = project.CurrentVideoRevisionId is null ? null : await dbContext.VideoRevisions
+            .AsNoTracking()
+            .Where(v => v.Id == project.CurrentVideoRevisionId && v.ProjectId == normalizedProjectId && v.State == "Ready")
+            .Select(v => v.AssetId)
+            .FirstOrDefaultAsync(cancellationToken);
+
         var key = GetConfigKey(normalizedProjectId);
         var appSetting = await dbContext.AppSettings
             .AsNoTracking()
@@ -73,7 +80,7 @@ public sealed partial class ProjectWorkflowService
                 var stored = JsonSerializer.Deserialize<ProjectWorkflowConfigDto>(appSetting.Value, JsonOptions);
                 if (stored != null)
                 {
-                    return stored;
+                    return stored with { FinalVideoAssetId = finalVideoAssetId };
                 }
             }
             catch
@@ -99,7 +106,8 @@ public sealed partial class ProjectWorkflowService
             CurrentRunId: null,
             UpdatedAtUtc: DateTimeOffset.UtcNow.ToString("o"),
             ScriptPromptText: null,
-            VideoPromptText: null
+            VideoPromptText: null,
+            FinalVideoAssetId: finalVideoAssetId
         );
     }
 

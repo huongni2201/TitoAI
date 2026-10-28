@@ -1,5 +1,7 @@
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.IO;
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 using TiToAI.Application.Projects;
 using TiToAI.Application.Scenes;
@@ -213,25 +215,23 @@ public sealed class AssetService
     /// đồng thời lưu bản ghi Asset vào cơ sở dữ liệu để có thể tái sử dụng toàn ứng dụng.
     /// Hỗ trợ cả Base64Data và SourceFilePath.
     /// </summary>
-    /// <summary>Lưu MP4 do provider trả về thành Asset kiểu Video; kiểm tra chữ ký 'ftyp' trước khi lưu.</summary>
-    public async Task<AssetDto> SaveVideoAssetAsync(string projectId, string sourcePath, CancellationToken cancellationToken = default)
+    /// <summary>Lưu MP4 do provider trả về thành Asset kiểu Video; chỉ nhận tệp có track video và thời lượng hợp lệ.</summary>
+    public async Task<AssetDto> SaveVideoAssetAsync(string projectId, string sourcePath, string? storageRootId = null, CancellationToken cancellationToken = default)
     {
         if (!File.Exists(sourcePath) || !string.Equals(Path.GetExtension(sourcePath), ".mp4", StringComparison.OrdinalIgnoreCase))
             throw new AssetValidationException("Video đầu ra phải là tệp .mp4 tồn tại.");
 
-        var header = new byte[12];
-        await using (var probe = File.OpenRead(sourcePath))
-        {
-            if (await probe.ReadAsync(header.AsMemory(), cancellationToken).ConfigureAwait(false) < header.Length ||
-                !header.AsSpan(4, 4).SequenceEqual("ftyp"u8))
-                throw new AssetValidationException("Tệp video tải về không phải MP4 hợp lệ.");
-        }
+        VerifyPlayableMp4(sourcePath);
 
         var roots = await _rootRegistry.GetCurrentRootsAsync(cancellationToken).ConfigureAwait(false);
+        var videoRootId = string.IsNullOrWhiteSpace(storageRootId) ? roots.VideosRootId : storageRootId;
+        var videoRootPath = string.IsNullOrWhiteSpace(storageRootId)
+            ? roots.VideosPath
+            : await _rootRegistry.ResolveRootPathAsync(storageRootId, cancellationToken).ConfigureAwait(false);
         var assetId = Guid.NewGuid().ToString("N");
         var relativePath = $"{projectId}/videos/{assetId}.mp4";
         await using var stream = File.OpenRead(sourcePath);
-        var saved = await _fileStore.SaveFileAsync(roots.VideosPath, relativePath, stream, cancellationToken).ConfigureAwait(false);
+        var saved = await _fileStore.SaveFileAsync(videoRootPath, relativePath, stream, cancellationToken).ConfigureAwait(false);
 
         await using var dbContext = new TiToAIDbContext(_dbOptions);
         var asset = new Asset
@@ -239,7 +239,7 @@ public sealed class AssetService
             Id = assetId,
             ProjectId = projectId,
             AssetType = "Video",
-            StorageRootId = roots.VideosRootId,
+            StorageRootId = videoRootId,
             RelativePath = relativePath,
             ByteSize = saved.ByteSize,
             Sha256Hash = saved.Sha256Hash,
@@ -251,6 +251,108 @@ public sealed class AssetService
         await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         return ToDto(asset);
     }
+
+    /// <summary>
+    /// Đọc cấu trúc hộp MP4: phải có ftyp, mdat và moov với mvhd có thời lượng dương cùng một track 'vide'.
+    /// Không dùng FFmpeg; chỉ đọc header hộp và phần moov (nhỏ) vào bộ nhớ.
+    /// </summary>
+    private static void VerifyPlayableMp4(string path)
+    {
+        using var stream = File.OpenRead(path);
+        byte[]? moov = null;
+        var hasMdat = false;
+        long position = 0;
+        while (position < stream.Length)
+        {
+            var (type, headerSize, size) = ReadMp4BoxHeader(stream, position);
+            if (position == 0 && type != "ftyp") throw InvalidMp4();
+            if (type == "mdat") hasMdat = true;
+            if (type == "moov")
+            {
+                moov = new byte[size - headerSize];
+                stream.Position = position + headerSize;
+                stream.ReadExactly(moov);
+            }
+            position += size;
+        }
+
+        if (moov is null || !hasMdat || !HasPlayableVideoTrack(moov)) throw InvalidMp4();
+    }
+
+    private static (string Type, int HeaderSize, long Size) ReadMp4BoxHeader(Stream stream, long position)
+    {
+        Span<byte> header = stackalloc byte[16];
+        stream.Position = position;
+        if (stream.ReadAtLeast(header[..8], 8, throwOnEndOfStream: false) < 8) throw InvalidMp4();
+        var size = (long)BinaryPrimitives.ReadUInt32BigEndian(header);
+        var type = Encoding.ASCII.GetString(header.Slice(4, 4));
+        var headerSize = 8;
+        if (size == 1)
+        {
+            if (stream.ReadAtLeast(header[8..16], 8, throwOnEndOfStream: false) < 8) throw InvalidMp4();
+            size = (long)BinaryPrimitives.ReadUInt64BigEndian(header[8..16]);
+            headerSize = 16;
+        }
+        else if (size == 0)
+        {
+            size = stream.Length - position;
+        }
+        if (size < headerSize || size < 0 || size > stream.Length - position) throw InvalidMp4();
+        return (type, headerSize, size);
+    }
+
+    private static bool HasPlayableVideoTrack(byte[] moov)
+    {
+        var mvhd = Mp4Children(moov, 0, moov.Length).FirstOrDefault(c => c.Type == "mvhd");
+        if (mvhd.Type is null || mvhd.End - mvhd.Start < 20) return false;
+        var version = moov[mvhd.Start];
+        if (version > 1 || (version == 1 && mvhd.End - mvhd.Start < 32)) return false;
+        var timescale = version == 1 ? BinaryPrimitives.ReadUInt32BigEndian(moov.AsSpan(mvhd.Start + 20)) : BinaryPrimitives.ReadUInt32BigEndian(moov.AsSpan(mvhd.Start + 12));
+        var duration = version == 1 ? BinaryPrimitives.ReadUInt64BigEndian(moov.AsSpan(mvhd.Start + 24)) : BinaryPrimitives.ReadUInt32BigEndian(moov.AsSpan(mvhd.Start + 16));
+        if (timescale == 0 || duration == 0) return false;
+
+        foreach (var trak in Mp4Children(moov, 0, moov.Length).Where(c => c.Type == "trak"))
+        {
+            var mdia = Mp4Children(moov, trak.Start, trak.End).FirstOrDefault(c => c.Type == "mdia");
+            var hdlr = Mp4Children(moov, mdia.Start, mdia.End).FirstOrDefault(c => c.Type == "hdlr");
+            if (hdlr.Type is not null && hdlr.End - hdlr.Start >= 12 &&
+                moov.AsSpan(hdlr.Start + 8, 4).SequenceEqual("vide"u8))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static List<(string Type, int Start, int End)> Mp4Children(byte[] data, int start, int end)
+    {
+        var children = new List<(string Type, int Start, int End)>();
+        var position = start;
+        while (position < end)
+        {
+            if (end - position < 8) throw InvalidMp4();
+            var size = (long)BinaryPrimitives.ReadUInt32BigEndian(data.AsSpan(position));
+            var type = Encoding.ASCII.GetString(data, position + 4, 4);
+            var headerSize = 8;
+            if (size == 1)
+            {
+                if (end - position < 16) throw InvalidMp4();
+                size = (long)BinaryPrimitives.ReadUInt64BigEndian(data.AsSpan(position + 8));
+                headerSize = 16;
+            }
+            else if (size == 0)
+            {
+                size = end - position;
+            }
+            if (size < headerSize || size > end - position) throw InvalidMp4();
+            children.Add((type, position + headerSize, position + (int)size));
+            position += (int)size;
+        }
+        return children;
+    }
+
+    private static AssetValidationException InvalidMp4() =>
+        new("Tệp video tải về không phải MP4 hợp lệ hoặc không có track hình ảnh với thời lượng.");
 
     public async Task<UploadAssetResponse> UploadAssetAsync(
         UploadAssetRequest request,
@@ -302,6 +404,12 @@ public sealed class AssetService
         if (isAudio)
         {
             storageRootId = StorageRootRegistry.RootInternalAudioId;
+            storageRootPath = await _rootRegistry.ResolveRootPathAsync(storageRootId, cancellationToken).ConfigureAwait(false);
+        }
+        else if (!string.IsNullOrWhiteSpace(request.StorageRootId))
+        {
+            // Output của job lưu vào đúng root đã chốt khi tạo job, không theo Settings hiện hành
+            storageRootId = request.StorageRootId;
             storageRootPath = await _rootRegistry.ResolveRootPathAsync(storageRootId, cancellationToken).ConfigureAwait(false);
         }
         else

@@ -47,6 +47,7 @@ public static class JobReasonCode
     public const string CanceledLateResult = "canceled_late_result";
     public const string TabCapacityUnavailable = "tab_capacity_unavailable";
     public const string WaitingForCapacity = "waiting_for_capacity";
+    public const string WaitingForReconcile = "waiting_for_reconcile";
     public const string GlobalJobBudgetReached = "global_job_budget_reached";
     public const string LeaseExpiredRetry = "lease_expired_retry";
     public const string ReconcileRejected = "reconcile_rejected";
@@ -69,7 +70,8 @@ public sealed record JobSummaryDto(
     bool? HasUnresolvedSideEffect = null,
     string? ProfileId = null,
     string? ResultReference = null,
-    long Revision = 1
+    long Revision = 1,
+    string? ResultText = null
 );
 
 public sealed record JobDetailDto(

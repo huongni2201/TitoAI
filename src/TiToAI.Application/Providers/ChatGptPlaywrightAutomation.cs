@@ -34,6 +34,10 @@ public sealed class ChatGptPlaywrightAutomation
         _activity = new JobActivityLog(dbOptions);
     }
 
+    // ChatGPT renames these attributes between releases; seen 2026-10-28 on a logged-in account: Send is "Send", replies lack data-message-author-role.
+    private const string AssistantSelector = "[data-message-author-role='assistant'], [data-markdown-text-style='assistant-message']";
+    private const string CopySelector = "[data-testid='copy-turn-action-button'], button[aria-label='Copy']";
+
     public async Task<JobExecutionResult> ExecuteTextAsync(
         JobExecutionContext job,
         Func<Task> beforeSubmit,
@@ -89,8 +93,9 @@ public sealed class ChatGptPlaywrightAutomation
             await _activity.WriteAsync(job.JobId, "browser", "Đã tìm thấy ô nhập ChatGPT.", ct).ConfigureAwait(false);
             var imagePaths = await ResolveInputImagesAsync(job, ct).ConfigureAwait(false);
             await _activity.WriteAsync(job.JobId, "media", $"Đã kiểm tra {imagePaths.Count} ảnh tham chiếu.", ct).ConfigureAwait(false);
-            var assistantMessages = page.Locator("[data-message-author-role='assistant']");
+            var assistantMessages = page.Locator(AssistantSelector);
             var initialAssistantCount = await assistantMessages.CountAsync().ConfigureAwait(false);
+            var initialCopyCount = await page.Locator(CopySelector).CountAsync().ConfigureAwait(false);
             if (imagePaths.Count > 0)
             {
                 // The composer mounts its hidden file input after the textarea, so counting at this moment races the render.
@@ -108,18 +113,15 @@ public sealed class ChatGptPlaywrightAutomation
                 }
                 await _activity.WriteAsync(job.JobId, "media", "Đang chọn ảnh để tải lên ChatGPT.", ct).ConfigureAwait(false);
                 await fileInput.SetInputFilesAsync(imagePaths).WaitAsync(ct).ConfigureAwait(false);
-                await _activity.WriteAsync(job.JobId, "media", "Đã chọn ảnh; đang kiểm tra tệp trong browser.", ct).ConfigureAwait(false);
-                await page.WaitForFunctionAsync(
-                    "expected => document.querySelector('input[type=file]')?.files?.length === expected",
-                    imagePaths.Count, new() { Timeout = 30000 }).WaitAsync(ct).ConfigureAwait(false);
-                await _activity.WriteAsync(job.JobId, "media", "Đã xác nhận tệp ảnh trong browser.", ct).ConfigureAwait(false);
+                // ChatGPT empties the file input once it takes the files, so the input cannot prove the upload; the Send gate below does.
+                await _activity.WriteAsync(job.JobId, "media", "Đã chọn ảnh; chờ ChatGPT xử lý tệp trước khi gửi.", ct).ConfigureAwait(false);
             }
             await composer.ClickAsync().WaitAsync(ct).ConfigureAwait(false);
             await page.Keyboard.InsertTextAsync(prompt).WaitAsync(ct).ConfigureAwait(false);
-            var send = page.Locator("[data-testid='send-button']:visible, button[aria-label='Send message']:visible").First;
+            var send = page.Locator("[data-testid='send-button']:visible, button[aria-label='Send']:visible, button[aria-label='Send message']:visible").First;
             await send.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 10000 }).WaitAsync(ct).ConfigureAwait(false);
             // Uploads keep Send disabled until the image finishes, which can exceed 30 seconds.
-            await page.WaitForFunctionAsync("() => [...document.querySelectorAll('[data-testid=send-button], button[aria-label=\"Send message\"]')].some(button => button.getClientRects().length && !button.disabled && button.getAttribute('aria-disabled') !== 'true')",
+            await page.WaitForFunctionAsync("() => [...document.querySelectorAll(\"[data-testid=send-button], button[aria-label='Send'], button[aria-label='Send message']\")].some(button => button.getClientRects().length && !button.disabled && button.getAttribute('aria-disabled') !== 'true')",
                 null, new() { Timeout = 120000 }).WaitAsync(ct).ConfigureAwait(false);
             await beforeSubmit().ConfigureAwait(false);
             await _activity.WriteAsync(job.JobId, "submit", "Đã ghi checkpoint trước khi gửi.", ct).ConfigureAwait(false);
@@ -128,15 +130,18 @@ public sealed class ChatGptPlaywrightAutomation
             await _activity.WriteAsync(job.JobId, "submit", "Đã bấm gửi trên ChatGPT.", ct).ConfigureAwait(false);
             if (progress is not null) await progress(50, "Đang chờ ChatGPT trả lời").ConfigureAwait(false);
 
-            await page.WaitForFunctionAsync("previous => document.querySelectorAll('[data-message-author-role=assistant]').length > previous",
+            await page.WaitForFunctionAsync("previous => document.querySelectorAll('[data-message-author-role=assistant], [data-markdown-text-style=assistant-message]').length > previous",
                 initialAssistantCount, new() { Timeout = 120000 }).WaitAsync(ct).ConfigureAwait(false);
             var response = assistantMessages.Last;
             await response.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 120000 }).WaitAsync(ct).ConfigureAwait(false);
-            await response.Locator("[data-testid='copy-turn-action-button']").Last
+            // The copy action sits beside the reply, not inside it. Wait for a new one: the previous turn's copy button is already visible while this reply is still streaming.
+            await page.WaitForFunctionAsync($"previous => document.querySelectorAll(\"{CopySelector}\").length > previous",
+                initialCopyCount, new() { Timeout = 180000 }).WaitAsync(ct).ConfigureAwait(false);
+            await page.Locator(CopySelector).Last
                 .WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 180000 }).WaitAsync(ct).ConfigureAwait(false);
             if (job.TaskType == JobTaskType.Image)
             {
-                await page.WaitForFunctionAsync("() => { const message = [...document.querySelectorAll('[data-message-author-role=assistant]')].at(-1); return !!message && [...message.querySelectorAll('img')].some(img => img.naturalWidth >= 256 && img.naturalHeight >= 256); }",
+                await page.WaitForFunctionAsync("() => { const message = [...document.querySelectorAll('[data-message-author-role=assistant], [data-markdown-text-style=assistant-message]')].at(-1); return !!message && [...message.querySelectorAll('img')].some(img => img.naturalWidth >= 256 && img.naturalHeight >= 256); }",
                     null, new() { Timeout = 180000 }).WaitAsync(ct).ConfigureAwait(false);
                 var source = await response.EvaluateAsync<string>("message => [...message.querySelectorAll('img')].filter(img => img.naturalWidth >= 256 && img.naturalHeight >= 256).at(-1)?.currentSrc || ''").WaitAsync(ct).ConfigureAwait(false);
                 if (string.IsNullOrWhiteSpace(source))
@@ -155,14 +160,13 @@ public sealed class ChatGptPlaywrightAutomation
                 var contentType = imageResponse.Headers.TryGetValue("content-type", out var header) ? header.Split(';')[0].Trim() : "";
                 var dataUrl = $"data:{contentType};base64,{Convert.ToBase64String(imageBytes)}";
                 var (fileName, base64) = ValidateGeneratedImage(dataUrl);
-                var uploaded = await _assets.UploadAssetAsync(new UploadAssetRequest(job.ProjectId, "Image", fileName, base64), ct).ConfigureAwait(false);
+                var uploaded = await _assets.UploadAssetAsync(new UploadAssetRequest(job.ProjectId, "Image", fileName, base64, StorageRootId: job.StorageRootId), ct).ConfigureAwait(false);
                 if (uploaded.Asset is null)
-                    return new(false, ResultReference: page.Url, ReasonCode: "asset_save_failed", ErrorMessage: "Không lưu được ảnh ChatGPT.", SideEffectSubmitted: true);
+                    return new(false, ReasonCode: "asset_save_failed", ErrorMessage: "Không lưu được ảnh ChatGPT.", SideEffectSubmitted: true);
                 await _activity.WriteAsync(job.JobId, "result", "Đã lưu ảnh kết quả thành Asset.", ct).ConfigureAwait(false);
                 return new(true, ResultReference: uploaded.Asset.AssetId, SideEffectSubmitted: true);
             }
-            var markdown = response.Locator(".markdown");
-            var result = (await markdown.InnerTextAsync().WaitAsync(ct).ConfigureAwait(false)).Trim();
+            var result = (await response.InnerTextAsync().WaitAsync(ct).ConfigureAwait(false)).Trim();
             if (string.IsNullOrWhiteSpace(result))
                 return new(false, ReasonCode: "empty_response", ErrorMessage: "ChatGPT trả về nội dung rỗng; cần đối soát hội thoại.", SideEffectSubmitted: true);
 
@@ -176,22 +180,19 @@ public sealed class ChatGptPlaywrightAutomation
         catch (PlaywrightException ex)
         {
             await RecordFailureAsync(job.JobId, submitted ? "Lỗi sau khi gửi; cần đối soát." : "Lỗi thao tác browser trước khi gửi.").ConfigureAwait(false);
-            return new(false, ResultReference: submitted ? page?.Url : null,
-                ReasonCode: submitted ? "reconcile_required" : "automation_blocked",
+            return new(false, ReasonCode: submitted ? "reconcile_required" : "automation_blocked",
                 ErrorMessage: $"Không thể hoàn tất thao tác ChatGPT Web: {ex.Message}", SideEffectSubmitted: submitted);
         }
         catch (TimeoutException ex)
         {
             await RecordFailureAsync(job.JobId, submitted ? "Hết thời gian sau khi gửi; cần đối soát." : "Hết thời gian trước khi gửi.").ConfigureAwait(false);
-            return new(false, ResultReference: submitted ? page?.Url : null,
-                ReasonCode: submitted ? "reconcile_required" : "automation_blocked",
+            return new(false, ReasonCode: submitted ? "reconcile_required" : "automation_blocked",
                 ErrorMessage: $"Quá thời gian chờ ChatGPT Web: {ex.Message}", SideEffectSubmitted: submitted);
         }
         catch (Exception ex)
         {
             await RecordFailureAsync(job.JobId, submitted ? "Tác vụ lỗi sau khi gửi; cần đối soát." : "Tác vụ lỗi trước khi gửi.").ConfigureAwait(false);
-            return new(false, ResultReference: submitted ? page?.Url : null,
-                ReasonCode: submitted ? "reconcile_required" : "automation_blocked",
+            return new(false, ReasonCode: submitted ? "reconcile_required" : "automation_blocked",
                 ErrorMessage: $"Không hoàn tất được tác vụ ChatGPT Web: {ex.Message}", SideEffectSubmitted: submitted);
         }
         finally

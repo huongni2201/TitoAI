@@ -290,7 +290,10 @@ public sealed class JobReservation
                     int boundCapacity = boundAccount.MaxTabs > 0 ? boundAccount.MaxTabs : 1;
                     if (accountOtherOccupancies.Count >= boundCapacity)
                     {
-                        job.ReasonCode = "waiting_for_capacity";
+                        // Slot đang bị job cần đối soát giữ: báo rõ để người dùng biết cần xử lý job đó trước
+                        job.ReasonCode = accountOtherOccupancies.Any(o => o.Job?.State == JobState.AwaitingUser)
+                            ? "waiting_for_reconcile"
+                            : "waiting_for_capacity";
                         job.UpdatedAtUtc = nowIso;
                         await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
                         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -458,7 +461,12 @@ public sealed class JobReservation
                     });
 
                     // Toàn bộ pool đã đầy hoặc chạm budget browser: Giữ nguyên trạng thái Queued, KHÔNG tăng attempts
-                    job.ReasonCode = blockedByBrowserBudget ? "waiting_for_global_browser_budget" : "waiting_for_capacity";
+                    // Slot đang bị job cần đối soát giữ: báo rõ để người dùng biết cần xử lý job đó trước
+                    bool blockedByReconcile = eligibleAccounts.Any(a =>
+                        currentOccupancies.Any(o => o.ProviderAccountId == a.Id && o.Job?.State == JobState.AwaitingUser));
+                    job.ReasonCode = blockedByBrowserBudget ? "waiting_for_global_browser_budget"
+                        : blockedByReconcile ? "waiting_for_reconcile"
+                        : "waiting_for_capacity";
                     job.UpdatedAtUtc = nowIso;
                     await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
                     await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);

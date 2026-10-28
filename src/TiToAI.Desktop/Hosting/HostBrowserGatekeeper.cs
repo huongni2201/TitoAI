@@ -30,6 +30,7 @@ public sealed class HostBrowserGatekeeper : IBrowserGatekeeper, IDisposable
     private readonly ConcurrentDictionary<string, string> _profileVisibility = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> _profileOperational = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _knownProfileIds = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _profileLaunchLocks = new(StringComparer.OrdinalIgnoreCase);
     private readonly Func<BrowserProfileStateChangedPayload, Task> _profileStateChangedHandler;
 
     public HostBrowserGatekeeper(
@@ -116,6 +117,11 @@ public sealed class HostBrowserGatekeeper : IBrowserGatekeeper, IDisposable
         string jobId,
         CancellationToken cancellationToken = default)
     {
+        // Các job cùng profile có thể cùng thấy browser chưa chạy; khóa này chỉ cho một job mở browser, job sau dùng lại.
+        // Việc lấy tab nằm trong cùng khóa để CloseProfileIfIdle không đóng browser giữa lúc tab được cấp.
+        var launchLock = GetProfileLaunchLock(profileId);
+        await launchLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
             // User-requested trial: show ChatGPT jobs so their browser actions can be inspected.
             if (_processController != null && !_processController.IsRunning(profileId))
@@ -125,9 +131,11 @@ public sealed class HostBrowserGatekeeper : IBrowserGatekeeper, IDisposable
                     if (_activity != null)
                         await _activity.WriteAsync(jobId, "browser", "Đang khởi động browser cho tác vụ.", cancellationToken).ConfigureAwait(false);
                     var profile = await _profileRegistry.GetProfileAsync(profileId, cancellationToken).ConfigureAwait(false);
-                    var visibleTrial = ((ChatGptTrialMode.Enabled && profile?.ProviderKey == ProviderKeys.ChatGPTWeb) ||
+                    // User-requested trial: show the browser for ChatGPT/Gemini text jobs and the MuseAI render.
+                    var visibleTrial = (((ChatGptTrialMode.Enabled && profile?.ProviderKey == ProviderKeys.ChatGPTWeb) ||
                         (GeminiTrialMode.Enabled && profile?.ProviderKey == ProviderKeys.GeminiWeb)) &&
-                        role is JobTaskType.Script or JobTaskType.Image or JobTaskType.VideoPrompt;
+                        role is JobTaskType.Script or JobTaskType.Image or JobTaskType.VideoPrompt) ||
+                        (MuseAiTrialMode.Enabled && profile?.ProviderKey == ProviderKeys.MuseAI && role == JobTaskType.VideoRender);
                     if (visibleTrial)
                         await _processController.LaunchVisibleAutomationContextAsync(profileId, cancellationToken).ConfigureAwait(false);
                     else
@@ -157,7 +165,14 @@ public sealed class HostBrowserGatekeeper : IBrowserGatekeeper, IDisposable
                 return null;
             }
         }
+        finally
+        {
+            launchLock.Release();
+        }
     }
+
+    private SemaphoreSlim GetProfileLaunchLock(string profileId) =>
+        _profileLaunchLocks.GetOrAdd(profileId, _ => new SemaphoreSlim(1, 1));
 
     public void ReleaseTabLease(string profileId, string role, string jobId)
     {
@@ -187,13 +202,16 @@ public sealed class HostBrowserGatekeeper : IBrowserGatekeeper, IDisposable
 
         if (IsProfileIdle(profileId) && _processController != null && _processController.IsRunning(profileId))
         {
-            _profileOperational[profileId] = "Closing";
-
-            // Thực hiện đóng browser context và nhả single-instance lock an toàn khi profile đã hoàn toàn idle
+            // Đóng dưới cùng khóa với launch/acquire và kiểm tra lại idle: job vừa được cấp tab sẽ đợi, không bị đóng giữa chừng
             _ = Task.Run(async () =>
             {
+                var launchLock = GetProfileLaunchLock(profileId);
+                await launchLock.WaitAsync().ConfigureAwait(false);
                 try
                 {
+                    if (!IsProfileIdle(profileId) || !_processController.IsRunning(profileId)) return;
+
+                    _profileOperational[profileId] = "Closing";
                     await _processController.CloseContextAsync(profileId, CancellationToken.None).ConfigureAwait(false);
                     _profileOperational[profileId] = BrowserOperationalState.Stopped;
                 }
@@ -201,6 +219,10 @@ public sealed class HostBrowserGatekeeper : IBrowserGatekeeper, IDisposable
                 {
                     _profileOperational[profileId] = BrowserOperationalState.Error;
                     System.Diagnostics.Debug.WriteLine($"[HostBrowserGatekeeper] Lỗi khi đóng idle browser context cho profile {profileId}: {ex.Message}");
+                }
+                finally
+                {
+                    launchLock.Release();
                 }
             });
         }

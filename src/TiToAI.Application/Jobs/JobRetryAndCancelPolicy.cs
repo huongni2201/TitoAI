@@ -115,6 +115,7 @@ public static class JobRetryAndCancelPolicy
 
         return string.Equals(reasonCode, JobReasonCode.TabCapacityUnavailable, StringComparison.OrdinalIgnoreCase)
             || string.Equals(reasonCode, JobReasonCode.WaitingForCapacity, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(reasonCode, JobReasonCode.WaitingForReconcile, StringComparison.OrdinalIgnoreCase)
             || string.Equals(reasonCode, JobReasonCode.GlobalJobBudgetReached, StringComparison.OrdinalIgnoreCase);
     }
 

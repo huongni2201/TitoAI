@@ -1371,7 +1371,7 @@ public static class JobQueueSmokeTests
                     throw new InvalidOperationException("Không được mở lại RPC handoff.");
                 var retiredRequest = new RequestEnvelope(Guid.NewGuid(), "request", retiredCommand,
                     JsonSerializer.SerializeToElement(new { jobId = "legacy-job" }),
-                    DateTimeOffset.UtcNow, "1.0.4");
+                    DateTimeOffset.UtcNow, "1.1.0");
                 var retiredResponse = await dispatcher.DispatchAsync(retiredRequest, CancellationToken.None);
                 if (retiredResponse.Success || retiredResponse.Error?.Code != "UNKNOWN_COMMAND")
                     throw new InvalidOperationException("RPC handoff cũ phải bị chặn ở allow-list.");
@@ -1391,7 +1391,7 @@ public static class JobQueueSmokeTests
                 Command: "job.enqueue",
                 Payload: enqueuePayload,
                 ClientTimestampUtc: DateTimeOffset.UtcNow,
-                ContractVersion: "1.0.4"
+                ContractVersion: "1.1.0"
             );
 
             var resEnvelope = await dispatcher.DispatchAsync(reqEnvelope, CancellationToken.None);
@@ -1405,7 +1405,7 @@ public static class JobQueueSmokeTests
 
             // 2. job.get_status
             var getStatusPayload = JsonSerializer.SerializeToElement(new JobGetStatusRequest(jobId), JsonOptions);
-            var statusReq = new RequestEnvelope(Guid.NewGuid(), "request", "job.get_status", getStatusPayload, DateTimeOffset.UtcNow, "1.0.4");
+            var statusReq = new RequestEnvelope(Guid.NewGuid(), "request", "job.get_status", getStatusPayload, DateTimeOffset.UtcNow, "1.1.0");
             var statusRes = await dispatcher.DispatchAsync(statusReq, CancellationToken.None);
             if (!statusRes.Success)
             {
@@ -1414,7 +1414,7 @@ public static class JobQueueSmokeTests
 
             // 3. job.list_active
             var listPayload = JsonSerializer.SerializeToElement(new JobListActiveRequest(), JsonOptions);
-            var listReq = new RequestEnvelope(Guid.NewGuid(), "request", "job.list_active", listPayload, DateTimeOffset.UtcNow, "1.0.4");
+            var listReq = new RequestEnvelope(Guid.NewGuid(), "request", "job.list_active", listPayload, DateTimeOffset.UtcNow, "1.1.0");
             var listRes = await dispatcher.DispatchAsync(listReq, CancellationToken.None);
             if (!listRes.Success)
             {
@@ -1423,7 +1423,7 @@ public static class JobQueueSmokeTests
 
             // 4. job.cancel
             var cancelPayload = JsonSerializer.SerializeToElement(new JobCancelRequest(jobId), JsonOptions);
-            var cancelReq = new RequestEnvelope(Guid.NewGuid(), "request", "job.cancel", cancelPayload, DateTimeOffset.UtcNow, "1.0.4");
+            var cancelReq = new RequestEnvelope(Guid.NewGuid(), "request", "job.cancel", cancelPayload, DateTimeOffset.UtcNow, "1.1.0");
             var cancelRes = await dispatcher.DispatchAsync(cancelReq, CancellationToken.None);
             if (!cancelRes.Success)
             {

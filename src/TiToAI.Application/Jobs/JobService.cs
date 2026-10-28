@@ -377,7 +377,8 @@ public sealed class JobService
                 HasUnresolvedSideEffect: hasUnresolved,
                 ProfileId: profileId,
                 ResultReference: j.ResultReference,
-                Revision: j.Revision
+                Revision: j.Revision,
+                ResultText: j.ResultText
             );
         }).ToList();
 
@@ -795,7 +796,8 @@ public sealed class JobService
                 HasUnresolvedSideEffect: false,
                 ProfileId: profileId,
                 ResultReference: j.ResultReference,
-                Revision: j.Revision
+                Revision: j.Revision,
+                ResultText: j.ResultText
             );
         }).ToList();
 

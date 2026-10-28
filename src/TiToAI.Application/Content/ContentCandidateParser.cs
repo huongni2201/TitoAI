@@ -261,25 +261,14 @@ public static class ContentCandidateParser
             string videoPrompt = GetString("video_prompt", "prompt", "promptEn", "videoPrompt");
             string tiktokContent = GetString("tiktok_content", "caption", "tiktok_post", "tiktokPost", "tiktokContent");
 
+            // Thiếu trường nào thì để trống, không bịa nội dung: prompt trống sẽ bị chặn khi tạo video.
             if (string.IsNullOrWhiteSpace(idea))
             {
-                idea = !string.IsNullOrWhiteSpace(hook) ? hook : "Ý tưởng video sản phẩm";
-            }
-            if (string.IsNullOrWhiteSpace(hook))
-            {
-                hook = "Bí quyết thời trang giúp bạn nổi bật mỗi ngày!";
+                idea = hook;
             }
             if (string.IsNullOrWhiteSpace(videoScript))
             {
                 videoScript = rawText.Length > 200 ? rawText[..200] : rawText;
-            }
-            if (string.IsNullOrWhiteSpace(videoPrompt))
-            {
-                videoPrompt = "Cinematic 4K shot of model showcasing the product with natural movement, soft golden hour lighting, photorealistic details, high frame rate.";
-            }
-            if (string.IsNullOrWhiteSpace(tiktokContent))
-            {
-                tiktokContent = $"{idea} 🔥 Xem ngay! #fashion #trending #lifestyle #titoai";
             }
 
             var item = new VideoContentItemDto(
@@ -305,17 +294,16 @@ public static class ContentCandidateParser
         catch (JsonException ex)
         {
             // Trích xuất fallback từ văn bản thường nếu AI không trả JSON hoàn hảo
-            var fallbackPrompt = !string.IsNullOrWhiteSpace(rawText) ? rawText.Trim() : "Cinematic shot of model presenting the product, natural lighting, smooth camera movement, 4K quality.";
             var item = new VideoContentItemDto(
                 Id: Guid.NewGuid().ToString("D").ToLowerInvariant(),
                 ProjectId: projectId,
                 SceneId: sceneId,
                 SequenceOrder: sequenceOrder,
-                Idea: "Kịch bản sản phẩm ngắn",
-                Hook: "Khám phá ngay phong cách ấn tượng hôm nay!",
+                Idea: string.Empty,
+                Hook: string.Empty,
                 VideoScript: rawText.Trim(),
-                VideoPrompt: fallbackPrompt,
-                TikTokContent: "Trải nghiệm phong cách mới cực cuốn! #titoai #trending #shorts",
+                VideoPrompt: rawText.Trim(),
+                TikTokContent: string.Empty,
                 ImageAssetId: imageAssetId,
                 VideoAssetId: null,
                 AudioAssetId: null,

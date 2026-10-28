@@ -111,7 +111,10 @@ public sealed class JobReconciliationService
                 // Nếu đã có checkpoint từ AI generation trước đó (ResultText hoặc ResultReference):
                 // Đây là lượt hoàn tất lưu trữ (finalize) kết quả sau lỗi storage, KHÔNG resend AI nên KHÔNG cần ConfirmedNotReceived.
                 // Nếu CHƯA có checkpoint mà SideEffectSubmitted == 1: BẮT BUỘC ConfirmedNotReceived == true để tránh resend mù!
-                bool hasCheckpoint = !string.IsNullOrWhiteSpace(job.ResultText) || !string.IsNullOrWhiteSpace(job.ResultReference);
+                // ResultReference còn có thể là URL hội thoại sau lỗi sau khi gửi: chỉ Asset đã lưu mới là output để finalize.
+                var hasOutputAsset = !string.IsNullOrWhiteSpace(job.ResultReference) &&
+                    await dbContext.Assets.AnyAsync(a => a.Id == job.ResultReference, cancellationToken).ConfigureAwait(false);
+                bool hasCheckpoint = !string.IsNullOrWhiteSpace(job.ResultText) || hasOutputAsset;
 
                 if (normalizedAction == "finalize" && !hasCheckpoint)
                 {

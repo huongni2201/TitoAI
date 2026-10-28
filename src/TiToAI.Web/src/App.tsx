@@ -25,6 +25,7 @@ import { ProjectPage } from "./features/projects/ProjectPage";
 import { PromptTemplateManager } from "./features/prompts";
 import { LibraryPage } from "./features/library/LibraryPage";
 import { AnalyticsPage } from "./features/analytics/AnalyticsPage";
+import { JobProgressPage } from "./features/jobs/JobProgressPage";
 import { PublishingPage } from "./features/publishing/PublishingPage";
 import { PublishingNavItem } from "./features/publishing/PublishingNavItem";
 import { createPublishingApi } from "./features/publishing/publishingApi";
@@ -38,6 +39,7 @@ export type ActiveRoute =
   | "library"
   | "analytics"
   | "publishing"
+  | "job-progress"
   | "settings";
 
 const publishingApi = createPublishingApi((command, payload, options) =>
@@ -166,6 +168,8 @@ function AppContent() {
         return "TikTok Analytics";
       case "publishing":
         return "Đăng video";
+      case "job-progress":
+        return "Tiến trình";
       case "settings":
         return "Cài đặt";
       default:
@@ -179,6 +183,7 @@ function AppContent() {
   const isLibraryActive = activeRoute === "library";
   const isAnalyticsActive = activeRoute === "analytics";
   const isSettingsActive = activeRoute === "settings";
+  const isJobProgressActive = activeRoute === "job-progress";
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground antialiased font-sans select-none">
@@ -268,6 +273,21 @@ function AppContent() {
           </button>
 
           <PublishingNavItem active={activeRoute === "publishing"} onClick={() => handleNavigate("publishing")} />
+
+          <button
+            type="button"
+            className={cn(
+              "nav-item flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors text-left font-normal cursor-pointer",
+              isJobProgressActive
+                ? "bg-primary/10 text-primary font-medium border-l-2 border-primary"
+                : "text-sidebar-foreground hover:bg-muted/60 hover:text-foreground",
+            )}
+            onClick={() => handleNavigate("job-progress")}
+            aria-current={isJobProgressActive ? "page" : undefined}
+          >
+            <ListOrdered className="size-4 shrink-0" />
+            <span>Tiến trình</span>
+          </button>
 
           <div className="my-2 border-t border-sidebar-border" />
 
@@ -452,6 +472,10 @@ function AppContent() {
               onOpenAccounts={handleNavigateToSettingsAccounts}
               onReviewVideo={handleReviewPublishedVideo}
             />
+          </div>
+
+          <div className={activeRoute === "job-progress" ? "block" : "hidden"}>
+            <JobProgressPage active={isJobProgressActive} />
           </div>
 
         </main>
