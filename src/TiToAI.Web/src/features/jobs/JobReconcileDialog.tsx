@@ -98,7 +98,6 @@ export function JobReconcileDialog({
     setIsSubmitting(true);
     try {
       const res = await jobApi.reconcile({
-        workspaceId: job.workspaceId,
         jobId: job.id,
         action: actionChoice,
         confirmedNotReceived:

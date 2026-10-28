@@ -3,7 +3,6 @@ using System.IO;
 using Microsoft.EntityFrameworkCore;
 using TiToAI.Application.Projects;
 using TiToAI.Application.Scenes;
-using TiToAI.Application.Workspaces;
 using TiToAI.Contracts.Assets;
 using TiToAI.Infrastructure.Persistence;
 using TiToAI.Infrastructure.Persistence.Entities;
@@ -67,7 +66,6 @@ public sealed class AssetService
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var workspaceId = NormalizeGuid(request.WorkspaceId, nameof(request.WorkspaceId));
         var projectId = NormalizeGuid(request.ProjectId, nameof(request.ProjectId));
         var sceneId = NormalizeGuid(request.SceneId, nameof(request.SceneId));
 
@@ -87,14 +85,14 @@ public sealed class AssetService
 
         await using var dbContext = new TiToAIDbContext(_dbOptions);
 
-        // Kiểm tra quyền sở hữu Workspace, Project và Scene
-        await VerifySceneOwnershipAsync(dbContext, workspaceId, projectId, sceneId, cancellationToken).ConfigureAwait(false);
+        // Kiểm tra quyền liên kết Project và Scene.
+        await VerifySceneOwnershipAsync(dbContext, projectId, sceneId, cancellationToken).ConfigureAwait(false);
 
         var audioRootId = StorageRootRegistry.RootInternalAudioId;
         var audioRootPath = await _rootRegistry.ResolveRootPathAsync(audioRootId, cancellationToken).ConfigureAwait(false);
 
         var assetId = Guid.NewGuid().ToString("N");
-        var relativePath = $"{workspaceId}/projects/{projectId}/audio/{assetId}{ext}";
+        var relativePath = $"{projectId}/audio/{assetId}{ext}";
 
         // Ghi tệp vật lý qua staging & atomic move
         var saveResult = await _fileStore.SaveFileFromPathAsync(
@@ -110,7 +108,6 @@ public sealed class AssetService
         var asset = new Asset
         {
             Id = assetId,
-            WorkspaceId = workspaceId,
             ProjectId = projectId,
             AssetType = "Audio",
             StorageRootId = audioRootId,
@@ -144,7 +141,6 @@ public sealed class AssetService
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var workspaceId = NormalizeGuid(request.WorkspaceId, nameof(request.WorkspaceId));
         var projectId = NormalizeGuid(request.ProjectId, nameof(request.ProjectId));
         var sceneId = NormalizeGuid(request.SceneId, nameof(request.SceneId));
 
@@ -161,14 +157,14 @@ public sealed class AssetService
 
         await using var dbContext = new TiToAIDbContext(_dbOptions);
 
-        await VerifySceneOwnershipAsync(dbContext, workspaceId, projectId, sceneId, cancellationToken).ConfigureAwait(false);
+        await VerifySceneOwnershipAsync(dbContext, projectId, sceneId, cancellationToken).ConfigureAwait(false);
 
         var currentRoots = await _rootRegistry.GetCurrentRootsAsync(cancellationToken).ConfigureAwait(false);
         var imagesRootId = currentRoots.ImagesRootId;
         var imagesRootPath = currentRoots.ImagesPath;
 
         var assetId = Guid.NewGuid().ToString("N");
-        var relativePath = $"{workspaceId}/projects/{projectId}/images/{assetId}{ext}";
+        var relativePath = $"{projectId}/images/{assetId}{ext}";
 
         var saveResult = await _fileStore.SaveFileFromPathAsync(
             imagesRootPath,
@@ -189,7 +185,6 @@ public sealed class AssetService
         var asset = new Asset
         {
             Id = assetId,
-            WorkspaceId = workspaceId,
             ProjectId = projectId,
             AssetType = "Image",
             StorageRootId = imagesRootId,
@@ -213,18 +208,56 @@ public sealed class AssetService
     }
 
     /// <summary>
-    /// Tải lên tài nguyên media (Ảnh hoặc Audio) trực tiếp vào thư viện media của Workspace:
+    /// Tải lên tài nguyên media (Ảnh hoặc Audio) vào thư viện media cấp ứng dụng.
     /// lưu tệp vật lý vào Storage Root qua cơ chế staging & atomic move,
-    /// đồng thời lưu bản ghi Asset vào cơ sở dữ liệu để có thể tái sử dụng trên toàn Workspace.
+    /// đồng thời lưu bản ghi Asset vào cơ sở dữ liệu để có thể tái sử dụng toàn ứng dụng.
     /// Hỗ trợ cả Base64Data và SourceFilePath.
     /// </summary>
+    /// <summary>Lưu MP4 do provider trả về thành Asset kiểu Video; kiểm tra chữ ký 'ftyp' trước khi lưu.</summary>
+    public async Task<AssetDto> SaveVideoAssetAsync(string projectId, string sourcePath, CancellationToken cancellationToken = default)
+    {
+        if (!File.Exists(sourcePath) || !string.Equals(Path.GetExtension(sourcePath), ".mp4", StringComparison.OrdinalIgnoreCase))
+            throw new AssetValidationException("Video đầu ra phải là tệp .mp4 tồn tại.");
+
+        var header = new byte[12];
+        await using (var probe = File.OpenRead(sourcePath))
+        {
+            if (await probe.ReadAsync(header.AsMemory(), cancellationToken).ConfigureAwait(false) < header.Length ||
+                !header.AsSpan(4, 4).SequenceEqual("ftyp"u8))
+                throw new AssetValidationException("Tệp video tải về không phải MP4 hợp lệ.");
+        }
+
+        var roots = await _rootRegistry.GetCurrentRootsAsync(cancellationToken).ConfigureAwait(false);
+        var assetId = Guid.NewGuid().ToString("N");
+        var relativePath = $"{projectId}/videos/{assetId}.mp4";
+        await using var stream = File.OpenRead(sourcePath);
+        var saved = await _fileStore.SaveFileAsync(roots.VideosPath, relativePath, stream, cancellationToken).ConfigureAwait(false);
+
+        await using var dbContext = new TiToAIDbContext(_dbOptions);
+        var asset = new Asset
+        {
+            Id = assetId,
+            ProjectId = projectId,
+            AssetType = "Video",
+            StorageRootId = roots.VideosRootId,
+            RelativePath = relativePath,
+            ByteSize = saved.ByteSize,
+            Sha256Hash = saved.Sha256Hash,
+            Status = "Linked",
+            MimeType = "video/mp4",
+            CreatedAtUtc = DateTimeOffset.UtcNow.ToString("O")
+        };
+        dbContext.Assets.Add(asset);
+        await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        return ToDto(asset);
+    }
+
     public async Task<UploadAssetResponse> UploadAssetAsync(
         UploadAssetRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var workspaceId = NormalizeGuid(request.WorkspaceId, nameof(request.WorkspaceId));
         string? projectId = null;
         if (!string.IsNullOrWhiteSpace(request.ProjectId))
         {
@@ -249,21 +282,11 @@ public sealed class AssetService
 
         await using var dbContext = new TiToAIDbContext(_dbOptions);
 
-        var workspaceExists = await dbContext.Workspaces
-            .AsNoTracking()
-            .AnyAsync(w => w.Id == workspaceId, cancellationToken)
-            .ConfigureAwait(false);
-
-        if (!workspaceExists)
-        {
-            throw new WorkspaceNotFoundException(workspaceId);
-        }
-
         if (!string.IsNullOrWhiteSpace(projectId))
         {
             var projectExists = await dbContext.Projects
                 .AsNoTracking()
-                .AnyAsync(p => p.Id == projectId && p.WorkspaceId == workspaceId, cancellationToken)
+                .AnyAsync(p => p.Id == projectId, cancellationToken)
                 .ConfigureAwait(false);
 
             if (!projectExists)
@@ -339,8 +362,8 @@ public sealed class AssetService
 
             var subDir = isAudio ? "audio" : "images";
             var relativePath = string.IsNullOrWhiteSpace(projectId)
-                ? $"{workspaceId}/media/{subDir}/{assetId}{extension}"
-                : $"{workspaceId}/projects/{projectId}/{subDir}/{assetId}{extension}";
+                ? $"library/{subDir}/{assetId}{extension}"
+                : $"{projectId}/{subDir}/{assetId}{extension}";
 
             using var memoryStream = new MemoryStream(fileBytes);
             saveResult = await _fileStore.SaveFileAsync(
@@ -355,7 +378,6 @@ public sealed class AssetService
             var asset = new Asset
             {
                 Id = assetId,
-                WorkspaceId = workspaceId,
                 ProjectId = projectId,
                 AssetType = isAudio ? "Audio" : "Image",
                 StorageRootId = storageRootId,
@@ -396,8 +418,8 @@ public sealed class AssetService
 
             var subDir = isAudio ? "audio" : "images";
             var relativePath = string.IsNullOrWhiteSpace(projectId)
-                ? $"{workspaceId}/media/{subDir}/{assetId}{extension}"
-                : $"{workspaceId}/projects/{projectId}/{subDir}/{assetId}{extension}";
+                ? $"library/{subDir}/{assetId}{extension}"
+                : $"{projectId}/{subDir}/{assetId}{extension}";
 
             saveResult = await _fileStore.SaveFileFromPathAsync(
                 storageRootPath,
@@ -411,7 +433,6 @@ public sealed class AssetService
             var asset = new Asset
             {
                 Id = assetId,
-                WorkspaceId = workspaceId,
                 ProjectId = projectId,
                 AssetType = isAudio ? "Audio" : "Image",
                 StorageRootId = storageRootId,
@@ -451,7 +472,7 @@ public sealed class AssetService
     }
 
     /// <summary>
-    /// Lấy metadata chi tiết của một Asset theo AssetId và WorkspaceId.
+    /// Lấy metadata chi tiết của một Asset theo AssetId.
     /// </summary>
     public async Task<AssetDto> GetMetadataAsync(
         GetAssetMetadataRequest request,
@@ -459,7 +480,6 @@ public sealed class AssetService
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var workspaceId = NormalizeGuid(request.WorkspaceId, nameof(request.WorkspaceId));
         if (string.IsNullOrWhiteSpace(request.AssetId))
         {
             throw new ArgumentException("Mã assetId không được để trống.", nameof(request.AssetId));
@@ -469,7 +489,7 @@ public sealed class AssetService
 
         var asset = await dbContext.Assets
             .AsNoTracking()
-            .FirstOrDefaultAsync(a => a.Id == request.AssetId && a.WorkspaceId == workspaceId, cancellationToken)
+            .FirstOrDefaultAsync(a => a.Id == request.AssetId, cancellationToken)
             .ConfigureAwait(false);
 
         if (asset is null)
@@ -478,6 +498,25 @@ public sealed class AssetService
         }
 
         return ToDto(asset);
+    }
+
+    public async Task<(Stream Content, string ContentType)> OpenPreviewAsync(string assetId, CancellationToken cancellationToken = default)
+    {
+        var asset = await GetMetadataAsync(new GetAssetMetadataRequest(assetId), cancellationToken).ConfigureAwait(false);
+        var contentType = Path.GetExtension(asset.RelativePath).ToLowerInvariant() switch
+        {
+            ".png" when asset.AssetType == "Image" => "image/png",
+            ".jpg" or ".jpeg" when asset.AssetType == "Image" => "image/jpeg",
+            ".webp" when asset.AssetType == "Image" => "image/webp",
+            ".mp3" when asset.AssetType == "Audio" => "audio/mpeg",
+            ".wav" when asset.AssetType == "Audio" => "audio/wav",
+            ".mp4" when asset.AssetType == "Video" => "video/mp4",
+            ".webm" when asset.AssetType == "Video" => "video/webm",
+            _ => throw new AssetValidationException("Định dạng tệp không hỗ trợ xem trước.")
+        };
+        var root = await _rootRegistry.ResolveRootPathAsync(asset.StorageRootId, cancellationToken).ConfigureAwait(false);
+        var path = StoragePathGuard.CombineAndVerify(root, asset.RelativePath);
+        return (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete), contentType);
     }
 
     /// <summary>
@@ -489,7 +528,6 @@ public sealed class AssetService
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var workspaceId = NormalizeGuid(request.WorkspaceId, nameof(request.WorkspaceId));
         if (string.IsNullOrWhiteSpace(request.AssetId))
         {
             throw new ArgumentException("Mã assetId không được để trống.", nameof(request.AssetId));
@@ -499,7 +537,7 @@ public sealed class AssetService
 
         var asset = await dbContext.Assets
             .AsNoTracking()
-            .FirstOrDefaultAsync(a => a.Id == request.AssetId && a.WorkspaceId == workspaceId, cancellationToken)
+            .FirstOrDefaultAsync(a => a.Id == request.AssetId, cancellationToken)
             .ConfigureAwait(false);
 
         if (asset is null)
@@ -539,7 +577,6 @@ public sealed class AssetService
     {
         return new AssetDto(
             AssetId: asset.Id,
-            WorkspaceId: asset.WorkspaceId,
             ProjectId: asset.ProjectId,
             AssetType: asset.AssetType,
             StorageRootId: asset.StorageRootId,
@@ -553,7 +590,7 @@ public sealed class AssetService
     }
 
     /// <summary>
-    /// Liệt kê tài nguyên (Assets) có phân trang, lọc theo Workspace, Project, Loại tài nguyên và từ khóa tìm kiếm.
+    /// Liệt kê tài nguyên (Assets) có phân trang, lọc theo Project, loại và từ khóa tìm kiếm.
     /// </summary>
     public async Task<ListAssetsResponse> ListAssetsAsync(
         ListAssetsRequest request,
@@ -561,15 +598,12 @@ public sealed class AssetService
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var workspaceId = NormalizeGuid(request.WorkspaceId, nameof(request.WorkspaceId));
         var page = request.Page <= 0 ? 1 : request.Page;
         var pageSize = request.PageSize <= 0 ? 20 : (request.PageSize > 100 ? 100 : request.PageSize);
 
         await using var dbContext = new TiToAIDbContext(_dbOptions);
 
-        var query = dbContext.Assets
-            .AsNoTracking()
-            .Where(a => a.WorkspaceId == workspaceId);
+        var query = dbContext.Assets.AsNoTracking();
 
         if (!string.IsNullOrWhiteSpace(request.ProjectId))
         {
@@ -618,7 +652,6 @@ public sealed class AssetService
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var workspaceId = NormalizeGuid(request.WorkspaceId, nameof(request.WorkspaceId));
         if (string.IsNullOrWhiteSpace(request.AssetId))
         {
             throw new ArgumentException("Mã assetId không được để trống.", nameof(request.AssetId));
@@ -628,7 +661,7 @@ public sealed class AssetService
 
         var asset = await dbContext.Assets
             .AsNoTracking()
-            .FirstOrDefaultAsync(a => a.Id == request.AssetId && a.WorkspaceId == workspaceId, cancellationToken)
+            .FirstOrDefaultAsync(a => a.Id == request.AssetId, cancellationToken)
             .ConfigureAwait(false);
 
         if (asset is null)
@@ -667,7 +700,6 @@ public sealed class AssetService
 
         return new GetAssetPreviewResponse(
             AssetId: asset.Id,
-            WorkspaceId: asset.WorkspaceId,
             AssetType: asset.AssetType,
             RelativePath: asset.RelativePath,
             MimeType: asset.MimeType,
@@ -681,24 +713,13 @@ public sealed class AssetService
 
     private static async Task VerifySceneOwnershipAsync(
         TiToAIDbContext dbContext,
-        string workspaceId,
         string projectId,
         string sceneId,
         CancellationToken cancellationToken)
     {
-        var workspaceExists = await dbContext.Workspaces
-            .AsNoTracking()
-            .AnyAsync(w => w.Id == workspaceId, cancellationToken)
-            .ConfigureAwait(false);
-
-        if (!workspaceExists)
-        {
-            throw new WorkspaceNotFoundException(workspaceId);
-        }
-
         var projectExists = await dbContext.Projects
             .AsNoTracking()
-            .AnyAsync(p => p.Id == projectId && p.WorkspaceId == workspaceId, cancellationToken)
+            .AnyAsync(p => p.Id == projectId, cancellationToken)
             .ConfigureAwait(false);
 
         if (!projectExists)
@@ -708,7 +729,7 @@ public sealed class AssetService
 
         var sceneExists = await dbContext.Scenes
             .AsNoTracking()
-            .AnyAsync(s => s.Id == sceneId && s.ProjectId == projectId && s.WorkspaceId == workspaceId, cancellationToken)
+            .AnyAsync(s => s.Id == sceneId && s.ProjectId == projectId, cancellationToken)
             .ConfigureAwait(false);
 
         if (!sceneExists)

@@ -1,4 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { StoryboardPanel } from "./StoryboardPanel";
+import { ProjectActivityLog } from "./ProjectActivityLog";
 import {
   videoWorkflowApi,
   WorkflowModes,
@@ -22,6 +24,7 @@ import {
   TableCell,
 } from "@/components/ui/table";
 import { AssetPicker } from "../library/AssetPicker";
+import { AssetMediaPreview } from "../library/AssetMediaPreview";
 import { promptApi, extractTemplateVariables, renderPromptTemplateClient } from "../prompts/promptApi";
 import {
   getActivePromptId,
@@ -66,6 +69,7 @@ import {
   Edit3,
   Video,
   FileText,
+  Send,
 } from "lucide-react";
 
 const SYSTEM_VARIABLES = new Set([
@@ -73,13 +77,13 @@ const SYSTEM_VARIABLES = new Set([
   "thoi_luong",
 ]);
 
-function promptValuesStorageKey(workspaceId: string, projectId: string): string {
-  return `titoai_workflow_prompt_values_${workspaceId}_${projectId}`;
+function promptValuesStorageKey(projectId: string): string {
+  return `titoai_workflow_prompt_values_${projectId}`;
 }
 
-function readPromptValues(workspaceId: string, projectId: string): Record<string, string> {
+function readPromptValues(projectId: string): Record<string, string> {
   try {
-    const stored = localStorage.getItem(promptValuesStorageKey(workspaceId, projectId));
+    const stored = localStorage.getItem(promptValuesStorageKey(projectId));
     const values = stored ? JSON.parse(stored) : null;
     return values && typeof values === "object" && !Array.isArray(values) ? values : {};
   } catch {
@@ -88,16 +92,15 @@ function readPromptValues(workspaceId: string, projectId: string): Record<string
 }
 
 async function loadActiveTemplateInfo(
-  purpose: "Script" | "VideoPrompt",
-  workspaceId: string
+  purpose: "Script" | "VideoPrompt"
 ): Promise<ActiveTemplateInfo | null> {
   try {
-    const backendTemplate = await promptApi.getTemplate(undefined, purpose, workspaceId);
-    const templateText = backendTemplate?.currentVersion?.templateText;
+    const backendTemplate = await promptApi.getTemplate(undefined, purpose);
+    const templateText = backendTemplate?.content?.templateText;
     if (templateText) {
       return {
-        name: backendTemplate.template?.isOverride ? `Mẫu ${purpose} kênh tùy chỉnh` : `Mẫu ${purpose} toàn cục`,
-        isOverride: Boolean(backendTemplate.template?.isOverride),
+        name: backendTemplate.template.name,
+        isCustom: false,
         templateText,
         variables: extractTemplateVariables(templateText).filter((name) => !SYSTEM_VARIABLES.has(name.trim().toLowerCase())),
       };
@@ -106,9 +109,9 @@ async function loadActiveTemplateInfo(
     // Fallback sang prompt local nếu chưa đọc được template từ backend.
   }
 
-  const activePromptId = getActivePromptId(purpose, workspaceId);
+  const activePromptId = getActivePromptId(purpose);
   const storedPrompt = activePromptId
-    ? getStoredPrompts(workspaceId).find((prompt) => prompt.id === activePromptId) ||
+    ? getStoredPrompts().find((prompt) => prompt.id === activePromptId) ||
       DEFAULT_PRESET_PROMPTS[purpose].find((prompt) => prompt.id === activePromptId)
     : null;
   const fallbackPrompt = storedPrompt || DEFAULT_PRESET_PROMPTS[purpose][0];
@@ -116,7 +119,7 @@ async function loadActiveTemplateInfo(
 
   return {
     name: fallbackPrompt.name,
-    isOverride: !fallbackPrompt.isPreset,
+    isCustom: !fallbackPrompt.isPreset,
     templateText: fallbackPrompt.templateText,
     variables: extractTemplateVariables(fallbackPrompt.templateText).filter(
       (name) => !SYSTEM_VARIABLES.has(name.trim().toLowerCase())
@@ -126,7 +129,7 @@ async function loadActiveTemplateInfo(
 
 export interface ActiveTemplateInfo {
   name: string;
-  isOverride: boolean;
+  isCustom: boolean;
   templateText: string;
   variables: string[];
 }
@@ -162,15 +165,15 @@ function getVariablePlaceholder(varName: string): string {
 }
 
 export interface VideoProductionTabProps {
-  workspaceId: string;
   projectId: string;
   onRefreshProject?: () => void;
+  onOpenPublishing?: (projectId: string) => void;
 }
 
 export function VideoProductionTab({
-  workspaceId,
   projectId,
   onRefreshProject,
+  onOpenPublishing,
 }: VideoProductionTabProps) {
   const [config, setConfig] = useState<ProjectWorkflowConfigDto | null>(null);
   const [scenes, setScenes] = useState<SceneWorkflowDetailDto[]>([]);
@@ -249,7 +252,6 @@ export function VideoProductionTab({
       throw new Error(`Vui lòng điền các biến trong mẫu prompt: ${missingPromptVariables.map((name) => `{${name}}`).join(", ")}.`);
     }
     return {
-      workspaceId,
       projectId,
       workflowMode: config.workflowMode,
       goalPrompt: "",
@@ -279,17 +281,17 @@ export function VideoProductionTab({
 
   // Fetch initial config & scene list & content items & prompt template
   const loadData = useCallback(async () => {
-    if (!workspaceId || !projectId) return;
+    if (!projectId) return;
     try {
       setIsLoading(true);
       setErrorMessage(null);
       const [cfg, scns, cItems] = await Promise.all([
-        videoWorkflowApi.getConfig(workspaceId, projectId),
-        videoWorkflowApi.listScenes(workspaceId, projectId),
-        videoWorkflowApi.listContentItems(workspaceId, projectId),
+        videoWorkflowApi.getConfig(projectId),
+        videoWorkflowApi.listScenes(projectId),
+        videoWorkflowApi.listContentItems(projectId),
       ]);
 
-      const initialVars = readPromptValues(workspaceId, projectId);
+      const initialVars = readPromptValues(projectId);
       if (cfg.goalPrompt && !initialVars["chu_de"]) {
         initialVars["chu_de"] = cfg.goalPrompt;
       }
@@ -300,8 +302,8 @@ export function VideoProductionTab({
       setContentItems(cItems);
 
       const [scriptTemplate, videoPromptTemplate] = await Promise.all([
-        loadActiveTemplateInfo("Script", workspaceId),
-        loadActiveTemplateInfo("VideoPrompt", workspaceId),
+        loadActiveTemplateInfo("Script"),
+        loadActiveTemplateInfo("VideoPrompt"),
       ]);
       setActiveTemplateInfo(scriptTemplate);
       setVideoPromptTemplateInfo(videoPromptTemplate);
@@ -311,7 +313,7 @@ export function VideoProductionTab({
     } finally {
       setIsLoading(false);
     }
-  }, [workspaceId, projectId]);
+  }, [projectId]);
 
   // Open Edit Content Modal
   const handleOpenEditContent = (item: VideoContentItemDto) => {
@@ -329,7 +331,6 @@ export function VideoProductionTab({
     try {
       setIsUpdatingContent(true);
       await videoWorkflowApi.updateContentItem({
-        workspaceId,
         projectId,
         itemId: editingContentItem.id,
         idea: editIdea,
@@ -354,7 +355,6 @@ export function VideoProductionTab({
       setSubmittingVideoItemId(item.id);
       setErrorMessage(null);
       await videoWorkflowApi.createSceneVideo({
-        workspaceId,
         projectId,
         itemId: item.id,
       });
@@ -391,7 +391,6 @@ export function VideoProductionTab({
 
       const result = await openAssetFolder({
         assetId: outputScene.videoAssetId,
-        workspaceId,
       });
       if (!result.success) {
         throw new Error("Không mở được thư mục chứa video. Hãy mở thư viện để kiểm tra tệp.");
@@ -430,7 +429,7 @@ export function VideoProductionTab({
     setPromptValues((prev) => {
       const next = { ...prev, [varName]: value };
       try {
-        localStorage.setItem(promptValuesStorageKey(workspaceId, projectId), JSON.stringify(next));
+        localStorage.setItem(promptValuesStorageKey(projectId), JSON.stringify(next));
       } catch {
         // Keep the current form usable when local storage is unavailable.
       }
@@ -482,13 +481,11 @@ export function VideoProductionTab({
   };
 
   const handleTriggerUpload = async (target: "model" | "product" | "ready" | "audio") => {
-    if (!workspaceId) return;
     setUploadingTarget(target);
     setErrorMessage(null);
     try {
       const isAudio = target === "audio";
       const res = await uploadAsset({
-        workspaceId,
         projectId,
         assetType: isAudio ? "Audio" : "Image",
       });
@@ -547,7 +544,6 @@ export function VideoProductionTab({
       }
 
       const res = await videoWorkflowApi.previewAiPrompt({
-        workspaceId,
         projectId,
       });
       setAiPreviewData(res);
@@ -578,7 +574,7 @@ export function VideoProductionTab({
         ...saveConfigRequest(),
       });
 
-      const res = await videoWorkflowApi.startWorkflow(workspaceId, projectId);
+      const res = await videoWorkflowApi.startWorkflow(projectId);
       setSuccessMessage(res.message);
       setIsDirty(false);
       await loadData();
@@ -593,7 +589,7 @@ export function VideoProductionTab({
   // Pause / Resume
   const handlePause = async () => {
     try {
-      const updated = await videoWorkflowApi.pauseWorkflow(workspaceId, projectId);
+      const updated = await videoWorkflowApi.pauseWorkflow(projectId);
       setConfig(updated);
     } catch (err: unknown) {
       setErrorMessage((err as Error)?.message || "Không thể tạm dừng.");
@@ -602,7 +598,7 @@ export function VideoProductionTab({
 
   const handleResume = async () => {
     try {
-      const updated = await videoWorkflowApi.resumeWorkflow(workspaceId, projectId);
+      const updated = await videoWorkflowApi.resumeWorkflow(projectId);
       setConfig(updated);
     } catch (err: unknown) {
       setErrorMessage((err as Error)?.message || "Không thể tiếp tục.");
@@ -621,7 +617,6 @@ export function VideoProductionTab({
     try {
       setIsUpdatingScene(true);
       await videoWorkflowApi.updateSceneInput({
-        workspaceId,
         projectId,
         sceneId: editingScene.sceneId,
         motionPromptText: editPromptText,
@@ -643,10 +638,13 @@ export function VideoProductionTab({
   const completedVideoCount = useMemo(() => {
     return scenes.filter((s) => !!s.videoAssetId).length;
   }, [scenes]);
+  const awaitingVideoProvider = scenes.length > 0 && scenes.every(
+    (scene) => scene.workflowStatus === SceneWorkflowStatus.ReadyForVideo && !scene.activeJobId,
+  );
 
   const mainView = useMemo<"preparing" | "running" | "completed">(() => {
     if (!config) return "preparing";
-    if (config.runState === WorkflowRunState.Completed || (scenes.length > 0 && completedVideoCount === scenes.length)) {
+    if (scenes.length === 1 && (config.runState === WorkflowRunState.Completed || completedVideoCount === 1)) {
       return "completed";
     }
     if (config.runState === WorkflowRunState.Running || config.runState === WorkflowRunState.Paused) {
@@ -756,6 +754,7 @@ export function VideoProductionTab({
 
 
       {/* ============================================================== */}
+      <StoryboardPanel projectId={projectId} />
       {/* BẢNG KỊCH BẢN & PROMPT VIDEO AI (DẠNG BẢNG - REVIEW & ACTIONS) */}
       {/* ============================================================== */}
       {contentItems.length > 0 && (
@@ -980,11 +979,7 @@ export function VideoProductionTab({
                       </span>
                       {config.modelAssetId ? (
                         <div className="space-y-2 w-full">
-                          <div className="h-24 w-full bg-muted rounded flex items-center justify-center overflow-hidden border">
-                            <span className="text-xs text-muted-foreground truncate px-2">
-                              ID: {config.modelAssetId.slice(0, 12)}…
-                            </span>
-                          </div>
+                          <AssetMediaPreview key={config.modelAssetId} assetId={config.modelAssetId} assetType="image" fileName="Ảnh mẫu người" />
                           <div className="flex items-center justify-center gap-1.5">
                             <Button
                               type="button"
@@ -1061,11 +1056,7 @@ export function VideoProductionTab({
                       </span>
                       {config.productAssetId ? (
                         <div className="space-y-2 w-full">
-                          <div className="h-24 w-full bg-muted rounded flex items-center justify-center overflow-hidden border">
-                            <span className="text-xs text-muted-foreground truncate px-2">
-                              ID: {config.productAssetId.slice(0, 12)}…
-                            </span>
-                          </div>
+                          <AssetMediaPreview key={config.productAssetId} assetId={config.productAssetId} assetType="image" fileName="Ảnh sản phẩm" />
                           <div className="flex items-center justify-center gap-1.5">
                             <Button
                               type="button"
@@ -1141,11 +1132,7 @@ export function VideoProductionTab({
                       </span>
                       {config.readyImageAssetId ? (
                         <div className="space-y-2 w-full">
-                          <div className="h-24 w-full bg-muted rounded flex items-center justify-center overflow-hidden border">
-                            <span className="text-xs text-muted-foreground truncate px-2">
-                              ID: {config.readyImageAssetId.slice(0, 12)}…
-                            </span>
-                          </div>
+                          <AssetMediaPreview key={config.readyImageAssetId} assetId={config.readyImageAssetId} assetType="image" fileName="Ảnh đã hoàn thiện" />
                           <div className="flex items-center justify-center gap-1.5">
                             <Button
                               type="button"
@@ -1229,10 +1216,10 @@ export function VideoProductionTab({
                       </strong>
                     </span>
                     <Badge
-                      variant={activeTemplateInfo?.isOverride ? "default" : "secondary"}
+                      variant={activeTemplateInfo?.isCustom ? "default" : "secondary"}
                       className="text-[10px] h-5"
                     >
-                      {activeTemplateInfo?.isOverride || videoPromptTemplateInfo?.isOverride ? "Có mẫu kênh tùy chỉnh" : "Toàn cục"}
+                      {activeTemplateInfo?.isCustom || videoPromptTemplateInfo?.isCustom ? "Prompt tùy chỉnh" : "Toàn cục"}
                     </Badge>
                   </div>
                   <Button
@@ -1465,15 +1452,17 @@ export function VideoProductionTab({
               <div className="flex items-center justify-between">
                 <div>
                   <CardTitle className="text-lg flex items-center gap-2">
-                    <Loader2 className="h-5 w-5 text-primary animate-spin" />
+                    {!awaitingVideoProvider && <Loader2 className="h-5 w-5 text-primary animate-spin" />}
                     Tiến độ sản xuất video tự động
                   </CardTitle>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Cảnh nào đủ ảnh sẽ tự động viết prompt chuyển động và đưa vào hàng đợi tạo video theo slot tài khoản có sẵn.
+                    {awaitingVideoProvider
+                      ? "Ảnh và prompt đã sẵn sàng. Chức năng tạo video đang chờ nhà cung cấp được kiểm chứng."
+                      : "Ứng dụng đang chuẩn bị ảnh và prompt chuyển động cho video."}
                   </p>
                 </div>
                 <Badge variant={config.runState === WorkflowRunState.Paused ? "warning" : "info"}>
-                  {config.runState === WorkflowRunState.Paused ? "Đang tạm dừng" : "Đang xử lý"}
+                  {config.runState === WorkflowRunState.Paused ? "Đang tạm dừng" : awaitingVideoProvider ? "Chờ tạo video" : "Đang xử lý"}
                 </Badge>
               </div>
             </CardHeader>
@@ -1485,10 +1474,12 @@ export function VideoProductionTab({
                   <span>{completedVideoCount}/{scenes.length} clip hoàn tất</span>
                 </div>
                 <Progress
-                  value={scenes.length > 0 ? (completedVideoCount / scenes.length) * 100 : 10}
+                  value={scenes.length > 0 ? (completedVideoCount / scenes.length) * 100 : 0}
                   className="h-2"
                 />
               </div>
+
+              <ProjectActivityLog projectId={projectId} />
 
               {/* Danh sách các cảnh đang chạy */}
               <div className="space-y-3 pt-2">
@@ -1515,7 +1506,7 @@ export function VideoProductionTab({
                           {scene.workflowStatus === SceneWorkflowStatus.VideoCompleted
                             ? "Đã có video"
                             : scene.workflowStatus === SceneWorkflowStatus.ReadyForVideo
-                            ? "Đang tạo video"
+                            ? "Chờ tạo video"
                             : scene.workflowStatus === SceneWorkflowStatus.PreparingPrompt
                             ? "Đang viết prompt"
                             : "Đang chuẩn bị ảnh"}
@@ -1557,7 +1548,7 @@ export function VideoProductionTab({
             <CardHeader className="pb-3">
               <CardTitle className="text-base">Chuẩn bị đăng TikTok</CardTitle>
               <p className="text-xs text-muted-foreground">
-                TiToAI mở thư mục video và sao chép caption để bạn tự xem lại và đăng trên TikTok. Ứng dụng không tải video lên hoặc xác nhận bài đăng.
+                Xem lại video, sau đó chọn tài khoản, caption và quyền xem tại trang Đăng video.
               </p>
             </CardHeader>
             <CardFooter className="border-t pt-3 flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -1570,19 +1561,30 @@ export function VideoProductionTab({
                   Cần đúng một video đầu ra hoàn chỉnh, chưa stale. Các clip rời không thể đăng như một video duy nhất.
                 </span>
               )}
-              <Button
-                type="button"
-                onClick={handlePrepareTikTokExport}
-                disabled={isPreparingTikTokExport || scenes.length !== 1 || !scenes[0]?.videoAssetId || Boolean(scenes[0]?.isStale)}
-                className="gap-2"
-              >
-                {isPreparingTikTokExport ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <FolderOpen className="h-4 w-4" />
-                )}
-                Mở video và sao chép caption
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                {onOpenPublishing && <Button
+                  type="button"
+                  onClick={() => onOpenPublishing(projectId)}
+                  disabled={scenes.length !== 1 || !scenes[0]?.videoAssetId || Boolean(scenes[0]?.isStale)}
+                  className="gap-2"
+                >
+                  <Send className="h-4 w-4" aria-hidden="true" />Đăng video
+                </Button>}
+                <Button
+                  type="button"
+                  onClick={handlePrepareTikTokExport}
+                  variant="outline"
+                  disabled={isPreparingTikTokExport || scenes.length !== 1 || !scenes[0]?.videoAssetId || Boolean(scenes[0]?.isStale)}
+                  className="gap-2"
+                >
+                  {isPreparingTikTokExport ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <FolderOpen className="h-4 w-4" />
+                  )}
+                  Mở video và sao chép caption
+                </Button>
+              </div>
             </CardFooter>
           </Card>
 
@@ -1592,10 +1594,10 @@ export function VideoProductionTab({
                 <div>
                   <CardTitle className="text-lg flex items-center gap-2">
                     <CheckCircle2 className="h-5 w-5 text-success" />
-                    Các clip theo cảnh ({completedVideoCount} clip)
+                    Video và clip đã tạo ({completedVideoCount})
                   </CardTitle>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Đầu ra là các clip video độc lập theo từng cảnh. Bạn có thể xem thử, tải về hoặc yêu cầu tạo lại từng cảnh riêng lẻ.
+                    Các clip rời chưa phải video cuối. Chỉ video đầu ra hoàn chỉnh mới có thể dùng để đăng.
                   </p>
                 </div>
               </div>
@@ -1747,9 +1749,8 @@ export function VideoProductionTab({
           <div className="h-64 bg-black/90 rounded-md flex items-center justify-center my-2 text-white">
             <div className="text-center space-y-2">
               <Film className="h-12 w-12 text-primary mx-auto animate-pulse" />
-              <p className="text-xs text-muted-foreground">
-                [Player] Tệp video: {previewVideoScene?.videoAssetId}
-              </p>
+              <p className="text-sm text-white">Chưa hỗ trợ phát trực tiếp trong ứng dụng.</p>
+              <p className="text-xs text-white/80">Mở thư mục chứa để xem video bằng trình phát trên máy.</p>
             </div>
           </div>
 
@@ -1757,6 +1758,23 @@ export function VideoProductionTab({
             <span className="text-xs text-muted-foreground truncate max-w-[260px]">
               Prompt: {previewVideoScene?.motionPromptText}
             </span>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={async () => {
+                if (!previewVideoScene?.videoAssetId) return;
+                try {
+                  const result = await openAssetFolder({ assetId: previewVideoScene.videoAssetId });
+                  if (!result.success) throw new Error("Không thể mở thư mục chứa video.");
+                } catch (error) {
+                  setErrorMessage(error instanceof Error ? error.message : "Không thể mở thư mục chứa video.");
+                  setPreviewVideoScene(null);
+                }
+              }}
+            >
+              Mở thư mục chứa
+            </Button>
             <Button
               type="button"
               variant="outline"
@@ -1832,7 +1850,7 @@ export function VideoProductionTab({
               Xem yêu cầu gửi AI viết prompt chuyển động
             </DialogTitle>
             <DialogDescription className="text-xs">
-              Ứng dụng tự động tổng hợp Mẫu Prompt Video (Template) và Yêu cầu nội dung của bạn thành văn bản gửi AI writer theo hợp đồng chuẩn.
+              Ứng dụng tự động tổng hợp Mẫu Prompt Video đã điền thành văn bản gửi AI writer theo hợp đồng chuẩn.
             </DialogDescription>
           </DialogHeader>
 
@@ -1842,22 +1860,11 @@ export function VideoProductionTab({
               <div className="p-3 rounded-lg border bg-muted/20 space-y-1.5">
                 <div className="flex items-center justify-between">
                   <span className="font-semibold text-foreground">Mẫu Prompt áp dụng:</span>
-                  <Badge variant={aiPreviewData.isOverride ? "info" : "secondary"} className="text-[10px]">
-                    {aiPreviewData.isOverride ? "Kênh tùy chỉnh" : "Toàn cục mặc định"}
-                  </Badge>
+                  <Badge variant="secondary" className="text-[10px]">Prompt toàn ứng dụng</Badge>
                 </div>
                 <div className="text-muted-foreground flex gap-4">
                   <span>Tên: <strong className="text-foreground">{aiPreviewData.templateName}</strong></span>
-                  <span>Phiên bản: <strong className="text-foreground">{aiPreviewData.versionId}</strong></span>
                 </div>
-              </div>
-
-              {/* Yêu cầu của bạn */}
-              <div className="p-3 rounded-lg border bg-muted/20 space-y-1">
-                <span className="font-semibold text-foreground">Yêu cầu nội dung (User Brief):</span>
-                <p className="text-muted-foreground whitespace-pre-wrap leading-relaxed">
-                  {aiPreviewData.userBrief || "(Chưa nhập yêu cầu nội dung)"}
-                </p>
               </div>
 
               {/* Toàn bộ prompt đã compose gửi AI writer */}
@@ -1987,7 +1994,6 @@ export function VideoProductionTab({
       {/* Asset Picker Modal */}
       {pickerTarget && (
         <AssetPicker
-          workspaceId={workspaceId}
           projectId={projectId}
           assetType={pickerTarget === "audio" ? "Audio" : "Image"}
           onClose={() => setPickerTarget(null)}

@@ -24,7 +24,7 @@ namespace TiToAI.Desktop.SmokeChecks;
 /// Bộ kiểm thử khói định lượng Task T25: TikTok Analytics & Affiliate Dashboard (P1).
 /// Kiểm thử trực tiếp trên SQLite WAL thật, bao phủ:
 /// - Test 1: Import CSV & JSON (Tiếng Việt, RFC 4180, bóc tách chính xác).
-/// - Test 2: Cô lập Workspace (Workspace Isolation - 100% không trộn lẫn số liệu).
+/// - Test 2: Cô lập dữ liệu theo TikTok account (không trộn lẫn số liệu).
 /// - Test 3: Xử lý số liệu thiếu (Null Preservation - không bịa đặt số liệu, phân biệt null và 0).
 /// - Test 4: Tính bất biến (Snapshot Immutability - đóng băng bằng chứng lịch sử).
 /// - Test 5: Tổng hợp KPI, chuỗi thời gian (Timeseries) và Top Videos.
@@ -78,10 +78,22 @@ public static class AnalyticsSmokeTests
 
             var dbOptions = optionsBuilder.Options;
 
-            // Thực thi migration trên SQLite WAL thật
+            // Khởi tạo schema cuối trên SQLite WAL thật.
             await using (var db = new TiToAIDbContext(dbOptions))
             {
-                await db.Database.MigrateAsync();
+                await db.Database.EnsureCreatedAsync();
+                var now = DateTime.UtcNow.ToString("o");
+                db.BrowserProfiles.Add(new BrowserProfile
+                {
+                    Id = "acc-analytics-default",
+                    Kind = "TikTok",
+                    ProviderKey = "tiktok",
+                    AccountIdentity = "@analytics-default",
+                    SessionStatus = "Connected",
+                    CreatedAtUtc = now,
+                    UpdatedAtUtc = now
+                });
+                await db.SaveChangesAsync();
             }
 
             var analyticsService = new AnalyticsService(dbOptions);
@@ -93,6 +105,23 @@ public static class AnalyticsSmokeTests
         }
 
         public TiToAIDbContext CreateDb() => new(DbOptions);
+
+        public async Task SeedTikTokAccountAsync(string accountId)
+        {
+            await using var db = CreateDb();
+            var now = DateTime.UtcNow.ToString("o");
+            db.BrowserProfiles.Add(new BrowserProfile
+            {
+                Id = accountId,
+                Kind = "TikTok",
+                ProviderKey = "tiktok",
+                AccountIdentity = $"@{accountId}",
+                SessionStatus = "Connected",
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now
+            });
+            await db.SaveChangesAsync();
+        }
 
         public void Dispose()
         {
@@ -183,18 +212,106 @@ public static class AnalyticsSmokeTests
         }
 
         await RunCheckAsync("Test 1: Import CSV & JSON (Snapshot & Records)", Test_ImportCsvAndJson_Success);
-        await RunCheckAsync("Test 2: Workspace Isolation (Cô lập 100% giữa các kênh)", Test_WorkspaceIsolation_StrictSeparation);
+        await RunCheckAsync("Test 2: Account isolation (cô lập 100% giữa các tài khoản)", Test_AccountIsolation_StrictSeparation);
         await RunCheckAsync("Test 3: Null Preservation (Bảo toàn số liệu thiếu, không fake 0)", Test_NullPreservation_NoFakeNumbers);
         await RunCheckAsync("Test 4: Snapshot Immutability (Đóng băng bằng chứng lịch sử)", Test_SnapshotImmutability_HistoricalFreezing);
         await RunCheckAsync("Test 5: Aggregation & Timeseries & Top Videos", Test_AggregationAndTimeseriesAndTopVideos);
         await RunCheckAsync("Test 6: Export CSV (UTF-8 có BOM chuẩn)", Test_ExportData_CsvUtf8WithBom);
         await RunCheckAsync("Test 7: Bridge Validation & Error Handling", Test_BridgeValidation_AndErrorHandling);
+        await RunCheckAsync("Test 8: TikTok probe errors retain cause and selected profile", Test_TikTokProbeFailure_PreservesCause);
+        await RunCheckAsync("Test 9: TikTok ZIP and quoted CSV exports", Test_TikTokZipCsvExports);
 
         Console.WriteLine("-----------------------------------------------------------------");
         Console.WriteLine($"Kết quả kiểm thử Analytics: {passed} PASSED, {failed} FAILED.");
         Console.WriteLine("=================================================================");
 
         return failed > 0 ? 1 : 0;
+    }
+
+    public static async Task Test_TikTokZipCsvExports()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"titoai_csv_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            const string overview = "\"Date\",\"Video Views\",\"Profile Views\",\"Likes\",\"Comments\",\"Shares\"\r\n\"October 18\",\"0\",\"2\",\"3\",\"4\",\"5\"";
+            const string content = "\"Time\",\"Video title\",\"Video link\",\"Post time\",\"Total likes\",\"Total comments\",\"Total shares\",\"Total views\"";
+            const string viewers = "\"Date\",\"Total Viewers\",\"New Viewers\",\"Returning Viewers\"\r\n\"October 18\",\"undefined\",\"0\",\"1\"";
+            var archivePath = Path.Combine(tempDir, "overview.zip");
+            using (var archive = System.IO.Compression.ZipFile.Open(archivePath, System.IO.Compression.ZipArchiveMode.Create))
+            using (var writer = new StreamWriter(archive.CreateEntry("Overview.csv").Open(), new System.Text.UTF8Encoding(true)))
+                await writer.WriteAsync(overview);
+
+            var method = typeof(TikTokAnalyticsSyncService).GetMethod("ReadExportCsvAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+            var csv = await (Task<string>)method.Invoke(null, new object[] { archivePath, "Overview", CancellationToken.None })!;
+            var parser = new AnalyticsImportExportService();
+            var parsed = parser.ParseTikTokStudioExports(csv, content, viewers, new DateTime(2026, 10, 27, 0, 0, 0, DateTimeKind.Utc));
+            Assert(parsed.OverviewRecords.Count == 1 && parsed.OverviewRecords[0].VideoViews == 0 && parsed.OverviewRecords[0].ProfileViews == 2, "ZIP CSV phải giữ đúng số 0 và các metric.");
+            Assert(parsed.ContentRecords.Count == 0 && parsed.ViewersRecords.Count == 1 && parsed.ViewersRecords[0].TotalViewers == null && parsed.ViewersRecords[0].NewViewers == 0, "CSV chỉ header và metric thiếu phải được xử lý đúng.");
+            var bomParsed = parser.ParseTikTokStudioExports("\uFEFF" + overview, content, viewers, DateTime.UtcNow);
+            Assert(bomParsed.OverviewRecords.Count == 1, "CSV có BOM phải được đọc đúng.");
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    public static async Task Test_TikTokProbeFailure_PreservesCause()
+    {
+        await using var ctx = await AnalyticsTestContext.CreateAsync();
+        const string accountId = "analytics-tiktok-profile";
+        const string profileId = accountId;
+        const string probeError = "Không thể kiểm tra phiên TikTok: kết nối bị gián đoạn.";
+        await using (var db = ctx.CreateDb())
+        {
+            db.BrowserProfiles.Add(new BrowserProfile
+            {
+                Id = profileId,
+                Kind = "TikTok",
+                ProviderKey = "tiktok",
+                AccountIdentity = "@tiktok-test",
+                SessionStatus = "Connected",
+                CreatedAtUtc = DateTime.UtcNow.ToString("o"),
+                UpdatedAtUtc = DateTime.UtcNow.ToString("o")
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var probe = new AnalyticsFailedSessionProbe(probeError);
+        var login = new AnalyticsLoginRecorder();
+        var crawler = new TikTokAnalyticsSyncService(ctx.DbOptions, new object(), new object(), login, probe);
+        var session = await crawler.CheckSessionAsync(new TikTokCheckSessionRequest(null, AccountId: accountId));
+        Assert(!session.IsLoggedIn && session.ErrorMessage == probeError, "Lỗi probe phải được giữ nguyên, không xác nhận phiên từ metadata.");
+        Assert(probe.LastProfileId == profileId, "Probe phải dùng profile của account đã chọn.");
+
+        var result = await crawler.SyncChannelDataAsync(new TikTokSyncChannelRequest(null, AccountId: accountId));
+        Assert(result.Message.Contains(probeError, StringComparison.Ordinal), "Sync phải giữ nguyên lý do probe thất bại.");
+        Assert(login.OpenCount == 0, "Lỗi probe không được tự mở/điều hướng cửa sổ đăng nhập.");
+        Assert(!result.RequiresLogin, "Lỗi kiểm tra phiên chưa xác định không được kết luận yêu cầu đăng nhập.");
+    }
+
+    public sealed class AnalyticsFailedSessionProbe(string error)
+    {
+        public string? LastProfileId { get; private set; }
+        public Task<TiToAI.Contracts.Accounts.ProfileIdentityResolutionResult> ResolveProfileIdentityAsync(
+            string profileId, string provider, CancellationToken cancellationToken)
+        {
+            LastProfileId = profileId;
+            return Task.FromResult(new TiToAI.Contracts.Accounts.ProfileIdentityResolutionResult(
+                false, profileId, provider, null, "Unverified", error));
+        }
+    }
+
+    public sealed class AnalyticsLoginRecorder
+    {
+        public int OpenCount { get; private set; }
+        public Task<TiToAI.Contracts.Browser.BrowserRequestLoginResponseData> RequestLoginAsync(
+            string profileId, string targetUrl, CancellationToken cancellationToken)
+        {
+            OpenCount++;
+            return Task.FromResult(new TiToAI.Contracts.Browser.BrowserRequestLoginResponseData(false, "VisibleActive", profileId));
+        }
     }
 
     /// <summary>
@@ -214,8 +331,7 @@ public static class AnalyticsSmokeTests
 
         var importCsvReq = CreateRequest("analytics.import_data", new
         {
-            workspaceId = "ws-test-01",
-            accountId = "acc-tiktok-01",
+            accountId = "acc-analytics-default",
             format = "csv",
             rawContent = csv,
             source = "manual_csv"
@@ -228,7 +344,6 @@ public static class AnalyticsSmokeTests
         Assert(csvResult != null, "Kết quả import CSV không được null");
         Assert(csvResult!.Success, "ImportResult.Success phải là true");
         Assert(csvResult.RecordCount == 3, $"RecordCount phải bằng 3, thực tế: {csvResult.RecordCount}");
-        Assert(csvResult.WorkspaceId == "ws-test-01", "WorkspaceId phải khớp");
         Assert(!string.IsNullOrWhiteSpace(csvResult.SnapshotId), "SnapshotId không được rỗng");
 
         // Xác minh trực tiếp trong SQLite DB
@@ -237,7 +352,7 @@ public static class AnalyticsSmokeTests
             var snapshot = await db.Set<AnalyticsSnapshot>().FirstOrDefaultAsync(s => s.Id == csvResult.SnapshotId);
             Assert(snapshot != null, "Snapshot CSV phải được lưu vào DB");
             Assert(snapshot!.RecordCount == 3, "Snapshot.RecordCount trong DB phải là 3");
-            Assert(snapshot.WorkspaceId == "ws-test-01", "Snapshot.WorkspaceId trong DB phải đúng");
+            Assert(snapshot.AccountId == "acc-analytics-default", "Snapshot phải thuộc tài khoản đã chọn.");
             Assert(snapshot.Source == "manual_csv", "Snapshot.Source trong DB phải đúng");
 
             var records = await db.Set<VideoAnalyticsRecord>()
@@ -284,7 +399,7 @@ public static class AnalyticsSmokeTests
 
         var importJsonReq = CreateRequest("analytics.import_data", new
         {
-            workspaceId = "ws-test-01",
+            accountId = "acc-analytics-default",
             format = "json",
             rawContent = json,
             source = "manual_json"
@@ -304,20 +419,22 @@ public static class AnalyticsSmokeTests
     }
 
     /// <summary>
-    /// Test 2: Cô lập Workspace - Dữ liệu giữa Workspace A (ws-alpha) và Workspace B (ws-beta) không được trộn lẫn.
+    /// Test 2: Cô lập account - dữ liệu giữa TikTok account A và B không được trộn lẫn.
     /// </summary>
-    public static async Task Test_WorkspaceIsolation_StrictSeparation()
+    public static async Task Test_AccountIsolation_StrictSeparation()
     {
         await using var ctx = await AnalyticsTestContext.CreateAsync();
+        await ctx.SeedTikTokAccountAsync("acc-alpha");
+        await ctx.SeedTikTokAccountAsync("acc-beta");
 
-        // Nạp dữ liệu Workspace A (Tổng views: 100,000)
+        // Nạp dữ liệu account A (Tổng views: 100,000).
         string csvAlpha = """
         video_key,title,views,likes,comments,shares,watch_time_avg_sec,gmv_amount,affiliate_clicks,published_at_utc
         v_alpha_1,"Alpha Video 1",40000,2000,100,50,15.0,1000000,50,2026-10-20T10:00:00Z
         v_alpha_2,"Alpha Video 2",60000,3000,200,80,18.0,1500000,75,2026-10-21T10:00:00Z
         """;
 
-        // Nạp dữ liệu Workspace B (Tổng views: 500,000)
+        // Nạp dữ liệu account B (Tổng views: 500,000).
         string csvBeta = """
         video_key,title,views,likes,comments,shares,watch_time_avg_sec,gmv_amount,affiliate_clicks,published_at_utc
         v_beta_1,"Beta Video 1",300000,15000,800,400,20.0,8000000,300,2026-10-20T10:00:00Z
@@ -326,20 +443,20 @@ public static class AnalyticsSmokeTests
 
         await ctx.Dispatcher.DispatchAsync(CreateRequest("analytics.import_data", new
         {
-            workspaceId = "ws-alpha",
+            accountId = "acc-alpha",
             format = "csv",
             rawContent = csvAlpha
         }), CancellationToken.None);
 
         await ctx.Dispatcher.DispatchAsync(CreateRequest("analytics.import_data", new
         {
-            workspaceId = "ws-beta",
+            accountId = "acc-beta",
             format = "csv",
             rawContent = csvBeta
         }), CancellationToken.None);
 
-        // Truy vấn Summary của Workspace A
-        var summaryAlphaReq = CreateRequest("analytics.get_summary", new { workspaceId = "ws-alpha" });
+        // Truy vấn summary của account A.
+        var summaryAlphaReq = CreateRequest("analytics.get_summary", new { accountId = "acc-alpha" });
         var summaryAlphaResp = await ctx.Dispatcher.DispatchAsync(summaryAlphaReq, CancellationToken.None);
         Assert(summaryAlphaResp.Success, "Get summary alpha phải thành công");
 
@@ -350,8 +467,8 @@ public static class AnalyticsSmokeTests
         Assert(summaryAlpha.TotalLikes == 5000, $"Alpha likes phải là 5,000, thực tế: {summaryAlpha.TotalLikes}");
         Assert(summaryAlpha.TotalGmvAmount == 2500000m, "Alpha GMV phải đúng 2,500,000");
 
-        // Truy vấn Top Videos của Workspace A
-        var topVideosAlphaReq = CreateRequest("analytics.list_top_videos", new { workspaceId = "ws-alpha" });
+        // Truy vấn top videos của account A.
+        var topVideosAlphaReq = CreateRequest("analytics.list_top_videos", new { accountId = "acc-alpha" });
         var topVideosAlphaResp = await ctx.Dispatcher.DispatchAsync(topVideosAlphaReq, CancellationToken.None);
         Assert(topVideosAlphaResp.Success, "List top videos alpha phải thành công");
 
@@ -362,7 +479,7 @@ public static class AnalyticsSmokeTests
         Assert(alphaVideos != null && alphaVideos.Count == 2, "Alpha chỉ được có đúng 2 videos");
         foreach (var v in alphaVideos!)
         {
-            Assert(v.WorkspaceId == "ws-alpha", $"WorkspaceId phải là ws-alpha, thực tế: {v.WorkspaceId}");
+            Assert(v.AccountId == "acc-alpha", $"AccountId phải là acc-alpha, thực tế: {v.AccountId}");
             Assert(!v.VideoKey.StartsWith("v_beta", StringComparison.OrdinalIgnoreCase),
                 $"Tuyệt đối không được rò rỉ video của beta vào alpha: {v.VideoKey}");
         }
@@ -383,7 +500,7 @@ public static class AnalyticsSmokeTests
 
         var importResp = await ctx.Dispatcher.DispatchAsync(CreateRequest("analytics.import_data", new
         {
-            workspaceId = "ws-sparse",
+            accountId = "acc-analytics-default",
             format = "csv",
             rawContent = csvSparse
         }), CancellationToken.None);
@@ -392,7 +509,7 @@ public static class AnalyticsSmokeTests
         // Kiểm tra Top Videos
         var topResp = await ctx.Dispatcher.DispatchAsync(CreateRequest("analytics.list_top_videos", new
         {
-            workspaceId = "ws-sparse"
+            accountId = "acc-analytics-default"
         }), CancellationToken.None);
         Assert(topResp.Success, "List top videos sparse phải thành công");
 
@@ -417,7 +534,7 @@ public static class AnalyticsSmokeTests
         // Kiểm tra Summary khi không có doanh thu GMV
         var summaryResp = await ctx.Dispatcher.DispatchAsync(CreateRequest("analytics.get_summary", new
         {
-            workspaceId = "ws-sparse"
+            accountId = "acc-analytics-default"
         }), CancellationToken.None);
         var summary = DeserializeData<AnalyticsSummaryDto>(summaryResp);
 
@@ -442,7 +559,7 @@ public static class AnalyticsSmokeTests
 
         var resp1 = await ctx.Dispatcher.DispatchAsync(CreateRequest("analytics.import_data", new
         {
-            workspaceId = "ws-immutable",
+            accountId = "acc-analytics-default",
             format = "csv",
             rawContent = batch1
         }), CancellationToken.None);
@@ -464,7 +581,7 @@ public static class AnalyticsSmokeTests
 
         var resp2 = await ctx.Dispatcher.DispatchAsync(CreateRequest("analytics.import_data", new
         {
-            workspaceId = "ws-immutable",
+            accountId = "acc-analytics-default",
             format = "csv",
             rawContent = batch2
         }), CancellationToken.None);
@@ -513,7 +630,7 @@ public static class AnalyticsSmokeTests
 
         await ctx.Dispatcher.DispatchAsync(CreateRequest("analytics.import_data", new
         {
-            workspaceId = "ws-agg-test",
+            accountId = "acc-analytics-default",
             format = "csv",
             rawContent = csv
         }), CancellationToken.None);
@@ -524,7 +641,7 @@ public static class AnalyticsSmokeTests
         // Engagement rate = 3600 / 40000 * 100% = 9.0%
         var summaryResp = await ctx.Dispatcher.DispatchAsync(CreateRequest("analytics.get_summary", new
         {
-            workspaceId = "ws-agg-test"
+            accountId = "acc-analytics-default"
         }), CancellationToken.None);
         Assert(summaryResp.Success, "Get summary agg phải thành công");
 
@@ -544,7 +661,7 @@ public static class AnalyticsSmokeTests
         // 2. Kiểm tra Timeseries theo views
         var timeseriesResp = await ctx.Dispatcher.DispatchAsync(CreateRequest("analytics.get_timeseries", new
         {
-            workspaceId = "ws-agg-test",
+            accountId = "acc-analytics-default",
             metric = "views"
         }), CancellationToken.None);
         Assert(timeseriesResp.Success, "Get timeseries views phải thành công");
@@ -557,7 +674,7 @@ public static class AnalyticsSmokeTests
         // 3. Kiểm tra Top Videos sắp xếp theo views giảm dần
         var topVideosResp = await ctx.Dispatcher.DispatchAsync(CreateRequest("analytics.list_top_videos", new
         {
-            workspaceId = "ws-agg-test",
+            accountId = "acc-analytics-default",
             sortBy = "views",
             limit = 10
         }), CancellationToken.None);
@@ -584,14 +701,14 @@ public static class AnalyticsSmokeTests
 
         await ctx.Dispatcher.DispatchAsync(CreateRequest("analytics.import_data", new
         {
-            workspaceId = "ws-export",
+            accountId = "acc-analytics-default",
             format = "csv",
             rawContent = csv
         }), CancellationToken.None);
 
         var exportResp = await ctx.Dispatcher.DispatchAsync(CreateRequest("analytics.export_data", new
         {
-            workspaceId = "ws-export",
+            accountId = "acc-analytics-default",
             format = "csv"
         }), CancellationToken.None);
 
@@ -619,20 +736,20 @@ public static class AnalyticsSmokeTests
     {
         await using var ctx = await AnalyticsTestContext.CreateAsync();
 
-        // 1. import_data thiếu workspaceId
+        // 1. import_data thiếu accountId
         var invalidImport1 = CreateRequest("analytics.import_data", new
         {
             format = "csv",
             rawContent = "video_key,title\nv1,t1"
         });
         var resp1 = await ctx.Dispatcher.DispatchAsync(invalidImport1, CancellationToken.None);
-        Assert(!resp1.Success, "Import thiếu workspaceId phải thất bại");
+        Assert(!resp1.Success, "Import thiếu accountId phải thất bại");
         Assert(resp1.Error?.Code == "INVALID_ARGUMENT", $"Error code phải là INVALID_ARGUMENT, thực tế: {resp1.Error?.Code}");
 
         // 2. import_data thiếu rawContent
         var invalidImport2 = CreateRequest("analytics.import_data", new
         {
-            workspaceId = "ws-test",
+            accountId = "acc-analytics-default",
             format = "csv",
             rawContent = ""
         });
@@ -640,21 +757,21 @@ public static class AnalyticsSmokeTests
         Assert(!resp2.Success, "Import thiếu rawContent phải thất bại");
         Assert(resp2.Error?.Code == "INVALID_ARGUMENT", "Error code phải là INVALID_ARGUMENT");
 
-        // 3. get_summary thiếu workspaceId
+        // 3. get_summary thiếu accountId
         var invalidSummary = CreateRequest("analytics.get_summary", new { });
         var resp3 = await ctx.Dispatcher.DispatchAsync(invalidSummary, CancellationToken.None);
-        Assert(!resp3.Success, "Summary thiếu workspaceId phải thất bại");
+        Assert(!resp3.Success, "Summary thiếu accountId phải thất bại");
         Assert(resp3.Error?.Code == "INVALID_ARGUMENT", "Error code phải là INVALID_ARGUMENT");
 
         // 4. get_timeseries thiếu metric
-        var invalidTs = CreateRequest("analytics.get_timeseries", new { workspaceId = "ws-test" });
+        var invalidTs = CreateRequest("analytics.get_timeseries", new { accountId = "acc-test" });
         var resp4 = await ctx.Dispatcher.DispatchAsync(invalidTs, CancellationToken.None);
         Assert(!resp4.Success, "Timeseries thiếu metric phải thất bại");
         Assert(resp4.Error?.Code == "INVALID_ARGUMENT", "Error code phải là INVALID_ARGUMENT");
 
         // 5. Unregister và kiểm tra UNKNOWN_COMMAND
         ctx.Handlers.Unregister(ctx.Dispatcher);
-        var unregReq = CreateRequest("analytics.get_summary", new { workspaceId = "ws-test" });
+        var unregReq = CreateRequest("analytics.get_summary", new { accountId = "acc-test" });
         var resp5 = await ctx.Dispatcher.DispatchAsync(unregReq, CancellationToken.None);
         Assert(!resp5.Success, "Sau khi unregister, command phải thất bại");
     }

@@ -11,18 +11,13 @@ public class JobConfiguration : IEntityTypeConfiguration<Job>
         builder.ToTable("Job", t =>
         {
             t.HasCheckConstraint("CK_Job_TaskType_Scene",
-                "(task_type = 'Script' AND scene_id IS NULL) OR (task_type IN ('Image', 'VideoPrompt', 'VideoRender') AND scene_id IS NOT NULL)");
+                "(task_type = 'Script' AND scene_id IS NULL) OR task_type IN ('Image', 'VideoPrompt', 'VideoRender')");
         });
 
         builder.HasKey(j => j.Id);
 
         builder.Property(j => j.Id)
             .HasColumnName("id")
-            .HasColumnType("TEXT")
-            .IsRequired();
-
-        builder.Property(j => j.WorkspaceId)
-            .HasColumnName("workspace_id")
             .HasColumnType("TEXT")
             .IsRequired();
 
@@ -145,14 +140,13 @@ public class JobConfiguration : IEntityTypeConfiguration<Job>
 
         builder.HasOne(j => j.Project)
             .WithMany()
-            .HasForeignKey(j => new { j.ProjectId, j.WorkspaceId })
-            .HasPrincipalKey(p => new { p.Id, p.WorkspaceId })
+            .HasForeignKey(j => j.ProjectId)
             .OnDelete(DeleteBehavior.Cascade);
 
         builder.HasOne(j => j.Scene)
             .WithMany()
-            .HasForeignKey(j => new { j.SceneId, j.ProjectId, j.WorkspaceId })
-            .HasPrincipalKey(s => new { s.Id, s.ProjectId, s.WorkspaceId })
+            .HasForeignKey(j => new { j.SceneId, j.ProjectId })
+            .HasPrincipalKey(s => new { s.Id, s.ProjectId })
             .IsRequired(false)
             .OnDelete(DeleteBehavior.Cascade);
 
@@ -164,10 +158,7 @@ public class JobConfiguration : IEntityTypeConfiguration<Job>
         builder.HasIndex(j => new { j.State, j.LeaseExpiresAtUtc, j.RetryAfterUtc })
             .HasDatabaseName("ix_job_state_lease_retry");
 
-        builder.HasIndex(j => j.WorkspaceId)
-            .HasDatabaseName("ix_job_workspace");
-
-        builder.HasIndex(j => new { j.ProjectId, j.WorkspaceId })
-            .HasDatabaseName("ix_job_project_workspace");
+        builder.HasIndex(j => j.ProjectId)
+            .HasDatabaseName("ix_job_project");
     }
 }

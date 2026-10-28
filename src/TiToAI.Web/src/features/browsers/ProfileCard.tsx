@@ -23,13 +23,11 @@ import { cn } from "@/lib/utils";
 
 interface ProfileCardProps {
   profile: BrowserProfileDto;
-  workspaceName?: string | null;
   onActionComplete?: () => void;
 }
 
 export const ProfileCard: React.FC<ProfileCardProps> = ({
   profile,
-  workspaceName,
   onActionComplete,
 }) => {
   const [isRequestingLogin, setIsRequestingLogin] = useState(false);
@@ -68,7 +66,7 @@ export const ProfileCard: React.FC<ProfileCardProps> = ({
           subtitle: profile.accountIdentity
             ? `Kênh: ${profile.accountIdentity}`
             : "Chưa liên kết kênh",
-          badgeScope: workspaceName ? `Workspace: ${workspaceName}` : "Kênh TikTok",
+          badgeScope: "Kênh TikTok",
           icon: <Smartphone className="h-5 w-5" />,
         };
       default:

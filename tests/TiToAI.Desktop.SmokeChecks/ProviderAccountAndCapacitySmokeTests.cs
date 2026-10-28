@@ -80,8 +80,6 @@ public static class ProviderAccountAndCapacitySmokeTests
             Console.WriteLine("\n    --- [Q1-6] Concurrent Dispatchers Contention On Same Slot (H2, A06) ---");
             await Test_ConcurrentDispatchers_ContentionOnSameSlot(tempDir);
 
-            Console.WriteLine("\n    --- [Q1-7] Legacy Migration Pre-T13a Upgrade Fixture & Conflict Quarantine (H2, H4, A11) ---");
-            await Test_LegacyMigration_PreT13a_UpgradeFixture(tempDir);
 
             return 0;
         }
@@ -224,11 +222,9 @@ public static class ProviderAccountAndCapacitySmokeTests
     private static async Task Test_SlotOccupancy_NoDuplicateSlots_AndFastReuse(DbContextOptions<TiToAIDbContext> dbOptions)
     {
         await using var dbContext = new TiToAIDbContext(dbOptions);
-        string wsId = Guid.NewGuid().ToString("D").ToLowerInvariant();
-        dbContext.Workspaces.Add(new Workspace { Id = wsId, Name = "WS Test", Status = "Active", CreatedAtUtc = DateTime.UtcNow.ToString("o"), UpdatedAtUtc = DateTime.UtcNow.ToString("o") });
 
         string prjId = Guid.NewGuid().ToString("D").ToLowerInvariant();
-        dbContext.Projects.Add(new Project { Id = prjId, WorkspaceId = wsId, Name = "Prj Test", CreatedAtUtc = DateTime.UtcNow.ToString("o"), UpdatedAtUtc = DateTime.UtcNow.ToString("o") });
+        dbContext.Projects.Add(new Project { Id = prjId, Name = "Prj Test", CreatedAtUtc = DateTime.UtcNow.ToString("o"), UpdatedAtUtc = DateTime.UtcNow.ToString("o") });
 
         string accountId = Guid.NewGuid().ToString("D").ToLowerInvariant();
         string profileId = "profile_" + Guid.NewGuid().ToString("N");
@@ -255,9 +251,9 @@ public static class ProviderAccountAndCapacitySmokeTests
         string nowIso = DateTime.UtcNow.ToString("o");
 
         dbContext.Jobs.AddRange(
-            new Job { Id = job1Id, WorkspaceId = wsId, ProjectId = prjId, TaskType = "Script", ProviderKey = "gemini-web", State = JobState.Queued, CreatedAtUtc = nowIso, UpdatedAtUtc = nowIso },
-            new Job { Id = job2Id, WorkspaceId = wsId, ProjectId = prjId, TaskType = "Script", ProviderKey = "gemini-web", State = JobState.Queued, CreatedAtUtc = nowIso, UpdatedAtUtc = nowIso },
-            new Job { Id = job3Id, WorkspaceId = wsId, ProjectId = prjId, TaskType = "Script", ProviderKey = "gemini-web", State = JobState.Queued, CreatedAtUtc = nowIso, UpdatedAtUtc = nowIso }
+            new Job { Id = job1Id, ProjectId = prjId, TaskType = "Script", ProviderKey = "gemini-web", State = JobState.Queued, CreatedAtUtc = nowIso, UpdatedAtUtc = nowIso },
+            new Job { Id = job2Id, ProjectId = prjId, TaskType = "Script", ProviderKey = "gemini-web", State = JobState.Queued, CreatedAtUtc = nowIso, UpdatedAtUtc = nowIso },
+            new Job { Id = job3Id, ProjectId = prjId, TaskType = "Script", ProviderKey = "gemini-web", State = JobState.Queued, CreatedAtUtc = nowIso, UpdatedAtUtc = nowIso }
         );
         await dbContext.SaveChangesAsync();
 
@@ -300,11 +296,9 @@ public static class ProviderAccountAndCapacitySmokeTests
     private static async Task Test_Retry_HonorsDisabledAndGlobalBudget(DbContextOptions<TiToAIDbContext> dbOptions)
     {
         await using var dbContext = new TiToAIDbContext(dbOptions);
-        string wsId = Guid.NewGuid().ToString("D").ToLowerInvariant();
-        dbContext.Workspaces.Add(new Workspace { Id = wsId, Name = "WS Test 2", Status = "Active", CreatedAtUtc = DateTime.UtcNow.ToString("o"), UpdatedAtUtc = DateTime.UtcNow.ToString("o") });
 
         string prjId = Guid.NewGuid().ToString("D").ToLowerInvariant();
-        dbContext.Projects.Add(new Project { Id = prjId, WorkspaceId = wsId, Name = "Prj Test 2", CreatedAtUtc = DateTime.UtcNow.ToString("o"), UpdatedAtUtc = DateTime.UtcNow.ToString("o") });
+        dbContext.Projects.Add(new Project { Id = prjId, Name = "Prj Test 2", CreatedAtUtc = DateTime.UtcNow.ToString("o"), UpdatedAtUtc = DateTime.UtcNow.ToString("o") });
 
         string pKey = "retry-provider-" + Guid.NewGuid().ToString("N")[..8];
         string accountId = Guid.NewGuid().ToString("D").ToLowerInvariant();
@@ -328,7 +322,7 @@ public static class ProviderAccountAndCapacitySmokeTests
 
         string jobId = Guid.NewGuid().ToString("D").ToLowerInvariant();
         string nowIso = DateTime.UtcNow.ToString("o");
-        var job = new Job { Id = jobId, WorkspaceId = wsId, ProjectId = prjId, TaskType = "Script", ProviderKey = pKey, State = JobState.Queued, CreatedAtUtc = nowIso, UpdatedAtUtc = nowIso };
+        var job = new Job { Id = jobId, ProjectId = prjId, TaskType = "Script", ProviderKey = pKey, State = JobState.Queued, CreatedAtUtc = nowIso, UpdatedAtUtc = nowIso };
         dbContext.Jobs.Add(job);
         await dbContext.SaveChangesAsync();
 
@@ -358,11 +352,9 @@ public static class ProviderAccountAndCapacitySmokeTests
     private static async Task Test_AwaitingUser_RetainsOccupancy(DbContextOptions<TiToAIDbContext> dbOptions)
     {
         await using var dbContext = new TiToAIDbContext(dbOptions);
-        string wsId = Guid.NewGuid().ToString("D").ToLowerInvariant();
-        dbContext.Workspaces.Add(new Workspace { Id = wsId, Name = "WS Test 3", Status = "Active", CreatedAtUtc = DateTime.UtcNow.ToString("o"), UpdatedAtUtc = DateTime.UtcNow.ToString("o") });
 
         string prjId = Guid.NewGuid().ToString("D").ToLowerInvariant();
-        dbContext.Projects.Add(new Project { Id = prjId, WorkspaceId = wsId, Name = "Prj Test 3", CreatedAtUtc = DateTime.UtcNow.ToString("o"), UpdatedAtUtc = DateTime.UtcNow.ToString("o") });
+        dbContext.Projects.Add(new Project { Id = prjId, Name = "Prj Test 3", CreatedAtUtc = DateTime.UtcNow.ToString("o"), UpdatedAtUtc = DateTime.UtcNow.ToString("o") });
 
         string pKey = "uncertain-provider-" + Guid.NewGuid().ToString("N")[..8];
         string accountId = Guid.NewGuid().ToString("D").ToLowerInvariant();
@@ -385,7 +377,7 @@ public static class ProviderAccountAndCapacitySmokeTests
 
         string jobId = Guid.NewGuid().ToString("D").ToLowerInvariant();
         string nowIso = DateTime.UtcNow.ToString("o");
-        var job = new Job { Id = jobId, WorkspaceId = wsId, ProjectId = prjId, TaskType = "Script", ProviderKey = pKey, State = JobState.Queued, CreatedAtUtc = nowIso, UpdatedAtUtc = nowIso };
+        var job = new Job { Id = jobId, ProjectId = prjId, TaskType = "Script", ProviderKey = pKey, State = JobState.Queued, CreatedAtUtc = nowIso, UpdatedAtUtc = nowIso };
         dbContext.Jobs.Add(job);
         await dbContext.SaveChangesAsync();
 
@@ -417,7 +409,7 @@ public static class ProviderAccountAndCapacitySmokeTests
 
         // Account có maxConcurrentJobs=1 nên job khác không thể chiếm slot này
         string job2Id = Guid.NewGuid().ToString("D").ToLowerInvariant();
-        dbContext.Jobs.Add(new Job { Id = job2Id, WorkspaceId = wsId, ProjectId = prjId, TaskType = "Script", ProviderKey = pKey, State = JobState.Queued, CreatedAtUtc = nowIso, UpdatedAtUtc = nowIso });
+        dbContext.Jobs.Add(new Job { Id = job2Id, ProjectId = prjId, TaskType = "Script", ProviderKey = pKey, State = JobState.Queued, CreatedAtUtc = nowIso, UpdatedAtUtc = nowIso });
         await dbContext.SaveChangesAsync();
 
         var resOther = await reservation.TryReserveJobAsync(job2Id, "worker-2", TimeSpan.FromSeconds(30));
@@ -434,10 +426,8 @@ public static class ProviderAccountAndCapacitySmokeTests
         var dbOptions = CreateSqliteOptions(testDbPath);
 
         await using var dbContext = new TiToAIDbContext(dbOptions);
-        string wsId = Guid.NewGuid().ToString("D").ToLowerInvariant();
-        dbContext.Workspaces.Add(new Workspace { Id = wsId, Name = "WS Browser Budget", Status = "Active", CreatedAtUtc = DateTime.UtcNow.ToString("o"), UpdatedAtUtc = DateTime.UtcNow.ToString("o") });
         string prjId = Guid.NewGuid().ToString("D").ToLowerInvariant();
-        dbContext.Projects.Add(new Project { Id = prjId, WorkspaceId = wsId, Name = "Prj Browser Budget", CreatedAtUtc = DateTime.UtcNow.ToString("o"), UpdatedAtUtc = DateTime.UtcNow.ToString("o") });
+        dbContext.Projects.Add(new Project { Id = prjId, Name = "Prj Browser Budget", CreatedAtUtc = DateTime.UtcNow.ToString("o"), UpdatedAtUtc = DateTime.UtcNow.ToString("o") });
 
         // Đặt ngân sách: max_concurrent_jobs = 5 (dư dả), nhưng max_open_browsers = 1 (ngặt nghèo)
         var setting = await dbContext.AppSettings.FirstOrDefaultAsync(s => s.Key == "scheduler.max_open_browsers");
@@ -468,10 +458,10 @@ public static class ProviderAccountAndCapacitySmokeTests
         string job3RetryId = "job_budget_3_" + Guid.NewGuid().ToString("N")[..6];
         string nowIso = DateTime.UtcNow.ToString("o");
 
-        dbContext.Jobs.Add(new Job { Id = job1Id, WorkspaceId = wsId, ProjectId = prjId, TaskType = "Script", ProviderKey = pKey, State = JobState.Queued, CreatedAtUtc = nowIso, UpdatedAtUtc = nowIso });
-        dbContext.Jobs.Add(new Job { Id = job2Id, WorkspaceId = wsId, ProjectId = prjId, TaskType = "Script", ProviderKey = pKey, State = JobState.Queued, CreatedAtUtc = nowIso, UpdatedAtUtc = nowIso });
+        dbContext.Jobs.Add(new Job { Id = job1Id, ProjectId = prjId, TaskType = "Script", ProviderKey = pKey, State = JobState.Queued, CreatedAtUtc = nowIso, UpdatedAtUtc = nowIso });
+        dbContext.Jobs.Add(new Job { Id = job2Id, ProjectId = prjId, TaskType = "Script", ProviderKey = pKey, State = JobState.Queued, CreatedAtUtc = nowIso, UpdatedAtUtc = nowIso });
         // Job 3 đã có binding với acc2 nhưng đang ở trạng thái retry (Queued)
-        dbContext.Jobs.Add(new Job { Id = job3RetryId, WorkspaceId = wsId, ProjectId = prjId, TaskType = "Script", ProviderKey = pKey, State = JobState.Queued, Attempts = 1, CreatedAtUtc = nowIso, UpdatedAtUtc = nowIso });
+        dbContext.Jobs.Add(new Job { Id = job3RetryId, ProjectId = prjId, TaskType = "Script", ProviderKey = pKey, State = JobState.Queued, Attempts = 1, CreatedAtUtc = nowIso, UpdatedAtUtc = nowIso });
         dbContext.ExecutionBindings.Add(new ExecutionBinding
         {
             JobId = job3RetryId,
@@ -529,10 +519,8 @@ public static class ProviderAccountAndCapacitySmokeTests
         var dbOptions = CreateSqliteOptions(testDbPath);
 
         await using var dbContext = new TiToAIDbContext(dbOptions);
-        string wsId = Guid.NewGuid().ToString("D").ToLowerInvariant();
-        dbContext.Workspaces.Add(new Workspace { Id = wsId, Name = "WS Contention", Status = "Active", CreatedAtUtc = DateTime.UtcNow.ToString("o"), UpdatedAtUtc = DateTime.UtcNow.ToString("o") });
         string prjId = Guid.NewGuid().ToString("D").ToLowerInvariant();
-        dbContext.Projects.Add(new Project { Id = prjId, WorkspaceId = wsId, Name = "Prj Contention", CreatedAtUtc = DateTime.UtcNow.ToString("o"), UpdatedAtUtc = DateTime.UtcNow.ToString("o") });
+        dbContext.Projects.Add(new Project { Id = prjId, Name = "Prj Contention", CreatedAtUtc = DateTime.UtcNow.ToString("o"), UpdatedAtUtc = DateTime.UtcNow.ToString("o") });
 
         string pKey = "contention-provider-" + Guid.NewGuid().ToString("N")[..8];
         string accId = "acc_contention_" + Guid.NewGuid().ToString("N")[..6];
@@ -546,8 +534,8 @@ public static class ProviderAccountAndCapacitySmokeTests
         string jobBId = "job_contention_b_" + Guid.NewGuid().ToString("N")[..6];
         string nowIso = DateTime.UtcNow.ToString("o");
 
-        dbContext.Jobs.Add(new Job { Id = jobAId, WorkspaceId = wsId, ProjectId = prjId, TaskType = "Script", ProviderKey = pKey, State = JobState.Queued, CreatedAtUtc = nowIso, UpdatedAtUtc = nowIso });
-        dbContext.Jobs.Add(new Job { Id = jobBId, WorkspaceId = wsId, ProjectId = prjId, TaskType = "Script", ProviderKey = pKey, State = JobState.Queued, CreatedAtUtc = nowIso, UpdatedAtUtc = nowIso });
+        dbContext.Jobs.Add(new Job { Id = jobAId, ProjectId = prjId, TaskType = "Script", ProviderKey = pKey, State = JobState.Queued, CreatedAtUtc = nowIso, UpdatedAtUtc = nowIso });
+        dbContext.Jobs.Add(new Job { Id = jobBId, ProjectId = prjId, TaskType = "Script", ProviderKey = pKey, State = JobState.Queued, CreatedAtUtc = nowIso, UpdatedAtUtc = nowIso });
         await dbContext.SaveChangesAsync();
 
         var reservation1 = new JobReservation(dbOptions);
@@ -581,179 +569,6 @@ public static class ProviderAccountAndCapacitySmokeTests
         AssertTrue(loserJob.Attempts == 0, $"Loser job attempts không được tăng (vẫn 0), thực tế: {loserJob.Attempts}");
 
         Console.WriteLine("      -> [PASS] Hai dispatcher đồng thời tranh slot giải quyết xác định: đúng 1 winner chiếm slot; loser giữ nguyên Queued/attempt=0.");
-    }
-
-    private static async Task Test_LegacyMigration_PreT13a_UpgradeFixture(string baseDir)
-    {
-        var fixtureDir = Path.Combine(baseDir, "pre_t13a_fixture_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(fixtureDir);
-        var dbPath = Path.Combine(fixtureDir, "legacy_upgrade.db");
-        var connStr = DatabasePathHelper.BuildConnectionString(dbPath);
-
-        var optionsBuilder = new DbContextOptionsBuilder<TiToAIDbContext>()
-            .UseSqlite(connStr)
-            .AddInterceptors(new SqlitePragmaInterceptor())
-            .ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning));
-        var dbOptions = optionsBuilder.Options;
-
-        try
-        {
-            // 1. Nâng cấp DB tới mốc T15 (trước T13a)
-            await using (var db = new TiToAIDbContext(dbOptions))
-            {
-                var migrator = db.Database.GetService<Microsoft.EntityFrameworkCore.Migrations.IMigrator>();
-                await migrator.MigrateAsync("20261026084944_T15_JobQueueExtensions");
-
-                // Chèn dữ liệu legacy thật trước T13a:
-                string now = DateTimeOffset.UtcNow.ToString("o");
-                string wsId = "ws_legacy";
-                string prjId = "prj_legacy";
-                string sceneId = "scene_legacy";
-
-                await db.Database.ExecuteSqlRawAsync(@"
-                    INSERT INTO Workspace (id, name, channel_handle, topic, status, created_at_utc, updated_at_utc)
-                    VALUES (@wsId, 'WS Legacy', '@legacy', 'Topic', 'Active', @now, @now);
-
-                    INSERT INTO Project (id, workspace_id, name, status, created_at_utc, updated_at_utc)
-                    VALUES (@prjId, @wsId, 'Prj Legacy', 'Draft', @now, @now);
-
-                    INSERT INTO Scene (id, project_id, workspace_id, sequence_order, name, status, target_duration_seconds, created_at_utc, updated_at_utc)
-                    VALUES (@sceneId, @prjId, @wsId, 1, 'Scene Legacy', 'Draft', 5.0, @now, @now);
-                ", new object[]
-                {
-                    new SqliteParameter("@wsId", wsId),
-                    new SqliteParameter("@prjId", prjId),
-                    new SqliteParameter("@sceneId", sceneId),
-                    new SqliteParameter("@now", now)
-                });
-
-                // 1. Dữ liệu legacy Script CÓ SceneId (vi phạm constraint mới nếu không cleanup)
-                await db.Database.ExecuteSqlRawAsync(@"
-                    INSERT INTO Job (id, workspace_id, project_id, scene_id, task_type, provider_key, prompt_snapshot_text, config_snapshot_json, storage_root_id, state, attempts, max_attempts, fencing_token, side_effect_submitted, created_at_utc, updated_at_utc)
-                    VALUES ('job_script_with_scene', @wsId, @prjId, @sceneId, 'Script', 'chatgpt-web', 'Script prompt', @emptyJson, 'root_default', 'Queued', 0, 3, 0, 0, @now, @now);
-                ", new object[]
-                {
-                    new SqliteParameter("@wsId", wsId),
-                    new SqliteParameter("@prjId", prjId),
-                    new SqliteParameter("@sceneId", sceneId),
-                    new SqliteParameter("@emptyJson", "{}"),
-                    new SqliteParameter("@now", now)
-                });
-
-                // 2. Hai BrowserProfile loại MuseAI có TRÙNG account_identity (duplicate identity)
-                string nowPlus1 = DateTimeOffset.UtcNow.AddMinutes(1).ToString("o");
-                await db.Database.ExecuteSqlRawAsync(@"
-                    INSERT INTO BrowserProfile (id, kind, account_identity, session_status, operational_state, visibility_state, created_at_utc, updated_at_utc)
-                    VALUES ('prof_muse_dup1', 'MuseAI', 'dup_artist@muse.ai', 'Connected', 'Stopped', 'Hidden', @now, @now);
-
-                    INSERT INTO BrowserProfile (id, kind, account_identity, session_status, operational_state, visibility_state, created_at_utc, updated_at_utc)
-                    VALUES ('prof_muse_dup2', 'MuseAI', 'dup_artist@muse.ai', 'Unverified', 'Stopped', 'Hidden', @nowPlus1, @nowPlus1);
-                ", new object[]
-                {
-                    new SqliteParameter("@now", now),
-                    new SqliteParameter("@nowPlus1", nowPlus1)
-                });
-            }
-
-            // 2. Nâng cấp lên T13a: Kiểm tra xử lý Script có SceneId và duplicate identity
-            string accId = "";
-            await using (var db = new TiToAIDbContext(dbOptions))
-            {
-                var migrator = db.Database.GetService<Microsoft.EntityFrameworkCore.Migrations.IMigrator>();
-                Console.WriteLine("        [DEBUG] Bắt đầu MigrateAsync sang T13a...");
-                await migrator.MigrateAsync("20261026093648_T13a_GlobalProviderAccountsAndExecutionBindings");
-                Console.WriteLine("        [DEBUG] Xong MigrateAsync sang T13a!");
-
-                // Xác minh Script legacy đã được chuyển scene_id = NULL (dùng raw SQL vì cột revision chỉ xuất hiện ở migration C1 sau đó)
-                var conn = db.Database.GetDbConnection();
-                if (conn.State != System.Data.ConnectionState.Open) await conn.OpenAsync();
-                using var scriptCheckCmd = conn.CreateCommand();
-                scriptCheckCmd.CommandText = "SELECT scene_id FROM Job WHERE id = 'job_script_with_scene';";
-                var scriptSceneId = await scriptCheckCmd.ExecuteScalarAsync();
-                AssertTrue(scriptSceneId == null || scriptSceneId == DBNull.Value, "Job Script legacy phải được chuyển scene_id = NULL trước constraint.");
-
-                // Xác minh duplicate identity: 1 profile giữ Active, 1 profile chuyển QuarantinedDuplicate
-                var accounts = await db.ProviderAccounts.AsNoTracking().Where(a => a.VerifiedIdentity == "dup_artist@muse.ai").ToListAsync();
-                AssertTrue(accounts.Count == 2, $"Phải bảo toàn cả 2 tài khoản, có {accounts.Count}");
-                AssertTrue(accounts.Any(a => a.Lifecycle == "Active" && a.Enabled), "Tài khoản cũ nhất giữ Active và Enabled.");
-                AssertTrue(accounts.Any(a => a.Lifecycle == "QuarantinedDuplicate"), "Tài khoản duplicate được chuyển QuarantinedDuplicate an toàn.");
-
-                // Tạo tình huống 2 Job có ExecutionBinding TRÙNG SLOT trên cùng 1 account (lỗi legacy H2)
-                accId = accounts.First(a => a.Lifecycle == "Active").Id;
-                string now = DateTimeOffset.UtcNow.ToString("o");
-                string nowPlus10s = DateTimeOffset.UtcNow.AddSeconds(10).ToString("o");
-
-                await db.Database.ExecuteSqlRawAsync(@"
-                    INSERT INTO Job (id, workspace_id, project_id, scene_id, task_type, provider_key, prompt_snapshot_text, config_snapshot_json, storage_root_id, state, attempts, max_attempts, fencing_token, side_effect_submitted, created_at_utc, updated_at_utc)
-                    VALUES ('job_active_1', 'ws_legacy', 'prj_legacy', 'scene_legacy', 'Image', 'museai', 'prompt', @emptyJson, 'root_default', 'Running', 1, 3, 1, 0, @now, @now);
-
-                    INSERT INTO Job (id, workspace_id, project_id, scene_id, task_type, provider_key, prompt_snapshot_text, config_snapshot_json, storage_root_id, state, attempts, max_attempts, fencing_token, side_effect_submitted, created_at_utc, updated_at_utc)
-                    VALUES ('job_active_2', 'ws_legacy', 'prj_legacy', 'scene_legacy', 'Image', 'museai', 'prompt', @emptyJson, 'root_default', 'AwaitingUser', 1, 3, 1, 1, @now, @now);
-
-                    INSERT INTO ExecutionBinding (job_id, provider_account_id, profile_id, tab_slot_id, capacity_config_revision, assigned_at_utc, lease_token)
-                    VALUES ('job_active_1', @accId, 'prof_muse_dup1', 'slot-1', 1, @now, 1);
-
-                    INSERT INTO ExecutionBinding (job_id, provider_account_id, profile_id, tab_slot_id, capacity_config_revision, assigned_at_utc, lease_token)
-                    VALUES ('job_active_2', @accId, 'prof_muse_dup1', 'slot-1', 1, @nowPlus10s, 1);
-                ", new object[]
-                {
-                    new SqliteParameter("@accId", accId),
-                    new SqliteParameter("@emptyJson", "{}"),
-                    new SqliteParameter("@now", now),
-                    new SqliteParameter("@nowPlus10s", nowPlus10s)
-                });
-            }
-
-            // 3. Nâng cấp lên Q1 mới nhất: Kiểm tra backfill không bỏ sót job, cách ly conflict an toàn
-            await using (var db = new TiToAIDbContext(dbOptions))
-            {
-                var migrator = db.Database.GetService<Microsoft.EntityFrameworkCore.Migrations.IMigrator>();
-                Console.WriteLine("        [DEBUG] Bắt đầu MigrateAsync sang Q1...");
-                await migrator.MigrateAsync("20261026193000_Q1_ActiveSlotOccupancyAndCleanup");
-                Console.WriteLine("        [DEBUG] Xong MigrateAsync sang Q1!");
-
-                // Kiểm tra PRAGMA foreign_key_check = 0 lỗi
-                var fkErrors = new List<string>();
-                var conn = db.Database.GetDbConnection();
-                if (conn.State != System.Data.ConnectionState.Open) await conn.OpenAsync();
-                using var cmd = conn.CreateCommand();
-                cmd.CommandText = "PRAGMA foreign_key_check;";
-                using var reader = await cmd.ExecuteReaderAsync();
-                while (await reader.ReadAsync())
-                {
-                    fkErrors.Add($"{reader.GetString(0)} rowid={reader.GetInt64(1)}");
-                }
-                AssertTrue(fkErrors.Count == 0, $"Foreign key check vi phạm sau upgrade: {string.Join(", ", fkErrors)}");
-
-                // CẢ HAI JOB ĐỀU PHẢI CÓ MẶT TRONG ActiveSlotOccupancy!
-                var occupancies = await db.ActiveSlotOccupancies.AsNoTracking().Where(o => o.ProviderAccountId == accId).ToListAsync();
-                AssertTrue(occupancies.Count == 2, $"Phải có chính xác 2 occupancies cho 2 jobs, thực tế có: {occupancies.Count}");
-
-                var job1Occ = occupancies.FirstOrDefault(o => o.JobId == "job_active_1");
-                var job2Occ = occupancies.FirstOrDefault(o => o.JobId == "job_active_2");
-                AssertTrue(job1Occ != null, "Job 1 (Running) phải có occupancy.");
-                AssertTrue(job2Occ != null, "Job 2 (AwaitingUser trùng slot) phải có occupancy.");
-
-                AssertTrue(job1Occ!.TabSlotId == "slot-1", "Job 1 được giữ slot-1 gốc.");
-                AssertTrue(job2Occ!.TabSlotId.Contains("-conflict-"), $"Job 2 trùng slot phải được remap với slot conflict riêng, có: {job2Occ.TabSlotId}");
-
-                using var job2Cmd = conn.CreateCommand();
-                job2Cmd.CommandText = "SELECT state, reason_code FROM Job WHERE id = 'job_active_2';";
-                using var job2Reader = await job2Cmd.ExecuteReaderAsync();
-                AssertTrue(await job2Reader.ReadAsync(), "Job 2 phải tồn tại.");
-                string job2State = job2Reader.GetString(0);
-                string job2Reason = job2Reader.IsDBNull(1) ? "" : job2Reader.GetString(1);
-                AssertTrue(job2State == JobState.AwaitingUser, "Job 2 phải ở trạng thái AwaitingUser.");
-                AssertTrue(job2Reason == "slot_conflict_quarantined", $"Job 2 phải có reason_code là slot_conflict_quarantined, có: {job2Reason}");
-
-                Console.WriteLine("      -> [PASS] Upgrade fixture từ DB trước T13a: Xử lý Script có SceneId, duplicate identity và conflict slot cách ly an toàn 100%.");
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"        [Q1-7 EXCEPTION DETAIL]: {ex}");
-            throw;
-        }
     }
 
     private static void AssertTrue(bool condition, string message)

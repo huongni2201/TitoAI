@@ -34,7 +34,7 @@ public static class PvRemediationRegressionTests
         }
     }
 
-    private static (DbContextOptions<TiToAIDbContext> dbOptions, string tempDir, string wsId, string prjId) CreateTestEnvironment()
+    private static (DbContextOptions<TiToAIDbContext> dbOptions, string tempDir, string prjId) CreateTestEnvironment()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "titoai-pvrepro-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
@@ -43,8 +43,6 @@ public static class PvRemediationRegressionTests
         var dbOptions = new DbContextOptionsBuilder<TiToAIDbContext>()
             .UseSqlite($"Data Source={dbPath}")
             .Options;
-
-        var wsId = Guid.NewGuid().ToString("D").ToLowerInvariant();
         var prjId = Guid.NewGuid().ToString("D").ToLowerInvariant();
         var now = DateTimeOffset.UtcNow.ToString("o");
 
@@ -52,21 +50,11 @@ public static class PvRemediationRegressionTests
         {
             db.Database.EnsureCreated();
 
-            db.Workspaces.Add(new Workspace
-            {
-                Id = wsId,
-                Name = "Workspace Test PV",
-                Status = "Active",
-                CreatedAtUtc = now,
-                UpdatedAtUtc = now
-            });
 
             db.Projects.Add(new Project
             {
                 Id = prjId,
-                WorkspaceId = wsId,
                 Name = "Project Test PV",
-                Description = "Mô tả dự án",
                 Status = "Draft",
                 CreatedAtUtc = now,
                 UpdatedAtUtc = now
@@ -75,7 +63,7 @@ public static class PvRemediationRegressionTests
             db.SaveChanges();
         }
 
-        return (dbOptions, tempDir, wsId, prjId);
+        return (dbOptions, tempDir, prjId);
     }
 
     private static void CleanupTestEnvironment(string tempDir)
@@ -90,7 +78,7 @@ public static class PvRemediationRegressionTests
         catch { }
     }
 
-    private static string SeedAsset(DbContextOptions<TiToAIDbContext> dbOptions, string workspaceId, string assetType, string relativePath)
+    private static string SeedAsset(DbContextOptions<TiToAIDbContext> dbOptions, string assetType, string relativePath)
     {
         using var db = new TiToAIDbContext(dbOptions);
         var assetId = Guid.NewGuid().ToString("D").ToLowerInvariant();
@@ -99,7 +87,6 @@ public static class PvRemediationRegressionTests
         db.Assets.Add(new Asset
         {
             Id = assetId,
-            WorkspaceId = workspaceId,
             ProjectId = null,
             StorageRootId = "root-1",
             RelativePath = relativePath,
@@ -146,16 +133,15 @@ public static class PvRemediationRegressionTests
     /// </summary>
     public static async Task Test_Repro1_DuplicateScriptApply_MustBeIdempotentAsync()
     {
-        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        var (dbOptions, tempDir, prjId) = CreateTestEnvironment();
         try
         {
             var (_, jobService, workflowService) = await SetupServicesAsync(dbOptions, tempDir);
 
-            var modelAssetId = SeedAsset(dbOptions, wsId, "Image", "models/m1.jpg");
-            var productAssetId = SeedAsset(dbOptions, wsId, "Image", "products/p1.jpg");
+            var modelAssetId = SeedAsset(dbOptions, "Image", "models/m1.jpg");
+            var productAssetId = SeedAsset(dbOptions, "Image", "products/p1.jpg");
 
             await workflowService.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 WorkflowMode: WorkflowModes.ModelAndProduct,
                 GoalPrompt: "BST Áo khoác mùa đông",
@@ -168,7 +154,7 @@ public static class PvRemediationRegressionTests
                 TargetDurationPerSceneSeconds: 15
             ));
 
-            await workflowService.StartWorkflowAsync(new StartProjectWorkflowRequest(wsId, prjId));
+            await workflowService.StartWorkflowAsync(new StartProjectWorkflowRequest(prjId));
 
             string scriptJobId;
             using (var db = new TiToAIDbContext(dbOptions))
@@ -176,8 +162,7 @@ public static class PvRemediationRegressionTests
                 var scriptJob = await db.Jobs.FirstAsync(j => j.ProjectId == prjId && j.TaskType == JobTaskType.Script);
                 scriptJob.State = JobState.Succeeded;
                 scriptJob.ResultText = "{\"scenes\": [" +
-                    "{\"name\": \"Cảnh 1: Giới thiệu\", \"targetDurationSeconds\": 15}," +
-                    "{\"name\": \"Cảnh 2: Chi tiết\", \"targetDurationSeconds\": 15}" +
+                    "{\"name\": \"Cảnh 1: Giới thiệu\", \"targetDurationSeconds\": 15}" +
                     "]}";
                 await db.SaveChangesAsync();
                 scriptJobId = scriptJob.Id;
@@ -191,7 +176,7 @@ public static class PvRemediationRegressionTests
             using (var db = new TiToAIDbContext(dbOptions))
             {
                 firstCount = await db.Scenes.CountAsync(s => s.ProjectId == prjId);
-                Assert(firstCount == 2, $"Sau lần 1 phải có đúng 2 cảnh, thực tế: {firstCount}");
+                Assert(firstCount == 1, $"Sau lần 1 phải có đúng 1 cảnh, thực tế: {firstCount}");
             }
 
             // Apply lần 2: phải idempotent, KHÔNG được tạo thêm cảnh (2 -> 4)
@@ -202,7 +187,7 @@ public static class PvRemediationRegressionTests
             using (var db = new TiToAIDbContext(dbOptions))
             {
                 secondCount = await db.Scenes.CountAsync(s => s.ProjectId == prjId);
-                Assert(secondCount == 2, $"[PV-R3] Lỗi apply Script lặp: số cảnh bị nhân bản từ {firstCount} thành {secondCount} (kỳ vọng vẫn giữ nguyên 2).");
+                Assert(secondCount == 1, $"[PV-R3] Lỗi apply Script lặp: số cảnh bị nhân bản từ {firstCount} thành {secondCount} (kỳ vọng vẫn giữ nguyên 1).");
             }
         }
         finally
@@ -216,11 +201,11 @@ public static class PvRemediationRegressionTests
     /// </summary>
     public static async Task Test_Repro2_StaleOutput_MustNotOverwriteUserEditedPromptAsync()
     {
-        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        var (dbOptions, tempDir, prjId) = CreateTestEnvironment();
         try
         {
             var (_, jobService, workflowService) = await SetupServicesAsync(dbOptions, tempDir);
-            var readyAssetId = SeedAsset(dbOptions, wsId, "Image", "ready/r1.jpg");
+            var readyAssetId = SeedAsset(dbOptions, "Image", "ready/r1.jpg");
 
             string sceneId = Guid.NewGuid().ToString("D").ToLowerInvariant();
             var now = DateTimeOffset.UtcNow.ToString("o");
@@ -230,7 +215,6 @@ public static class PvRemediationRegressionTests
                 {
                     Id = sceneId,
                     ProjectId = prjId,
-                    WorkspaceId = wsId,
                     SequenceOrder = 1,
                     Name = "Cảnh 1",
                     TargetDurationSeconds = 15,
@@ -244,7 +228,6 @@ public static class PvRemediationRegressionTests
             }
 
             await workflowService.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 WorkflowMode: WorkflowModes.ReadyImage,
                 GoalPrompt: "Prompt test stale",
@@ -264,7 +247,6 @@ public static class PvRemediationRegressionTests
                 db.Jobs.Add(new Job
                 {
                     Id = staleJobId,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     SceneId = sceneId,
                     TaskType = JobTaskType.VideoPrompt,
@@ -312,11 +294,11 @@ public static class PvRemediationRegressionTests
     /// </summary>
     public static async Task Test_Repro3_CancelWorkflow_MustCancelRunningJobsAsync()
     {
-        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        var (dbOptions, tempDir, prjId) = CreateTestEnvironment();
         try
         {
             var (_, jobService, workflowService) = await SetupServicesAsync(dbOptions, tempDir);
-            var readyAssetId = SeedAsset(dbOptions, wsId, "Image", "ready/r_running.jpg");
+            var readyAssetId = SeedAsset(dbOptions, "Image", "ready/r_running.jpg");
 
             string sceneId = Guid.NewGuid().ToString("D").ToLowerInvariant();
             var now = DateTimeOffset.UtcNow.ToString("o");
@@ -326,7 +308,6 @@ public static class PvRemediationRegressionTests
                 {
                     Id = sceneId,
                     ProjectId = prjId,
-                    WorkspaceId = wsId,
                     SequenceOrder = 1,
                     Name = "Cảnh 1",
                     TargetDurationSeconds = 15,
@@ -340,7 +321,6 @@ public static class PvRemediationRegressionTests
             }
 
             await workflowService.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 WorkflowMode: WorkflowModes.ReadyImage,
                 GoalPrompt: "Prompt test cancel running",
@@ -360,7 +340,6 @@ public static class PvRemediationRegressionTests
                 db.Jobs.Add(new Job
                 {
                     Id = runningJobId,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     SceneId = sceneId,
                     TaskType = JobTaskType.VideoRender,
@@ -378,7 +357,7 @@ public static class PvRemediationRegressionTests
             }
 
             // Gọi CancelWorkflowAsync
-            await workflowService.CancelWorkflowAsync(wsId, prjId);
+            await workflowService.CancelWorkflowAsync(prjId);
 
             // Kiểm tra: Job đang Running phải được yêu cầu hủy (CancelRequested == 1 hoặc State == Canceled)
             using (var db = new TiToAIDbContext(dbOptions))
@@ -399,11 +378,11 @@ public static class PvRemediationRegressionTests
     /// </summary>
     public static async Task Test_Repro4_PauseWorkflow_MustPreventEnqueuingNextStepsAsync()
     {
-        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        var (dbOptions, tempDir, prjId) = CreateTestEnvironment();
         try
         {
             var (_, jobService, workflowService) = await SetupServicesAsync(dbOptions, tempDir);
-            var readyAssetId = SeedAsset(dbOptions, wsId, "Image", "ready/r_pause.jpg");
+            var readyAssetId = SeedAsset(dbOptions, "Image", "ready/r_pause.jpg");
 
             string sceneId = Guid.NewGuid().ToString("D").ToLowerInvariant();
             var now = DateTimeOffset.UtcNow.ToString("o");
@@ -413,7 +392,6 @@ public static class PvRemediationRegressionTests
                 {
                     Id = sceneId,
                     ProjectId = prjId,
-                    WorkspaceId = wsId,
                     SequenceOrder = 1,
                     Name = "Cảnh 1",
                     TargetDurationSeconds = 15,
@@ -427,7 +405,6 @@ public static class PvRemediationRegressionTests
             }
 
             await workflowService.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 WorkflowMode: WorkflowModes.ReadyImage,
                 GoalPrompt: "Prompt test pause",
@@ -441,7 +418,7 @@ public static class PvRemediationRegressionTests
             ));
 
             // Tạm dừng quy trình (PauseWorkflowAsync)
-            await workflowService.PauseWorkflowAsync(wsId, prjId);
+            await workflowService.PauseWorkflowAsync(prjId);
 
             int queuedBefore;
             using (var db = new TiToAIDbContext(dbOptions))
@@ -456,7 +433,6 @@ public static class PvRemediationRegressionTests
                 db.Jobs.Add(new Job
                 {
                     Id = promptJobId,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     SceneId = sceneId,
                     TaskType = JobTaskType.VideoPrompt,
@@ -496,11 +472,11 @@ public static class PvRemediationRegressionTests
     /// </summary>
     public static async Task Test_Repro5_ImageSuccess_WithScriptMotionDraft_MustProgressToNextStepAsync()
     {
-        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        var (dbOptions, tempDir, prjId) = CreateTestEnvironment();
         try
         {
             var (_, jobService, workflowService) = await SetupServicesAsync(dbOptions, tempDir);
-            var readyAssetId = SeedAsset(dbOptions, wsId, "Image", "ready/r_img.jpg");
+            var readyAssetId = SeedAsset(dbOptions, "Image", "ready/r_img.jpg");
 
             string sceneId = Guid.NewGuid().ToString("D").ToLowerInvariant();
             var now = DateTimeOffset.UtcNow.ToString("o");
@@ -511,7 +487,6 @@ public static class PvRemediationRegressionTests
                 {
                     Id = sceneId,
                     ProjectId = prjId,
-                    WorkspaceId = wsId,
                     SequenceOrder = 1,
                     Name = "Cảnh 1",
                     TargetDurationSeconds = 15,
@@ -525,7 +500,6 @@ public static class PvRemediationRegressionTests
             }
 
             await workflowService.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 WorkflowMode: WorkflowModes.ModelAndProduct,
                 GoalPrompt: "BST Váy dạ hội",
@@ -538,7 +512,7 @@ public static class PvRemediationRegressionTests
                 TargetDurationPerSceneSeconds: 15
             ));
 
-            await workflowService.StartWorkflowAsync(new StartProjectWorkflowRequest(wsId, prjId));
+            await workflowService.StartWorkflowAsync(new StartProjectWorkflowRequest(prjId));
 
             int jobsBefore;
             using (var db = new TiToAIDbContext(dbOptions))
@@ -553,7 +527,6 @@ public static class PvRemediationRegressionTests
                 db.Jobs.Add(new Job
                 {
                     Id = imageJobId,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     SceneId = sceneId,
                     TaskType = JobTaskType.Image,
@@ -593,11 +566,11 @@ public static class PvRemediationRegressionTests
     /// </summary>
     public static async Task Test_Repro6_ImageToVideoPromptSuccessor_MustPreserveUserBriefAsync()
     {
-        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        var (dbOptions, tempDir, prjId) = CreateTestEnvironment();
         try
         {
             var (_, jobService, workflowService) = await SetupServicesAsync(dbOptions, tempDir);
-            var readyAssetId = SeedAsset(dbOptions, wsId, "Image", "ready/r_brief.jpg");
+            var readyAssetId = SeedAsset(dbOptions, "Image", "ready/r_brief.jpg");
 
             string sceneId = Guid.NewGuid().ToString("D").ToLowerInvariant();
             var now = DateTimeOffset.UtcNow.ToString("o");
@@ -607,7 +580,6 @@ public static class PvRemediationRegressionTests
                 {
                     Id = sceneId,
                     ProjectId = prjId,
-                    WorkspaceId = wsId,
                     SequenceOrder = 1,
                     Name = "Cảnh 1",
                     TargetDurationSeconds = 15,
@@ -622,10 +594,10 @@ public static class PvRemediationRegressionTests
 
             string uniqueBriefToken = "UNIQUE_BRIEF_TOKEN_PV_R11_ÁO_LEN_CASHMERE";
             await workflowService.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 WorkflowMode: WorkflowModes.ModelAndProduct,
-                GoalPrompt: uniqueBriefToken,
+                GoalPrompt: "",
+                VideoPromptText: uniqueBriefToken,
                 ModelAssetId: readyAssetId,
                 ProductAssetId: readyAssetId,
                 ReadyImageAssetId: null,
@@ -635,7 +607,7 @@ public static class PvRemediationRegressionTests
                 TargetDurationPerSceneSeconds: 15
             ));
 
-            await workflowService.StartWorkflowAsync(new StartProjectWorkflowRequest(wsId, prjId));
+            await workflowService.StartWorkflowAsync(new StartProjectWorkflowRequest(prjId));
 
             // Tạo Job Image hoàn tất
             string imageJobId = Guid.NewGuid().ToString("D").ToLowerInvariant();
@@ -644,7 +616,6 @@ public static class PvRemediationRegressionTests
                 db.Jobs.Add(new Job
                 {
                     Id = imageJobId,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     SceneId = sceneId,
                     TaskType = JobTaskType.Image,
@@ -688,11 +659,11 @@ public static class PvRemediationRegressionTests
     /// </summary>
     public static async Task Test_Repro7_AutomaticResult_MustTriggerApplyAndSuccessorJobAsync()
     {
-        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        var (dbOptions, tempDir, prjId) = CreateTestEnvironment();
         try
         {
             var (_, jobService, workflowService) = await SetupServicesAsync(dbOptions, tempDir);
-            var readyAssetId = SeedAsset(dbOptions, wsId, "Image", "ready/r_automatic.jpg");
+            var readyAssetId = SeedAsset(dbOptions, "Image", "ready/r_automatic.jpg");
 
             string sceneId = Guid.NewGuid().ToString("D").ToLowerInvariant();
             var now = DateTimeOffset.UtcNow.ToString("o");
@@ -702,7 +673,6 @@ public static class PvRemediationRegressionTests
                 {
                     Id = sceneId,
                     ProjectId = prjId,
-                    WorkspaceId = wsId,
                     SequenceOrder = 1,
                     Name = "Cảnh 1",
                     TargetDurationSeconds = 15,
@@ -716,7 +686,6 @@ public static class PvRemediationRegressionTests
             }
 
             await workflowService.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 WorkflowMode: WorkflowModes.ModelAndProduct,
                 GoalPrompt: "BST Hè Rực Rỡ",
@@ -729,7 +698,7 @@ public static class PvRemediationRegressionTests
                 TargetDurationPerSceneSeconds: 15
             ));
 
-            await workflowService.StartWorkflowAsync(new StartProjectWorkflowRequest(wsId, prjId));
+            await workflowService.StartWorkflowAsync(new StartProjectWorkflowRequest(prjId));
 
             // Kết quả đã được executor lưu thành công, như đầu vào của event job.state_changed.
             string imageJobId = Guid.NewGuid().ToString("D").ToLowerInvariant();
@@ -739,7 +708,6 @@ public static class PvRemediationRegressionTests
                 db.Jobs.Add(new Job
                 {
                     Id = imageJobId,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     SceneId = sceneId,
                     TaskType = JobTaskType.Image,
@@ -781,7 +749,7 @@ public static class PvRemediationRegressionTests
     /// </summary>
     public static async Task Test_Repro8_ProductionJobExecutor_WithoutBrowser_MustFailAsync()
     {
-        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        var (dbOptions, tempDir, prjId) = CreateTestEnvironment();
         try
         {
             var registry = new ProviderRegistry();
@@ -789,7 +757,6 @@ public static class PvRemediationRegressionTests
 
             var context = new JobExecutionContext(
                 JobId: "job-exec-1",
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 SceneId: "scene-1",
                 TaskType: JobTaskType.VideoRender,
@@ -812,7 +779,6 @@ public static class PvRemediationRegressionTests
             var dummyJob = new Job
             {
                 Id = "job-exec-1",
-                WorkspaceId = wsId,
                 ProjectId = prjId,
                 State = JobState.Running,
                 Attempts = 1,
@@ -853,7 +819,7 @@ public static class PvRemediationRegressionTests
             }
 
             bool resumeBlocked = false;
-            try { await jobs.ResumeAsync(wsId, dummyJob.Id); }
+            try { await jobs.ResumeAsync(dummyJob.Id); }
             catch (JobValidationException) { resumeBlocked = true; }
             Assert(resumeBlocked, "Job chờ handoff cũ không được tự đưa lại vào queue.");
 
@@ -864,7 +830,7 @@ public static class PvRemediationRegressionTests
                 await db.SaveChangesAsync();
             }
             bool retryBlocked = false;
-            try { await jobs.RetryAsync(new JobRetryRequest(wsId, dummyJob.Id, dummyJob.Revision)); }
+            try { await jobs.RetryAsync(new JobRetryRequest(dummyJob.Id, dummyJob.Revision)); }
             catch (JobValidationException) { retryBlocked = true; }
             Assert(retryBlocked, "Backend không retry job thất bại do handoff/automation chưa sẵn sàng.");
             using (var db = new TiToAIDbContext(dbOptions))
@@ -874,7 +840,7 @@ public static class PvRemediationRegressionTests
                 await db.SaveChangesAsync();
             }
 
-            await jobs.CancelAsync(wsId, dummyJob.Id);
+            await jobs.CancelAsync(dummyJob.Id);
             using (var db = new TiToAIDbContext(dbOptions))
             {
                 var legacyJob = await db.Jobs.SingleAsync(j => j.Id == dummyJob.Id);
@@ -894,17 +860,17 @@ public static class PvRemediationRegressionTests
     /// </summary>
     public static async Task Test_Repro9_CrashRecovery_ContinuationSweep_MustResumePendingIntentsAsync()
     {
-        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        var (dbOptions, tempDir, prjId) = CreateTestEnvironment();
         try
         {
             var (_, jobService, workflowService) = await SetupServicesAsync(dbOptions, tempDir);
-            var readyAssetId = SeedAsset(dbOptions, wsId, "Image", "ready/r_crash.jpg");
+            var readyAssetId = SeedAsset(dbOptions, "Image", "ready/r_crash.jpg");
             await workflowService.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
-                WorkspaceId: wsId, ProjectId: prjId, WorkflowMode: WorkflowModes.ReadyImage,
+                ProjectId: prjId, WorkflowMode: WorkflowModes.ReadyImage,
                 GoalPrompt: "Kiểm tra phục hồi run tự động", ModelAssetId: null, ProductAssetId: null,
                 ReadyImageAssetId: readyAssetId, AudioOption: AudioOptions.None, AudioAssetId: null,
                 TargetSceneCount: 1, TargetDurationPerSceneSeconds: 15));
-            var run = await workflowService.StartWorkflowAsync(new StartProjectWorkflowRequest(wsId, prjId));
+            var run = await workflowService.StartWorkflowAsync(new StartProjectWorkflowRequest(prjId));
 
             string sceneId = Guid.NewGuid().ToString("D").ToLowerInvariant();
             var now = DateTimeOffset.UtcNow.ToString("o");
@@ -914,7 +880,6 @@ public static class PvRemediationRegressionTests
                 {
                     Id = sceneId,
                     ProjectId = prjId,
-                    WorkspaceId = wsId,
                     SequenceOrder = 1,
                     Name = "Cảnh 1",
                     TargetDurationSeconds = 15,
@@ -928,7 +893,6 @@ public static class PvRemediationRegressionTests
                 // Giả lập intent chuyển tiếp bị treo lại do tiến trình crash giữa SaveChanges và Dispatch
                 var intent = new WorkflowContinuationIntent(
                     IntentId: "intent-crash-1",
-                    WorkspaceId: wsId,
                     ProjectId: prjId,
                     SceneId: sceneId,
                     TaskType: JobTaskType.VideoRender,
@@ -978,15 +942,14 @@ public static class PvRemediationRegressionTests
     /// </summary>
     public static async Task Test_Repro10_StartWorkflow_IdempotencyWithClientRequestIdAsync()
     {
-        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        var (dbOptions, tempDir, prjId) = CreateTestEnvironment();
         try
         {
             var (_, jobService, workflowService) = await SetupServicesAsync(dbOptions, tempDir);
-            var modelAssetId = SeedAsset(dbOptions, wsId, "Image", "models/m_idem.jpg");
-            var productAssetId = SeedAsset(dbOptions, wsId, "Image", "products/p_idem.jpg");
+            var modelAssetId = SeedAsset(dbOptions, "Image", "models/m_idem.jpg");
+            var productAssetId = SeedAsset(dbOptions, "Image", "products/p_idem.jpg");
 
             await workflowService.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 WorkflowMode: WorkflowModes.ModelAndProduct,
                 GoalPrompt: "BST Idempotent Test",
@@ -1003,7 +966,6 @@ public static class PvRemediationRegressionTests
 
             // Lần 1: Bắt đầu workflow
             var resp1 = await workflowService.StartWorkflowAsync(new StartProjectWorkflowRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 ClientRequestId: clientRequestId
             ));
@@ -1020,7 +982,6 @@ public static class PvRemediationRegressionTests
 
             // Lần 2: Gọi lại với cùng clientRequestId (mô phỏng double click hoặc mạng lặp)
             var resp2 = await workflowService.StartWorkflowAsync(new StartProjectWorkflowRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 ClientRequestId: clientRequestId
             ));
@@ -1045,7 +1006,7 @@ public static class PvRemediationRegressionTests
     /// </summary>
     private static async Task Test_Repro11_RenderedPromptTextAsync()
     {
-        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        var (dbOptions, tempDir, prjId) = CreateTestEnvironment();
         try
         {
             var workflowService = new ProjectWorkflowService(dbOptions);
@@ -1054,7 +1015,6 @@ public static class PvRemediationRegressionTests
             const string videoPrompt = "Camera motion cho Cảnh 1, 15s. Bối cảnh: Sân vườn mùa xuân.";
 
             var savedConfig = await workflowService.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 WorkflowMode: WorkflowModes.ProductOnly,
                 GoalPrompt: "Bộ sưu tập áo dài lụa tơ tằm",
@@ -1072,28 +1032,27 @@ public static class PvRemediationRegressionTests
             Assert(savedConfig.ScriptPromptText == scriptPrompt, "Text Script đã render phải được lưu nguyên vẹn.");
             Assert(savedConfig.VideoPromptText == videoPrompt, "Text VideoPrompt đã render phải được lưu nguyên vẹn.");
 
-            var scriptResult = await composer.ComposeScriptPlanningAiRequestAsync(wsId, savedConfig);
+            var scriptResult = await composer.ComposeScriptPlanningAiRequestAsync(savedConfig);
             Assert(scriptResult.ComposedPrompt.Contains(scriptPrompt), "Composer Script phải dùng nguyên văn text đã render.");
 
             var scene = new Scene
             {
                 Id = Guid.NewGuid().ToString("D").ToLowerInvariant(),
                 ProjectId = prjId,
-                WorkspaceId = wsId,
                 SequenceOrder = 1,
                 Name = "Cảnh 1",
                 TargetDurationSeconds = 15,
                 CreatedAtUtc = DateTimeOffset.UtcNow.ToString("o"),
                 UpdatedAtUtc = DateTimeOffset.UtcNow.ToString("o")
             };
-            var videoResult = await composer.ComposeVideoPromptAiRequestAsync(wsId, savedConfig, scene);
+            var videoResult = await composer.ComposeVideoPromptAiRequestAsync(savedConfig, scene);
             Assert(videoResult.ComposedPrompt.Contains(videoPrompt), "Composer VideoPrompt phải dùng nguyên văn text đã render.");
 
             var unresolvedConfig = savedConfig with { ScriptPromptText = "Kịch bản với biến {bien_chua_dien}." };
             bool rejectedUnresolvedPlaceholder = false;
             try
             {
-                await composer.ComposeScriptPlanningAiRequestAsync(wsId, unresolvedConfig);
+                await composer.ComposeScriptPlanningAiRequestAsync(unresolvedConfig);
             }
             catch (ProjectWorkflowValidationException ex)
             {

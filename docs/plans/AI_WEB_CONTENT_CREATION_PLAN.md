@@ -1,6 +1,5 @@
 # TiToAI — AI web đề xuất ý tưởng và tạo prompt video
 
-> **Đã chốt 2026-10-27:** [Luồng sản xuất từ ảnh](PRODUCT_IMAGE_VIDEO_WORKFLOW_PLAN.md) tự chạy sau một lần Bắt đầu: lập nhiều cảnh theo prompt → ảnh → prompt chuyển động → video, không bắt duyệt trung gian. Audio tùy chọn; mẫu và sản phẩm dùng lại trong thư viện Workspace. Trong mode này, tự áp output hợp lệ bằng revision guard; yêu cầu audio bắt buộc/duyệt từng bước bên dưới là baseline cũ đã được thay trong phạm vi này. Contract/version/validator/adapter còn phải triển khai đồng bộ; chưa là evidence code hỗ trợ. Lỗi, capability không tương thích, login, xung đột hoặc uncertainty vẫn dừng đúng policy.
 
 
 > **Delta 2026-10-27 — sản xuất từ ảnh:** [Plan ảnh mẫu/sản phẩm → ảnh đã duyệt → prompt chuyển động → video](PRODUCT_IMAGE_VIDEO_WORKFLOW_PLAN.md) thay bố cục Project/Scene dạng bảng làm luồng chính và bổ sung ba chế độ đầu vào. Luồng ảnh đi thẳng, không bắt tạo kịch bản trước; audio tùy chọn và tự động chạy theo quyết định mới. Đây là spec bàn giao, chưa nghiệm thu code.
@@ -32,7 +31,6 @@ Nguồn liên quan: [SOURCE](SOURCE_PLAN.md) §7.4,9; [Settings](SETTINGS_PLAN.m
 
 ### 3.1. Tôi có ý tưởng — phần nền P0
 
-1. Trong project thuộc Workspace, chọn **Tôi có ý tưởng**.
 2. Nhập ý tưởng, nội dung hoặc kịch bản có sẵn. Tùy chọn: mục tiêu, đối tượng, thời lượng, phong cách. Nếu bỏ trống, AI đề xuất và ghi rõ giả định.
 3. Chọn **AI phát triển kịch bản**. TiToAI gửi brief + ngữ cảnh kênh + hướng dẫn Script + hợp đồng đầu ra tới provider text đã cấu hình.
 4. Xem kịch bản, cảnh và bài đăng; sửa, yêu cầu tạo lại hoặc áp dụng. Nếu đã đưa kịch bản, ưu tiên giữ nội dung/chia cảnh, không tự đổi chủ đề.
@@ -44,7 +42,6 @@ Analytics không phải điều kiện của luồng này. Không tự gọi AI 
 
 ### 3.2. AI đề xuất từ dữ liệu kênh — P1
 
-1. Chọn **AI đề xuất ý tưởng**, Workspace và khoảng thời gian. Project rỗng là nơi nhận kết quả trong MVP; từ Analytics có thể tạo/chọn project rỗng trước khi enqueue, tránh thêm job không có project.
 2. TiToAI lấy analytics snapshot của đúng kênh từ dữ liệu đã nhập hoặc adapter thu thập được phép/đã xác minh. MVP làm import CSV/JSON trước.
 3. Hiện nguồn, thời điểm cập nhật, kỳ dữ liệu, số video, metric còn thiếu và nội dung sắp gửi AI web. Người dùng xem/chỉnh phạm vi, chọn **Phân tích và đề xuất**; hành động này gửi dữ liệu được hiển thị.
 4. TiToAI gửi snapshot + hồ sơ nội dung kênh + lịch sử ý tưởng đã chọn trong phạm vi liên quan. AI web phân tích và trả mặc định 5 ý tưởng kèm lý do/bằng chứng/giả thuyết thử nghiệm.
@@ -71,10 +68,8 @@ flowchart TD
 
 ## 4. UI và template
 
-- Project → vùng tạo nội dung có hai lựa chọn trên; giữ draft riêng theo project/mode khi chuyển. Đổi Workspace hoặc rời form có dirty guard hiện hành.
 - Cài đặt → AI & Prompt tiếp tục là nơi cấu hình provider và hướng dẫn. Tab Prompt video ghi **Hướng dẫn AI tạo prompt video**, mô tả rõ AI tự chọn chi tiết còn thiếu.
 - Nút **Lưu phiên bản hướng dẫn** chỉ lưu. **Xem yêu cầu gửi AI** chỉ render. **AI tạo prompt video** mới enqueue; UI phân biệt ba thao tác.
-- Giữ scope global/workspace override, lịch sử/version/rollback. Người dùng bình thường nhập hướng dẫn tự nhiên, không phải khai báo placeholder. Không xóa template/biến hoặc draft cũ.
 - Purpose hiện hành Script/Image/VideoPrompt giữ nguyên. Phân tích/đề xuất là operation thuộc Script; coordinator mở rộng operation/template metadata có version thay vì tự thêm purpose thứ tư.
 - Ngữ cảnh kênh/brief/cảnh được backend tự ghép thành phần dữ liệu. Template cũ có biến chưa có giá trị phải báo rõ và hỗ trợ sửa/migrate có xem trước; không âm thầm bỏ placeholder.
 - Prompt per-scene có camera/ánh sáng/chuyển động do AI quyết định. Tùy chọn chỉnh nâng cao được phép; không bắt điền trước.
@@ -83,7 +78,6 @@ flowchart TD
 ## 5. Provider và cơ chế gửi
 
 - Đề xuất MVP: dùng `ai.providers.script` cho cả phân tích/ý tưởng và kịch bản, `ai.providers.videoPrompt` cho prompt; `image` giữ nguyên. UI giải thích phạm vi của lựa chọn Script. Không thêm routing key riêng trong đợt này.
-- Mỗi job một conversation sạch; account executor lấy từ pool global tại reserve, không gắn AI account với Workspace. Chỉ gửi dữ liệu của job đó, không tái sử dụng hội thoại kênh khác.
 - Queue/retry/resume dùng snapshot, binding và checkpoint hiện hành. Sau khi đã có thể submit, reconcile hoặc awaiting_user trước khi gửi lại.
 - Tự động chạy ẩn; chỉ mở browser cho đăng nhập thủ công theo CTA. UI đổi, CAPTCHA ngoài login hoặc capability chưa verified: manual handoff trong app bằng copy/export input và import output, không fallback provider ngầm.
 - Trước khi bật thật, T19/T20 phải xác minh website/session, khả năng nhận dữ liệu, output, chạy ẩn và reconcile trên account test. Không viết selector/endpoint dựa trên phỏng đoán. Kích thước request giới hạn bằng cấu hình app và capability đo được, không coi đó là giới hạn chính thức của website.
@@ -95,9 +89,7 @@ Tên dưới là logical contract, chưa phải DTO/bridge command đã tồn t�
 
 ### 6.1. Input bất biến
 
-`ContentRequest`: schemaVersion, operation (`SuggestIdeas`, `GenerateScript`, `GenerateVideoPrompts`), workspaceId, projectId, sceneIds nếu có, expected revisions, brief/kịch bản đã lưu, selectedIdeaId nếu có, channel context, options, clientRequestId.
 
-`AnalyticsContext`: snapshotId, channel identity thuộc Workspace, source, capturedAtUtc, periodStart/End và timezone, completeness, metric definitions/units, video records, summary và selection manifest. Metric thiếu là null; phân biệt 0 thật. Không cộng dồn cùng video từ nhiều capture, không so hai kỳ khác định nghĩa.
 
 Job snapshot chốt cả input, analytics snapshot/hash, template/version, rendered request, output schema, provider/config và roots tại enqueue. Run giữ workflow version. Mỗi job tiếp theo chốt input mới theo cấu hình hiện hành; UI cho biết provider hiệu lực trước khi gửi. Snapshot không thay khi nguồn/template/Settings đổi.
 
@@ -127,7 +119,6 @@ Lưu raw response + parsed candidate + validation errors và provenance. Kiểm 
 
 Chỉ đưa metric/nội dung cần phân tích của kênh đã chọn. Cookie, token, đường dẫn profile, bí mật và dữ liệu kênh khác không được gửi. Preview hiển thị đúng payload đã rút gọn; thay dữ liệu sau preview thì đánh dấu cần xem lại trước enqueue.
 
-Caption/bình luận/nội dung import là dữ liệu không đáng tin. Đóng gói tách khỏi hướng dẫn và hợp đồng app; output AI không được thực thi lệnh/HTML hay tự chọn đường dẫn, Workspace, account, provider. App quyết định các ID và scope thực thi.
 
 Không tự sửa hướng dẫn đã lưu, tự chạy bước video, tự đăng TikTok hoặc tạo audio/TTS. Mỗi bước AI chạy theo hành động người dùng; restart không tự gửi lại yêu cầu uncertain.
 

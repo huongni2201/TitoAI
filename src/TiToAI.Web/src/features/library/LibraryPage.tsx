@@ -20,14 +20,11 @@ import {
   type AssetItem,
 } from "./libraryApi";
 import { AssetPreviewDialog } from "./AssetPreviewDialog";
-
-interface LibraryPageProps {
-  workspaceId: string | null;
-}
+import { AssetMediaPreview } from "./AssetMediaPreview";
 
 type FilterType = "all" | "Image" | "Audio" | "Video";
 
-export function LibraryPage({ workspaceId }: LibraryPageProps) {
+export function LibraryPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [assets, setAssets] = useState<AssetItem[]>([]);
@@ -44,13 +41,11 @@ export function LibraryPage({ workspaceId }: LibraryPageProps) {
   const [uploading, setUploading] = useState(false);
 
   const handleUpload = async () => {
-    if (!workspaceId) return;
     setUploading(true);
     setActionMessage(null);
     try {
       const typeToUpload = activeFilter === "Audio" ? "Audio" : "Image";
       const res = await uploadAsset({
-        workspaceId,
         assetType: typeToUpload,
       });
       if (res.asset) {
@@ -75,12 +70,10 @@ export function LibraryPage({ workspaceId }: LibraryPageProps) {
   }, [search]);
 
   const loadAssets = useCallback(async () => {
-    if (!workspaceId) return;
     setLoading(true);
     setError(null);
     try {
       const res = await listAssets({
-        workspaceId,
         assetType: activeFilter === "all" ? undefined : activeFilter,
         page,
         pageSize,
@@ -94,19 +87,17 @@ export function LibraryPage({ workspaceId }: LibraryPageProps) {
     } finally {
       setLoading(false);
     }
-  }, [workspaceId, activeFilter, page, pageSize, debouncedSearch]);
+  }, [activeFilter, page, pageSize, debouncedSearch]);
 
   useEffect(() => {
     loadAssets();
   }, [loadAssets]);
 
   const handleOpenFolder = async (asset: AssetItem) => {
-    if (!workspaceId) return;
     try {
       setActionMessage(null);
       const res = await openAssetFolder({
         assetId: asset.assetId,
-        workspaceId,
       });
       if (res.success) {
         setActionMessage(`Đã mở thư mục cho tệp: ${asset.relativePath.split("/").pop()}`);
@@ -156,14 +147,6 @@ export function LibraryPage({ workspaceId }: LibraryPageProps) {
   };
 
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
-
-  if (!workspaceId) {
-    return (
-      <div className="p-8 text-center text-muted-foreground bg-card border rounded-lg">
-        Mở hoặc tạo một dự án video để duyệt và quản lý tài nguyên media.
-      </div>
-    );
-  }
 
   return (
     <div className="library-page space-y-4">
@@ -311,6 +294,7 @@ export function LibraryPage({ workspaceId }: LibraryPageProps) {
                 className="asset-card group bg-card border rounded-lg p-3 hover:border-primary/60 hover:shadow-md transition flex flex-col justify-between"
               >
                 <div>
+                  <div className="mb-3"><AssetMediaPreview assetId={asset.assetId} assetType={asset.assetType} fileName={fileName} /></div>
                   <div className="flex items-start justify-between gap-2 mb-2">
                     <div className="p-2 rounded bg-muted/70 group-hover:bg-primary/10 transition">
                       {renderIcon(asset.assetType)}
@@ -406,7 +390,6 @@ export function LibraryPage({ workspaceId }: LibraryPageProps) {
       {previewAssetId && (
         <AssetPreviewDialog
           assetId={previewAssetId}
-          workspaceId={workspaceId}
           onClose={() => setPreviewAssetId(null)}
         />
       )}

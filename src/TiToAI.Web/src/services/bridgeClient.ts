@@ -30,7 +30,6 @@ declare global {
 
 export type InvokeOptions = {
   timeoutMs?: number;
-  workspaceId?: string | null;
   signal?: AbortSignal;
 };
 
@@ -40,7 +39,6 @@ type PendingRequest = {
   timer?: ReturnType<typeof setTimeout>;
   command: G1Command;
   correlationId: string;
-  workspaceId: string | null;
   cleanup: () => void;
 };
 
@@ -51,45 +49,10 @@ class BridgeClient {
     Set<(event: EventEnvelope) => void>
   >();
   private lastSeenSeq = new Map<string, number>();
-  private activeWorkspaceId: string | null = null;
   private isInitialized = false;
 
   constructor() {
     this.initMessageListener();
-  }
-
-  public setActiveWorkspaceId(workspaceId: string | null): void {
-    if (this.activeWorkspaceId === workspaceId) return;
-    const previousWorkspaceId = this.activeWorkspaceId;
-    this.activeWorkspaceId = workspaceId;
-
-    // Dọn dẹp an toàn các pending requests thuộc về workspace khác
-    // Tuyệt đối bảo đảm request app-global (workspaceId === null) KHÔNG bị drop
-    const toCancel: PendingRequest[] = [];
-    for (const pending of this.pendingRequests.values()) {
-      if (pending.workspaceId !== null && pending.workspaceId !== workspaceId) {
-        toCancel.push(pending);
-      }
-    }
-
-    for (const pending of toCancel) {
-      pending.cleanup();
-      pending.reject({
-        code: ErrorCodes.UNAUTHORIZED_WORKSPACE,
-        message: `Yêu cầu '${pending.command}' đã bị hủy do ngữ cảnh Workspace đã thay đổi.`,
-        retryable: false,
-        correlationId: pending.correlationId,
-        details: {
-          requestWorkspaceId: pending.workspaceId,
-          previousWorkspaceId,
-          activeWorkspaceId: workspaceId,
-        },
-      });
-    }
-  }
-
-  public getActiveWorkspaceId(): string | null {
-    return this.activeWorkspaceId;
   }
 
   private initMessageListener(): void {
@@ -138,25 +101,6 @@ class BridgeClient {
       return;
     }
 
-    // Kiểm tra ngữ cảnh Workspace đối với scoped request
-    if (
-      pending.workspaceId !== null &&
-      this.activeWorkspaceId !== null &&
-      pending.workspaceId !== this.activeWorkspaceId
-    ) {
-      pending.reject({
-        code: ErrorCodes.UNAUTHORIZED_WORKSPACE,
-        message: `Phản hồi cho lệnh '${pending.command}' bị hủy do Workspace hiện tại ('${this.activeWorkspaceId}') khác với Workspace tại thời điểm gửi ('${pending.workspaceId}').`,
-        retryable: false,
-        correlationId: envelope.id,
-        details: {
-          requestWorkspaceId: pending.workspaceId,
-          activeWorkspaceId: this.activeWorkspaceId,
-        },
-      });
-      return;
-    }
-
     if (envelope.success) {
       pending.resolve(envelope.data);
     } else {
@@ -180,8 +124,8 @@ class BridgeClient {
       return;
     }
 
-    // Kiểm tra seq đơn điệu tránh stale events theo từng luồng/workspace
-    const streamKey = `${envelope.workspaceId ?? "global"}:${envelope.eventName}`;
+    // Kiểm tra seq đơn điệu tránh stale events theo từng luồng event.
+    const streamKey = envelope.eventName;
     const lastSeq = this.lastSeenSeq.get(streamKey) ?? -1;
     if (envelope.seq <= lastSeq) {
       console.warn(
@@ -190,14 +134,6 @@ class BridgeClient {
       return;
     }
     this.lastSeenSeq.set(streamKey, envelope.seq);
-
-    // Lọc theo workspaceId: event có workspaceId cụ thể chỉ được phân phối khi khớp với activeWorkspaceId
-    if (
-      envelope.workspaceId !== null &&
-      envelope.workspaceId !== this.activeWorkspaceId
-    ) {
-      return;
-    }
 
     const listeners = this.eventListeners.get(envelope.eventName);
     if (listeners) {
@@ -227,10 +163,6 @@ class BridgeClient {
         typeof options === "number"
           ? options
           : options?.timeoutMs ?? 15000;
-      const workspaceId =
-        typeof options === "object" && options !== null
-          ? options.workspaceId ?? null
-          : null;
       const signal =
         typeof options === "object" && options !== null
           ? options.signal
@@ -346,7 +278,6 @@ class BridgeClient {
           timer,
           command,
           correlationId: id,
-          workspaceId,
           cleanup,
         });
 

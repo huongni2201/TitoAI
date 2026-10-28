@@ -73,8 +73,7 @@ public sealed class ProviderHandlers
 
         try
         {
-            var payload = ParsePayload<ProviderListRequest>(request) ?? new ProviderListRequest();
-            var response = await _providerRegistry.GetProviderListAsync(_accountService, payload, cancellationToken).ConfigureAwait(false);
+            var response = await _providerRegistry.GetProviderListAsync(_accountService, cancellationToken).ConfigureAwait(false);
             return ResponseEnvelopeHelper.CreateSuccess(request.Id, response);
         }
         catch (OperationCanceledException)

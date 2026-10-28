@@ -11,7 +11,6 @@ export interface BrowserProfileDto {
   profileId: string;
   kind: ProfileKind;
   accountIdentity: string | null;
-  workspaceId: string | null;
   visibilityState: VisibilityState;
   sessionStatus: SessionStatus;
   operationalState: OperationalState;
@@ -54,12 +53,12 @@ export interface BrowserProfileStateChangedPayload {
  */
 export const browserManagerApi = {
   /**
-   * Lấy danh sách profiles trình duyệt (toàn app hoặc theo Workspace cụ thể)
+   * Lấy danh sách profiles trình duyệt dùng chung toàn ứng dụng.
    */
-  async listProfiles(workspaceId?: string | null): Promise<BrowserProfileDto[]> {
+  async listProfiles(): Promise<BrowserProfileDto[]> {
     const data = await bridgeClient.invoke<BrowserListProfilesResponseData>(
       "browser.list_profiles",
-      { workspaceId: workspaceId ?? null },
+      {},
     );
     return data?.profiles ?? [];
   },

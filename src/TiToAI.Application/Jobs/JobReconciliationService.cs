@@ -64,10 +64,6 @@ public sealed class JobReconciliationService
         await using var dbContext = new TiToAIDbContext(_dbOptions);
 
         var query = dbContext.Jobs.Where(j => j.Id == request.JobId);
-        if (!string.IsNullOrWhiteSpace(request.WorkspaceId))
-        {
-            query = query.Where(j => j.WorkspaceId == request.WorkspaceId);
-        }
 
         var job = await query.FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
         if (job is null)
@@ -171,7 +167,7 @@ public sealed class JobReconciliationService
                 job.Revision += 1;
                 job.UpdatedAtUtc = nowIso;
 
-                _wakeupNotifier?.NotifyWakeup(new JobWakeupSignal("job.reconcile.retry", job.WorkspaceId, job.Id));
+                _wakeupNotifier?.NotifyWakeup(new JobWakeupSignal("job.reconcile.retry", string.Empty, job.Id));
                 break;
 
             case "mark_succeeded":
@@ -383,7 +379,6 @@ public sealed class JobReconciliationService
 
         OnJobStateChanged?.Invoke(new JobStateChangedPayload(
             JobId: job.Id,
-            WorkspaceId: job.WorkspaceId,
             ProjectId: job.ProjectId,
             PreviousState: prevState,
             NewState: currentState,

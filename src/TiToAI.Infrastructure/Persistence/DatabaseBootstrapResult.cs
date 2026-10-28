@@ -7,5 +7,6 @@ public record DatabaseBootstrapResult(
     bool ForeignKeysEnabled,
     int BusyTimeout,
     int SynchronousMode,
-    IReadOnlyList<string> AppliedMigrations,
+    int SchemaVersion,
+    bool DatabaseReset,
     bool IsBootstrapSuccessful);

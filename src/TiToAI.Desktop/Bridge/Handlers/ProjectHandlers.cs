@@ -1,6 +1,5 @@
 using System.Text.Json;
 using TiToAI.Application.Projects;
-using TiToAI.Application.Workspaces;
 using TiToAI.Contracts.Bridge;
 using TiToAI.Contracts.Projects;
 
@@ -86,16 +85,16 @@ public sealed class ProjectHandlers
         try
         {
             var payload = ParsePayload<ProjectGetRequest>(request);
-            if (payload is null || string.IsNullOrWhiteSpace(payload.WorkspaceId) || string.IsNullOrWhiteSpace(payload.ProjectId))
+            if (payload is null || string.IsNullOrWhiteSpace(payload.ProjectId))
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
                     "INVALID_ARGUMENT",
-                    "Payload thiếu các trường bắt buộc 'workspaceId' hoặc 'projectId'.",
+                    "Payload thiếu trường bắt buộc 'projectId'.",
                     retryable: false);
             }
 
-            var project = await _projectService.GetAsync(payload.WorkspaceId, payload.ProjectId, cancellationToken);
+            var project = await _projectService.GetAsync(payload.ProjectId, cancellationToken);
             var data = new ProjectGetResponseData(project);
             return ResponseEnvelopeHelper.CreateSuccess(request.Id, data);
         }
@@ -145,12 +144,12 @@ public sealed class ProjectHandlers
         try
         {
             var payload = ParsePayload<ProjectUpdateRequest>(request);
-            if (payload is null || string.IsNullOrWhiteSpace(payload.WorkspaceId) || string.IsNullOrWhiteSpace(payload.ProjectId))
+            if (payload is null || string.IsNullOrWhiteSpace(payload.ProjectId))
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
                     "INVALID_ARGUMENT",
-                    "Payload thiếu các trường bắt buộc 'workspaceId' hoặc 'projectId'.",
+                    "Payload thiếu trường bắt buộc 'projectId'.",
                     retryable: false);
             }
 
@@ -175,16 +174,16 @@ public sealed class ProjectHandlers
         try
         {
             var payload = ParsePayload<ProjectDeleteRequest>(request);
-            if (payload is null || string.IsNullOrWhiteSpace(payload.WorkspaceId) || string.IsNullOrWhiteSpace(payload.ProjectId))
+            if (payload is null || string.IsNullOrWhiteSpace(payload.ProjectId))
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
                     "INVALID_ARGUMENT",
-                    "Payload thiếu các trường bắt buộc 'workspaceId' hoặc 'projectId'.",
+                    "Payload thiếu trường bắt buộc 'projectId'.",
                     retryable: false);
             }
 
-            var result = await _projectService.DeleteAsync(payload.WorkspaceId, payload.ProjectId, cancellationToken);
+            var result = await _projectService.DeleteAsync(payload.ProjectId, cancellationToken);
             return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
         }
         catch (OperationCanceledException)
@@ -215,23 +214,11 @@ public sealed class ProjectHandlers
             ProjectNotFoundException notFound =>
                 ResponseEnvelopeHelper.CreateError(requestId, "ENTITY_NOT_FOUND", notFound.Message, retryable: false),
 
-            WorkspaceNotFoundException wsNotFound =>
-                ResponseEnvelopeHelper.CreateError(requestId, "ENTITY_NOT_FOUND", wsNotFound.Message, retryable: false),
-
             ProjectValidationException validation =>
                 ResponseEnvelopeHelper.CreateError(requestId, "VALIDATION_FAILED", validation.Message, retryable: false),
 
-            WorkspaceValidationException wsValidation =>
-                ResponseEnvelopeHelper.CreateError(requestId, "VALIDATION_FAILED", wsValidation.Message, retryable: false),
-
-            WorkspaceConcurrencyConflictException conflict =>
-                ResponseEnvelopeHelper.CreateError(requestId, "CONCURRENCY_CONFLICT", conflict.Message, retryable: false),
-
             ProjectConcurrencyConflictException prjConflict =>
                 ResponseEnvelopeHelper.CreateError(requestId, "CONCURRENCY_CONFLICT", prjConflict.Message, retryable: false),
-
-            UnauthorizedWorkspaceException unauthorized =>
-                ResponseEnvelopeHelper.CreateError(requestId, "UNAUTHORIZED_WORKSPACE", unauthorized.Message, retryable: false),
 
             ArgumentException arg =>
                 ResponseEnvelopeHelper.CreateError(requestId, "INVALID_ARGUMENT", arg.Message, retryable: false),

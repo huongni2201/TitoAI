@@ -1,8 +1,10 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using TiToAI.Application.Jobs;
+using TiToAI.Application.Prompts;
 using TiToAI.Contracts.Content;
 using TiToAI.Contracts.Jobs;
+using TiToAI.Contracts.Prompts;
 using TiToAI.Contracts.Scenes;
 using TiToAI.Infrastructure.Persistence;
 using TiToAI.Infrastructure.Persistence.Entities;
@@ -15,17 +17,15 @@ public sealed partial class ProjectWorkflowService
     /// Lấy danh sách chi tiết quy trình của tất cả các Cảnh trong Dự án.
     /// </summary>
     public async Task<IReadOnlyList<SceneWorkflowDetailDto>> ListSceneWorkflowDetailsAsync(
-        string workspaceId,
         string projectId,
         CancellationToken cancellationToken = default)
     {
-        var normalizedWorkspaceId = NormalizeAndValidateGuid(workspaceId, nameof(workspaceId));
         var normalizedProjectId = NormalizeAndValidateGuid(projectId, nameof(projectId));
 
         await using var dbContext = new TiToAIDbContext(_dbOptions);
         var scenes = await dbContext.Scenes
             .AsNoTracking()
-            .Where(s => s.ProjectId == normalizedProjectId && s.WorkspaceId == normalizedWorkspaceId)
+            .Where(s => s.ProjectId == normalizedProjectId)
             .OrderBy(s => s.SequenceOrder)
             .ToListAsync(cancellationToken);
 
@@ -79,7 +79,6 @@ public sealed partial class ProjectWorkflowService
             result.Add(new SceneWorkflowDetailDto(
                 SceneId: s.Id,
                 ProjectId: s.ProjectId,
-                WorkspaceId: s.WorkspaceId,
                 SequenceOrder: s.SequenceOrder,
                 Name: s.Name,
                 TargetDurationSeconds: Convert.ToInt32(s.TargetDurationSeconds),
@@ -116,20 +115,19 @@ public sealed partial class ProjectWorkflowService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var normalizedWorkspaceId = NormalizeAndValidateGuid(request.WorkspaceId, nameof(request.WorkspaceId));
         var normalizedProjectId = NormalizeAndValidateGuid(request.ProjectId, nameof(request.ProjectId));
         var normalizedSceneId = NormalizeAndValidateGuid(request.SceneId, nameof(request.SceneId));
 
         await using var dbContext = new TiToAIDbContext(_dbOptions);
         var scene = await dbContext.Scenes
-            .FirstOrDefaultAsync(s => s.Id == normalizedSceneId && s.ProjectId == normalizedProjectId && s.WorkspaceId == normalizedWorkspaceId, cancellationToken);
+            .FirstOrDefaultAsync(s => s.Id == normalizedSceneId && s.ProjectId == normalizedProjectId, cancellationToken);
 
         if (scene == null)
         {
             throw new ProjectWorkflowValidationException($"Không tìm thấy Cảnh '{normalizedSceneId}'.");
         }
 
-        var workflowConfig = await GetWorkflowConfigAsync(normalizedWorkspaceId, normalizedProjectId, cancellationToken).ConfigureAwait(false);
+        var workflowConfig = await GetWorkflowConfigAsync(normalizedProjectId, cancellationToken).ConfigureAwait(false);
         if (workflowConfig.RunState == WorkflowRunState.Running)
         {
             throw new ProjectWorkflowValidationException("Tạm dừng run trước khi thay đổi input của một cảnh.");
@@ -163,7 +161,7 @@ public sealed partial class ProjectWorkflowService
         {
             if (!string.IsNullOrWhiteSpace(request.SelectedImageAssetId))
             {
-                await ValidateAssetBelongsToWorkspaceAsync(dbContext, normalizedWorkspaceId, request.SelectedImageAssetId, "ảnh được chọn", cancellationToken);
+                await ValidateAssetBelongsToProjectAsync(dbContext, normalizedProjectId, request.SelectedImageAssetId, "ảnh được chọn", cancellationToken);
             }
             scene.ImageAssetId = string.IsNullOrWhiteSpace(request.SelectedImageAssetId) ? null : request.SelectedImageAssetId;
             imageChanged = true;
@@ -181,7 +179,7 @@ public sealed partial class ProjectWorkflowService
         {
             if (request.AudioOption == AudioOptions.CustomAudio && request.AudioAssetId != null)
             {
-                await ValidateAssetBelongsToWorkspaceAsync(dbContext, normalizedWorkspaceId, request.AudioAssetId, "tệp âm thanh", cancellationToken);
+                await ValidateAssetBelongsToProjectAsync(dbContext, normalizedProjectId, request.AudioAssetId, "tệp âm thanh", cancellationToken);
                 scene.AudioAssetId = request.AudioAssetId;
             }
             else if (request.AudioOption == AudioOptions.None)
@@ -247,7 +245,6 @@ public sealed partial class ProjectWorkflowService
         var sceneDetail = new SceneWorkflowDetailDto(
             SceneId: scene.Id,
             ProjectId: scene.ProjectId,
-            WorkspaceId: scene.WorkspaceId,
             SequenceOrder: scene.SequenceOrder,
             Name: scene.Name,
             TargetDurationSeconds: Convert.ToInt32(scene.TargetDurationSeconds),
@@ -296,12 +293,12 @@ public sealed partial class ProjectWorkflowService
     /// </summary>
     public async Task<int> EnqueueJobsForExistingScenesAsync(
         TiToAIDbContext dbContext,
-        string workspaceId,
         string projectId,
         ProjectWorkflowConfigDto config,
         List<Scene> scenes,
         CancellationToken cancellationToken,
-        bool deferDispatch = false)
+        bool deferDispatch = false,
+        bool stageWithRun = false)
     {
         if (_jobService == null) return 0;
         int count = 0;
@@ -309,6 +306,10 @@ public sealed partial class ProjectWorkflowService
 
         foreach (var scene in scenes)
         {
+            var planKey = $"scene.plan.{scene.Id}";
+            var scenePurpose = dbContext.AppSettings.Local.FirstOrDefault(setting => setting.Key == planKey)?.Value
+                ?? await dbContext.AppSettings.AsNoTracking().Where(setting => setting.Key == planKey)
+                    .Select(setting => setting.Value).FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
             // Tự gán ảnh cho ReadyImage / ProductOnly nếu cảnh chưa có
             if (string.IsNullOrWhiteSpace(scene.ImageAssetId))
             {
@@ -338,13 +339,17 @@ public sealed partial class ProjectWorkflowService
             if ((staleTasks.Contains(JobTaskType.Image) || string.IsNullOrWhiteSpace(scene.ImageAssetId)) &&
                 config.WorkflowMode == WorkflowModes.ModelAndProduct)
             {
-                var prompt = scene.PromptText ?? config.GoalPrompt;
+                var prompt = scenePurpose ?? scene.PromptText ?? config.GoalPrompt;
+                var imageTemplate = await dbContext.PromptTemplates.AsNoTracking()
+                    .FirstOrDefaultAsync(t => t.Purpose == JobTaskType.Image && t.IsActive, cancellationToken).ConfigureAwait(false);
+                var imageInstruction = imageTemplate == null ? string.Empty :
+                    (await new PromptTemplateService(dbContext).PreviewAsync(
+                        new PromptPreviewRequest(imageTemplate.Id, null, null, null), cancellationToken).ConfigureAwait(false)).RenderedText + "\n\n";
                 nextRequest = new JobEnqueueRequest(
-                    WorkspaceId: workspaceId,
                     ProjectId: projectId,
                     SceneId: scene.Id,
                     TaskType: JobTaskType.Image,
-                    CustomPromptText: $"Tạo ảnh người mẫu mặc sản phẩm cho cảnh: {scene.Name}. {prompt}",
+                    CustomPromptText: imageInstruction + $"Tạo một ảnh người mẫu mặc sản phẩm cho cảnh: {scene.Name}. Ảnh đính kèm thứ nhất là người mẫu cần giữ nhận diện; ảnh thứ hai là sản phẩm cần mặc, giữ đúng màu sắc và chi tiết nhìn thấy. {prompt}",
                     WorkflowRunId: config.CurrentRunId,
                     WorkflowStepKey: $"image.{scene.Id}.{scene.UpdatedAtUtc}",
                     MediaSnapshot: snapshot
@@ -355,10 +360,9 @@ public sealed partial class ProjectWorkflowService
             else if (!string.IsNullOrWhiteSpace(scene.ImageAssetId) &&
                      (staleTasks.Contains(JobTaskType.VideoPrompt) || string.IsNullOrWhiteSpace(scene.PromptText)))
             {
-                var composition = await composer.ComposeVideoPromptAiRequestAsync(workspaceId, config, scene, cancellationToken).ConfigureAwait(false);
+                var composition = await composer.ComposeVideoPromptAiRequestAsync(config, scene, cancellationToken, scenePurpose).ConfigureAwait(false);
 
                 nextRequest = new JobEnqueueRequest(
-                    WorkspaceId: workspaceId,
                     ProjectId: projectId,
                     SceneId: scene.Id,
                     TaskType: JobTaskType.VideoPrompt,
@@ -368,28 +372,17 @@ public sealed partial class ProjectWorkflowService
                     MediaSnapshot: snapshot
                 );
             }
-            // 3. Cảnh đã có ảnh và đã có PromptText nhưng chưa có Video (hoặc Video cũ bị stale): Enqueue Job VideoRender
-            // Gửi trực tiếp PromptText của scene (kết quả do AI writer tạo ra hoặc người dùng chỉnh sửa) cho MuseAI
-            else if (!string.IsNullOrWhiteSpace(scene.ImageAssetId) && !string.IsNullOrWhiteSpace(scene.PromptText) &&
-                     (staleTasks.Contains(JobTaskType.VideoRender) || string.IsNullOrWhiteSpace(scene.VideoAssetId)))
-            {
-                nextRequest = new JobEnqueueRequest(
-                    WorkspaceId: workspaceId,
-                    ProjectId: projectId,
-                    SceneId: scene.Id,
-                    TaskType: JobTaskType.VideoRender,
-                    CustomPromptText: scene.PromptText,
-                    WorkflowRunId: config.CurrentRunId,
-                    WorkflowStepKey: $"render.{scene.Id}.{scene.UpdatedAtUtc}",
-                    MediaSnapshot: snapshot
-                );
-            }
+            // Stop at ReadyForVideo. VideoRender is enabled only when the real adapter is ready.
 
             if (nextRequest != null)
             {
                 if (deferDispatch)
                 {
                     AddContinuationIntent(dbContext, nextRequest, DateTimeOffset.UtcNow.ToString("o"));
+                }
+                else if (stageWithRun)
+                {
+                    await _jobService.StageWorkflowJobAsync(nextRequest, dbContext, cancellationToken).ConfigureAwait(false);
                 }
                 else
                 {
@@ -399,7 +392,7 @@ public sealed partial class ProjectWorkflowService
             }
         }
 
-        await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        if (!stageWithRun) await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         return count;
     }
 
@@ -411,7 +404,6 @@ public sealed partial class ProjectWorkflowService
             Key = $"workflow.continuation.{intentId}",
             Value = JsonSerializer.Serialize(new WorkflowContinuationIntent(
                 IntentId: intentId,
-                WorkspaceId: request.WorkspaceId,
                 ProjectId: request.ProjectId,
                 SceneId: request.SceneId,
                 TaskType: request.TaskType,

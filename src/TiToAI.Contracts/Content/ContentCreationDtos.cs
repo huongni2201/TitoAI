@@ -92,7 +92,7 @@ public sealed record GenerateVideoPromptsOutputDto(
 /// </summary>
 public sealed record AnalyticsContextDto(
     [property: JsonPropertyName("snapshotId")] string SnapshotId,
-    [property: JsonPropertyName("workspaceId")] string WorkspaceId,
+    [property: JsonPropertyName("accountId")] string AccountId,
     [property: JsonPropertyName("channelIdentity")] string ChannelIdentity,
     [property: JsonPropertyName("source")] string Source,
     [property: JsonPropertyName("capturedAtUtc")] string CapturedAtUtc,
@@ -110,12 +110,10 @@ public sealed record AnalyticsContextDto(
 public sealed record ContentRequestDto(
     [property: JsonPropertyName("schemaVersion")] string SchemaVersion,
     [property: JsonPropertyName("operation")] string Operation,
-    [property: JsonPropertyName("workspaceId")] string WorkspaceId,
     [property: JsonPropertyName("projectId")] string ProjectId,
     [property: JsonPropertyName("sceneIds")] IReadOnlyList<string>? SceneIds,
     [property: JsonPropertyName("expectedProjectRevision")] int? ExpectedProjectRevision,
     [property: JsonPropertyName("expectedSceneRevisions")] IReadOnlyDictionary<string, int>? ExpectedSceneRevisions,
-    [property: JsonPropertyName("userBrief")] string? UserBrief,
     [property: JsonPropertyName("selectedIdeaId")] string? SelectedIdeaId,
     [property: JsonPropertyName("channelContext")] string? ChannelContext,
     [property: JsonPropertyName("options")] IReadOnlyDictionary<string, string>? Options,
@@ -127,10 +125,8 @@ public sealed record ContentRequestDto(
 public sealed record ContentJobSnapshotDto(
     [property: JsonPropertyName("snapshotId")] string SnapshotId,
     [property: JsonPropertyName("operation")] string Operation,
-    [property: JsonPropertyName("workspaceId")] string WorkspaceId,
     [property: JsonPropertyName("projectId")] string ProjectId,
     [property: JsonPropertyName("templateId")] string TemplateId,
-    [property: JsonPropertyName("templateVersionId")] string TemplateVersionId,
     [property: JsonPropertyName("analyticsSnapshotHash")] string? AnalyticsSnapshotHash,
     [property: JsonPropertyName("renderedPromptText")] string RenderedPromptText,
     [property: JsonPropertyName("outputSchemaVersion")] string OutputSchemaVersion,

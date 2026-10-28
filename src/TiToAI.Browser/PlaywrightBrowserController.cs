@@ -83,6 +83,19 @@ public sealed class PlaywrightBrowserController : IBrowserProcessController
         bool isHeadless,
         string? initialUrl,
         CancellationToken cancellationToken = default)
+        => await LaunchContextAsync(profileId, isHeadless, initialUrl, notifyLoginClose: !isHeadless, cancellationToken);
+
+    public Task<IBrowserContextHandle> LaunchVisibleAutomationContextAsync(
+        string profileId,
+        CancellationToken cancellationToken = default) =>
+        LaunchContextAsync(profileId, isHeadless: false, initialUrl: null, notifyLoginClose: false, cancellationToken);
+
+    private async Task<IBrowserContextHandle> LaunchContextAsync(
+        string profileId,
+        bool isHeadless,
+        string? initialUrl,
+        bool notifyLoginClose,
+        CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentException.ThrowIfNullOrWhiteSpace(profileId);
@@ -157,7 +170,8 @@ public sealed class PlaywrightBrowserController : IBrowserProcessController
                 profileId,
                 browserContext,
                 ownerLock,
-                isHeadless);
+                isHeadless,
+                notifyLoginClose);
 
             _activeContexts[profileId] = handle;
 
@@ -414,12 +428,12 @@ public sealed class PlaywrightBrowserController : IBrowserProcessController
                     profileId,
                     operationalState: BrowserOperationalState.Stopped,
                     visibilityState: BrowserVisibilityState.Hidden,
-                    reasonCode: BrowserReasonCode.AuthClosed,
+                    reasonCode: handle.NotifyLoginClose ? BrowserReasonCode.AuthClosed : null,
                     cancellationToken: cancellationToken);
 
                 try
                 {
-                    ContextClosed?.Invoke(this, profileId);
+                    if (handle.NotifyLoginClose) ContextClosed?.Invoke(this, profileId);
                 }
                 catch
                 {
@@ -459,7 +473,7 @@ public sealed class PlaywrightBrowserController : IBrowserProcessController
                 profileId,
                 operationalState: BrowserOperationalState.Stopped,
                 visibilityState: BrowserVisibilityState.Hidden,
-                reasonCode: BrowserReasonCode.AuthClosed);
+                reasonCode: handle.NotifyLoginClose ? BrowserReasonCode.AuthClosed : null);
         }
         catch
         {
@@ -468,7 +482,7 @@ public sealed class PlaywrightBrowserController : IBrowserProcessController
         // 4. Phát sự kiện ContextClosed ra ngoài sau khi DB đã cập nhật xong
         try
         {
-            ContextClosed?.Invoke(this, profileId);
+            if (handle.NotifyLoginClose) ContextClosed?.Invoke(this, profileId);
         }
         catch
         {
@@ -534,6 +548,7 @@ public sealed class PlaywrightBrowserController : IBrowserProcessController
         public IBrowserContext Context { get; }
         public IProfileOwnerLock OwnerLock { get; }
         public bool IsHeadless { get; }
+        public bool NotifyLoginClose { get; }
         public bool IsDisposed => Volatile.Read(ref _isDisposed) == 1;
 
         public PlaywrightBrowserContextHandle(
@@ -541,13 +556,15 @@ public sealed class PlaywrightBrowserController : IBrowserProcessController
             string profileId,
             IBrowserContext context,
             IProfileOwnerLock ownerLock,
-            bool isHeadless)
+            bool isHeadless,
+            bool notifyLoginClose)
         {
             _controller = controller;
             ProfileId = profileId;
             Context = context;
             OwnerLock = ownerLock;
             IsHeadless = isHeadless;
+            NotifyLoginClose = notifyLoginClose;
         }
 
         public async ValueTask DisposeAsync()

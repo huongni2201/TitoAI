@@ -9,7 +9,7 @@ using TiToAI.Infrastructure.Persistence.Entities;
 namespace TiToAI.Application.Prompts;
 
 /// <summary>
-/// Dịch vụ quản lý prompt hiện hành, workspace override, render preview và snapshot bất biến.
+/// Dịch vụ quản lý prompt template toàn ứng dụng và snapshot render bất biến.
 /// </summary>
 public sealed class PromptTemplateService
 {
@@ -24,7 +24,7 @@ public sealed class PromptTemplateService
     /// Hướng dẫn chuẩn cho tác vụ tạo kịch bản (Script) theo AI_WEB_CONTENT_CREATION_PROMPTS §3.
     /// </summary>
     public const string DefaultScriptInstruction =
-        "Bạn là biên kịch video ngắn cho kênh được cung cấp. Phát triển USER_BRIEF hoặc " +
+        "Bạn là biên kịch video ngắn cho kênh được cung cấp. Phát triển nội dung được cung cấp hoặc " +
         "SELECTED_IDEA thành kịch bản có hook rõ, diễn biến hợp lý và kết thúc phù hợp. " +
         "Nếu đầu vào đã là kịch bản, giữ ý chính và yêu cầu bắt buộc của người dùng; " +
         "tập trung hoàn thiện và chia cảnh thay vì tự đổi chủ đề.\n\n" +
@@ -131,47 +131,17 @@ public sealed class PromptTemplateService
 
     /// <summary>
     /// Lấy danh sách Prompt Templates.
-    /// Nếu workspaceId == null: chỉ lấy Global templates.
-    /// Nếu workspaceId != null: lấy Global templates và Override templates của chính Workspace đó.
-    /// Nghiêm cấm trả về override của kênh khác.
+    /// Prompt templates là tài nguyên toàn ứng dụng.
     /// </summary>
-    public async Task<PromptListTemplatesResponseData> ListTemplatesAsync(
-        string? workspaceId,
-        CancellationToken cancellationToken = default)
+    public async Task<PromptListTemplatesResponseData> ListTemplatesAsync(CancellationToken cancellationToken = default)
     {
-        if (!string.IsNullOrWhiteSpace(workspaceId))
-        {
-            bool wsExists = await _dbContext.Workspaces
-                .AsNoTracking()
-                .AnyAsync(w => w.Id == workspaceId, cancellationToken);
-
-            if (!wsExists)
-            {
-                throw new PromptSecurityException($"Không tìm thấy Workspace với ID '{workspaceId}'.", workspaceId);
-            }
-        }
-
-        var query = _dbContext.PromptTemplates
+        var templates = await _dbContext.PromptTemplates
             .AsNoTracking()
-            .AsQueryable();
-
-        if (string.IsNullOrWhiteSpace(workspaceId))
-        {
-            // Chỉ lấy global
-            query = query.Where(t => t.WorkspaceId == null);
-        }
-        else
-        {
-            // Lấy global và override của chính workspaceId này
-            query = query.Where(t => t.WorkspaceId == null || t.WorkspaceId == workspaceId);
-        }
-
-        var templates = await query
             .OrderBy(t => t.Purpose)
-            .ThenByDescending(t => t.WorkspaceId != null) // Overrides lên trước hoặc nhóm
+            .ThenBy(t => t.Name)
             .ToListAsync(cancellationToken);
 
-        var dtos = templates.Select(t => ToDto(t, null)).ToList();
+        var dtos = templates.Select(ToDto).ToList();
         return new PromptListTemplatesResponseData(dtos);
     }
 
@@ -181,7 +151,6 @@ public sealed class PromptTemplateService
     public async Task<PromptGetTemplateResponseData> GetTemplateAsync(
         string? templateId,
         string? purpose,
-        string? workspaceId,
         CancellationToken cancellationToken = default)
     {
         PromptTemplate? template = null;
@@ -197,41 +166,18 @@ public sealed class PromptTemplateService
                 throw new PromptTemplateNotFoundException(templateId);
             }
 
-            // Kiểm tra ranh giới workspace: nếu template là override của kênh khác thì cấm truy cập
-            if (template.WorkspaceId != null &&
-                !string.IsNullOrWhiteSpace(workspaceId) &&
-                !string.Equals(template.WorkspaceId, workspaceId, StringComparison.Ordinal))
-            {
-                throw new PromptSecurityException(
-                    "Không được phép truy cập template override của Workspace khác.",
-                    template.WorkspaceId,
-                    workspaceId);
-            }
         }
         else if (!string.IsNullOrWhiteSpace(purpose))
         {
             ValidatePurpose(purpose);
 
-            // Resolution Precedence:
-            // 1. Nếu có workspaceId: tìm Workspace Override trước
-            if (!string.IsNullOrWhiteSpace(workspaceId))
-            {
-                template = await _dbContext.PromptTemplates
-                    .AsNoTracking()
-                    .FirstOrDefaultAsync(t => t.Purpose == purpose && t.WorkspaceId == workspaceId, cancellationToken);
-            }
-
-            // 2. Nếu không tìm thấy override -> Fallback về Global
-            if (template == null)
-            {
-                template = await _dbContext.PromptTemplates
-                    .AsNoTracking()
-                    .FirstOrDefaultAsync(t => t.Purpose == purpose && t.WorkspaceId == null, cancellationToken);
-            }
+            template = await _dbContext.PromptTemplates
+                .AsNoTracking()
+                .FirstOrDefaultAsync(t => t.Purpose == purpose && t.IsActive, cancellationToken);
 
             if (template == null)
             {
-                throw new PromptTemplateNotFoundException(purpose, workspaceId);
+                throw new PromptTemplateNotFoundException(purpose);
             }
         }
         else
@@ -240,48 +186,15 @@ public sealed class PromptTemplateService
         }
 
         var templateDto = ToDto(template);
-        var currentVersionDto = string.IsNullOrWhiteSpace(template.TemplateText) ? null : ToVersionDto(template);
-
-        return new PromptGetTemplateResponseData(templateDto, currentVersionDto);
-    }
-
-    /// <summary>
-    /// Legacy compatibility response. Prompt history is no longer persisted.
-    /// </summary>
-    public async Task<PromptListVersionsResponseData> ListVersionsAsync(
-        string templateId,
-        string? workspaceId = null,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(templateId);
-
-        var template = await _dbContext.PromptTemplates
-            .AsNoTracking()
-            .FirstOrDefaultAsync(t => t.Id == templateId, cancellationToken);
-
-        if (template == null)
-        {
-            throw new PromptTemplateNotFoundException(templateId);
-        }
-
-        if (template.WorkspaceId != null &&
-            !string.IsNullOrWhiteSpace(workspaceId) &&
-            !string.Equals(template.WorkspaceId, workspaceId, StringComparison.Ordinal))
-        {
-            throw new PromptSecurityException(
-                "Không được phép xem danh sách phiên bản của Workspace khác.",
-                template.WorkspaceId,
-                workspaceId);
-        }
-
-        return new PromptListVersionsResponseData(Array.Empty<PromptVersionDto>());
+        var content = new PromptContentDto(template.Id, template.TemplateText, template.VariableDefinitionsJson, template.UpdatedAtUtc);
+        return new PromptGetTemplateResponseData(templateDto, content);
     }
 
     /// <summary>
     /// Tạo hoặc cập nhật trực tiếp nội dung hiện hành của template.
     /// </summary>
-    public async Task<PromptCreateVersionResponseData> CreateVersionAsync(
-        PromptCreateVersionRequest request,
+    public async Task<PromptSaveTemplateResponseData> SaveTemplateAsync(
+        PromptSaveTemplateRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -292,63 +205,35 @@ public sealed class PromptTemplateService
             throw new PromptValidationException("Nội dung template không được để trống.");
         }
 
+        if (string.IsNullOrWhiteSpace(request.Name))
+        {
+            throw new PromptValidationException("Tên mẫu prompt không được để trống.");
+        }
+        if (request.Name.Trim().Length > 120)
+        {
+            throw new PromptValidationException("Tên mẫu prompt không được vượt quá 120 ký tự.");
+        }
+
         // Validate cú pháp template
-        var (detectedVars, malformed) = PromptRenderer.ParseTemplate(request.TemplateText);
+        var (_, malformed) = PromptRenderer.ParseTemplate(request.TemplateText);
         if (malformed.Count > 0)
         {
             throw new PromptValidationException(
                 $"Template chứa placeholder lỗi cú pháp: {string.Join(", ", malformed)}");
         }
 
-        // Validate definitions json nếu có
-        string definitionsJson = string.IsNullOrWhiteSpace(request.VariableDefinitionsJson)
-            ? "[]"
-            : request.VariableDefinitionsJson;
-
-        try
-        {
-            var parsedDefs = JsonSerializer.Deserialize<List<PromptVariableDefinition>>(definitionsJson, JsonOptions);
-            if (parsedDefs == null)
-            {
-                definitionsJson = "[]";
-            }
-        }
-        catch (JsonException ex)
-        {
-            throw new PromptValidationException($"VariableDefinitionsJson không đúng định dạng JSON hợp lệ: {ex.Message}");
-        }
-
-        // Kiểm tra workspace nếu có
-        if (!string.IsNullOrWhiteSpace(request.WorkspaceId))
-        {
-            bool wsExists = await _dbContext.Workspaces
-                .AsNoTracking()
-                .AnyAsync(w => w.Id == request.WorkspaceId, cancellationToken);
-
-            if (!wsExists)
-            {
-                throw new PromptSecurityException($"Không tìm thấy Workspace với ID '{request.WorkspaceId}'.", request.WorkspaceId);
-            }
-        }
-
         string nowUtc = DateTimeOffset.UtcNow.ToString("o");
 
-        // Tìm template hiện có theo purpose và workspaceId
-        var template = await _dbContext.PromptTemplates
-            .FirstOrDefaultAsync(t =>
-                t.Purpose == request.Purpose &&
-                (request.WorkspaceId == null ? t.WorkspaceId == null : t.WorkspaceId == request.WorkspaceId),
-                cancellationToken);
-
-        if (template == null)
+        PromptTemplate template;
+        if (string.IsNullOrWhiteSpace(request.TemplateId))
         {
             template = new PromptTemplate
             {
                 Id = Guid.NewGuid().ToString(),
                 Purpose = request.Purpose,
-                WorkspaceId = request.WorkspaceId,
+                Name = request.Name.Trim(),
+                IsActive = !await _dbContext.PromptTemplates.AnyAsync(t => t.Purpose == request.Purpose && t.IsActive, cancellationToken),
                 TemplateText = request.TemplateText,
-                VariableDefinitionsJson = definitionsJson,
                 CreatedAtUtc = nowUtc,
                 UpdatedAtUtc = nowUtc
             };
@@ -356,101 +241,45 @@ public sealed class PromptTemplateService
         }
         else
         {
+            template = await _dbContext.PromptTemplates.FirstOrDefaultAsync(t => t.Id == request.TemplateId, cancellationToken)
+                ?? throw new PromptTemplateNotFoundException(request.TemplateId);
+            if (template.Purpose != request.Purpose)
+            {
+                throw new PromptValidationException("Mẫu prompt không thuộc mục đích đã chọn.");
+            }
+            template.Name = request.Name.Trim();
             template.TemplateText = request.TemplateText;
-            template.VariableDefinitionsJson = definitionsJson;
             template.UpdatedAtUtc = nowUtc;
         }
 
         await _dbContext.SaveChangesAsync(cancellationToken);
         var templateDto = ToDto(template);
-        var versionDto = ToVersionDto(template);
-
-        return new PromptCreateVersionResponseData(templateDto, versionDto);
+        var content = new PromptContentDto(template.Id, template.TemplateText, template.VariableDefinitionsJson, template.UpdatedAtUtc);
+        return new PromptSaveTemplateResponseData(templateDto, content);
     }
 
-    /// <summary>
-    /// Legacy compatibility path. Prompt history is no longer persisted, so rollback is unavailable.
-    /// </summary>
-    public async Task<PromptRollbackVersionResponseData> RollbackVersionAsync(
-        PromptRollbackVersionRequest request,
-        string? workspaceId = null,
-        CancellationToken cancellationToken = default)
+    public async Task<PromptTemplateDto> ActivateTemplateAsync(string templateId, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(request);
-        ArgumentException.ThrowIfNullOrWhiteSpace(request.TemplateId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(request.TargetVersionId);
+        if (string.IsNullOrWhiteSpace(templateId))
+            throw new PromptValidationException("Cần chọn mẫu prompt.");
 
-        var template = await _dbContext.PromptTemplates
-            .FirstOrDefaultAsync(t => t.Id == request.TemplateId, cancellationToken);
-
-        if (template == null)
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+        var selected = await _dbContext.PromptTemplates.FirstOrDefaultAsync(t => t.Id == templateId, cancellationToken)
+            ?? throw new PromptTemplateNotFoundException(templateId);
+        if (!selected.IsActive)
         {
-            throw new PromptTemplateNotFoundException(request.TemplateId);
+            var current = await _dbContext.PromptTemplates.FirstOrDefaultAsync(
+                t => t.Purpose == selected.Purpose && t.IsActive, cancellationToken);
+            if (current != null)
+            {
+                current.IsActive = false;
+                await _dbContext.SaveChangesAsync(cancellationToken);
+            }
+            selected.IsActive = true;
+            await _dbContext.SaveChangesAsync(cancellationToken);
         }
-
-        if (template.WorkspaceId != null &&
-            !string.IsNullOrWhiteSpace(workspaceId) &&
-            !string.Equals(template.WorkspaceId, workspaceId, StringComparison.Ordinal))
-        {
-            throw new PromptSecurityException(
-                "Không được phép rollback template thuộc Workspace khác.",
-                template.WorkspaceId,
-                workspaceId);
-        }
-
-        if (!string.Equals(request.TargetVersionId, template.Id, StringComparison.Ordinal))
-        {
-            throw new PromptRollbackException(
-                template.Id,
-                request.TargetVersionId,
-                "Prompt không lưu lịch sử phiên bản; chỉ có thể dùng nội dung hiện hành.");
-        }
-
-        throw new PromptRollbackException(template.Id, request.TargetVersionId,
-            "Prompt không lưu lịch sử phiên bản; chỉ có thể dùng nội dung hiện hành.");
-    }
-
-    /// <summary>
-    /// Xóa bản ghi override của Workspace. Cascade xóa các version của override đó.
-    /// Kênh quay về sử dụng Global template mặc định.
-    /// Cấm xóa Global template bằng phương thức này.
-    /// </summary>
-    public async Task<PromptDeleteOverrideResponseData> DeleteOverrideAsync(
-        PromptDeleteOverrideRequest request,
-        string? workspaceId = null,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        ArgumentException.ThrowIfNullOrWhiteSpace(request.TemplateId);
-
-        var template = await _dbContext.PromptTemplates
-            .FirstOrDefaultAsync(t => t.Id == request.TemplateId, cancellationToken);
-
-        if (template == null)
-        {
-            throw new PromptTemplateNotFoundException(request.TemplateId);
-        }
-
-        if (template.WorkspaceId == null)
-        {
-            throw new PromptOverrideException(
-                template.Id,
-                "Không thể xóa Global template bằng lệnh delete_override. Lệnh này chỉ áp dụng cho Workspace Override.");
-        }
-
-        if (!string.IsNullOrWhiteSpace(workspaceId) &&
-            !string.Equals(template.WorkspaceId, workspaceId, StringComparison.Ordinal))
-        {
-            throw new PromptSecurityException(
-                "Không được phép xóa template override của Workspace khác.",
-                template.WorkspaceId,
-                workspaceId);
-        }
-
-        _dbContext.PromptTemplates.Remove(template);
-        await _dbContext.SaveChangesAsync(cancellationToken);
-
-        return new PromptDeleteOverrideResponseData(request.TemplateId, true);
+        await transaction.CommitAsync(cancellationToken);
+        return ToDto(selected);
     }
 
     /// <summary>
@@ -465,8 +294,6 @@ public sealed class PromptTemplateService
 
         string templateTextToRender;
         string? resolvedTemplateId = request.TemplateId;
-        string? resolvedVersionId = null;
-        bool isOverride = false;
         List<PromptVariableDefinition>? definitions = null;
 
         if (!string.IsNullOrWhiteSpace(request.TemplateText))
@@ -482,8 +309,6 @@ public sealed class PromptTemplateService
 
                 if (template != null)
                 {
-                    isOverride = template.WorkspaceId != null;
-                    resolvedVersionId = template.Id;
                     definitions = ParseDefinitions(template.VariableDefinitionsJson);
                 }
             }
@@ -494,11 +319,10 @@ public sealed class PromptTemplateService
             var getResult = await GetTemplateAsync(
                 request.TemplateId,
                 request.Purpose,
-                request.WorkspaceId,
                 cancellationToken);
 
             var template = getResult.Template;
-            var currentPrompt = getResult.CurrentVersion;
+            var currentPrompt = getResult.Content;
 
             if (currentPrompt == null || string.IsNullOrWhiteSpace(currentPrompt.TemplateText))
             {
@@ -507,8 +331,6 @@ public sealed class PromptTemplateService
 
             templateTextToRender = currentPrompt.TemplateText;
             resolvedTemplateId = template.TemplateId;
-            resolvedVersionId = currentPrompt.VersionId;
-            isOverride = template.IsOverride;
             definitions = ParseDefinitions(currentPrompt.VariableDefinitionsJson);
         }
 
@@ -518,9 +340,7 @@ public sealed class PromptTemplateService
         return new PromptPreviewResponseData(
             RenderedText: renderedText,
             TemplateId: resolvedTemplateId,
-            VersionId: resolvedVersionId,
-            VariableCount: detectedVars.Count,
-            IsOverride: isOverride);
+            VariableCount: detectedVars.Count);
     }
 
     /// <summary>
@@ -530,7 +350,6 @@ public sealed class PromptTemplateService
     public async Task<PromptRenderSnapshotDto> CreateSnapshotAsync(
         string? templateId,
         string? purpose,
-        string? workspaceId,
         IReadOnlyDictionary<string, string>? variables,
         CancellationToken cancellationToken = default)
     {
@@ -538,19 +357,17 @@ public sealed class PromptTemplateService
             new PromptPreviewRequest(
                 TemplateId: templateId,
                 Purpose: purpose,
-                WorkspaceId: workspaceId,
                 TemplateText: null,
                 Variables: variables),
             cancellationToken);
 
-        if (string.IsNullOrWhiteSpace(preview.TemplateId) || string.IsNullOrWhiteSpace(preview.VersionId))
+        if (string.IsNullOrWhiteSpace(preview.TemplateId))
         {
-            throw new PromptValidationException("Không thể tạo snapshot bất biến khi thiếu templateId hoặc versionId.");
+            throw new PromptValidationException("Không thể tạo snapshot bất biến khi thiếu templateId.");
         }
 
         var snapshot = new PromptRenderSnapshot(
             templateId: preview.TemplateId,
-            versionId: preview.VersionId,
             renderedText: preview.RenderedText,
             variables: variables,
             capturedAtUtc: DateTimeOffset.UtcNow.ToString("o"));
@@ -575,38 +392,14 @@ public sealed class PromptTemplateService
         }
     }
 
-    public static PromptTemplateDto ToDto(PromptTemplate template, int? currentVersionNumber = null)
+    public static PromptTemplateDto ToDto(PromptTemplate template)
     {
         return new PromptTemplateDto(
             TemplateId: template.Id,
             Purpose: template.Purpose,
-            WorkspaceId: template.WorkspaceId,
-            IsOverride: template.WorkspaceId != null,
-            CurrentVersionId: null,
-            CurrentVersionNumber: null,
+            Name: template.Name,
+            IsActive: template.IsActive,
             CreatedAtUtc: template.CreatedAtUtc,
             UpdatedAtUtc: template.UpdatedAtUtc);
     }
-
-    public static PromptVersionDto ToVersionDto(PromptVersion version)
-    {
-        return new PromptVersionDto(
-            VersionId: version.Id,
-            TemplateId: version.TemplateId,
-            VersionNumber: version.VersionNumber,
-            TemplateText: version.TemplateText,
-            VariableDefinitionsJson: version.VariableDefinitionsJson,
-            ChangeDescription: version.ChangeDescription,
-            CreatedAtUtc: version.CreatedAtUtc);
-    }
-
-    private static PromptVersionDto ToVersionDto(PromptTemplate template) =>
-        new(
-            VersionId: template.Id,
-            TemplateId: template.Id,
-            VersionNumber: 0,
-            TemplateText: template.TemplateText,
-            VariableDefinitionsJson: template.VariableDefinitionsJson,
-            ChangeDescription: null,
-            CreatedAtUtc: template.UpdatedAtUtc);
 }

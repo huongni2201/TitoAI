@@ -2,7 +2,6 @@
 
 - **Task ID:** T01 (Xác minh stack)
 - **Vai trò thực hiện:** Researcher duy nhất của T01
-- **Workspace:** `D:\workspace\TitoAI` (Đã kiểm tra đường dẫn thực tế)
 - **Ngày xác minh:** 2026-10-26 (UTC+07)
 - **Model evidence:** Gemini 3.8 Flash (High) — quan sát từ UI Antigravity ngày 2026-10-26 01:18 UTC+07 (project: TitoAI; Model Selection: Gemini 3.8 Flash High). Không sử dụng Auto, không đổi sang model khác, không gọi subagent chưa kiểm chứng.
 - **Chế độ dự án:** `IMPLEMENTATION` (Đã được người dùng cấp quyền triển khai code theo `docs/agents/STATUS.md`; T01 thực hiện nghiên cứu/xác minh trong phạm vi G0, chưa scaffold/build).
@@ -95,8 +94,6 @@ Quá trình nghiên cứu phát hiện các điểm khác biệt và bổ sung q
 |---|---|---|---|
 | **Phiên bản WebView2** | Chỉ ghi "WebView2 Evergreen", không có số version NuGet cụ thể (§2). | Gói `Microsoft.Web.WebView2` trên NuGet đã đạt bản `1.0.4314.35`. | Đề xuất pin rõ ràng `1.0.4314.35` trong `Directory.Packages.props` tại T03. |
 | **Tên sản phẩm & Namespace** | `AIContentStudio` và `%LOCALAPPDATA%/AIContentStudio` | Đã đổi chính thức thành **TiToAI** theo `AGENTS.md`. | Toàn bộ solution, namespace, đường dẫn dữ liệu là `%LOCALAPPDATA%/TiToAI`. |
-| **Vùng lưu trữ dữ liệu (Storage Roots)** | Giả định một root cố định `%LOCALAPPDATA%/AIContentStudio/workspaces/...` (§4). | `SETTINGS_PLAN.md` (P0) quy định **3 root lưu trữ độc lập** (Tài liệu, Ảnh AI, Video AI) có thể tùy chọn qua popup Cài đặt, lưu bằng `storage_root_id` + `relative_path`. | Giữ SQLite DB, browser profiles, logs tại `%LOCALAPPDATA%/TiToAI`. Các asset media phân bổ theo root ID được cấu hình trong `app_settings`. |
-| **Lựa chọn Provider AI** | Đặt chung trong code / workspace (§8). | `SETTINGS_PLAN.md` (P0) cho phép chọn độc lập **Gemini Web** hoặc **ChatGPT Web** cho từng tác vụ: (1) Tạo ảnh, (2) Viết kịch bản, (3) Prompt video. | Chốt routing độc lập tại T02; lưu `provider_key` trong `app_settings`. |
 | **Chế độ hiển thị Browser** | Giả định có thể mở browser theo dõi (§7.1, §11). | `UI_BROWSER_PLAN.md` (P0) quy định: **Automation bắt buộc chạy ẩn 100%**. Chỉ hiện browser khi cần người dùng **đăng nhập/đăng nhập lại thủ công**. | Loại bỏ mọi tùy chọn "luôn hiện browser"; xây dựng cơ chế handoff an toàn khi login. |
 | **Phiên bản SQLite Bundle** | Gợi ý upstream SQLite 3.54.1 (§2). | Metadata NuGet `SQLitePCLRaw.bundle_e_sqlite3` 3.0.5 phụ thuộc `SourceGear.sqlite3 (>= 3.53.4)`, KHÔNG chứng minh bundle sẵn SQLite 3.54.1. Runtime thực tế là `NOT_RUN`. | Chốt exact pin `3.0.5` cho `SQLitePCLRaw.bundle_e_sqlite3`. Bắt buộc chạy `SELECT sqlite_version();` ở T04 để ghi log engine thật. |
 | **Sẵn sàng của Toolchain máy trạm** | Giả định máy phát triển đã có đầy đủ SDK .NET và Node.js. | Máy trạm đã có Node.js v24.19.0, npm 11.17.0 (tại `C:\Program Files\nodejs\`) và pnpm 12.15.0; tuy nhiên .NET SDK chưa thấy trên PATH hoặc hai vị trí chuẩn. Trong sandbox, Node.js bị hạn chế truy cập/PATH. | Ghi nhận blocker môi trường: Cần cài đặt/cấu hình .NET 10 SDK trước T03, và phân quyền/PATH cho Node.js trong sandbox. Không mất thời gian dò toàn máy. |
@@ -214,7 +211,7 @@ stateDiagram-v2
 
 ## 7. Đề xuất chuyển tiếp cho T02 (Architect - Chốt ranh giới & Contracts)
 
-Dựa trên kết quả xác minh của T01, đề xuất các nội dung sau cần được kiến trúc sư chốt tại `docs/decisions/contracts.md` (T02):
+Dựa trên kết quả xác minh của T01, quyết định sản phẩm hiện hành nằm trong `docs/plans/VIDEO_FIRST_ARCHITECTURE_PLAN.md` và các plan chức năng theo phạm vi.
 
 1. **Contract giao tiếp Desktop Host ↔ Web UI:**
    - Khuyến nghị chọn **WebView2 Message Bridge** (`window.chrome.webview.postMessage` và `chrome.webview.addEventListener('message')`) với schema Envelope có Typed Command, Correlation ID, Payload JSON và Allow-list rõ ràng.

@@ -4,16 +4,30 @@ using TiToAI.Contracts.Providers;
 
 namespace TiToAI.Application.Providers;
 
-/// <summary>Năng lực Gemini Web; chặn thực thi khi automation chưa sẵn sàng.</summary>
+/// <summary>Gemini Web automation trial; selectors require live verification.</summary>
 public sealed class GeminiWebAdapter : IProviderAdapter
 {
+    private readonly GeminiPlaywrightAutomation? _automation;
+
+    public GeminiWebAdapter(GeminiPlaywrightAutomation? automation = null) => _automation = automation;
+
     public string ProviderKey => ProviderKeys.GeminiWeb;
 
     public IReadOnlyList<ProviderTaskCapabilityDto> GetCapabilities() =>
-        ProviderCapabilities.GetDefaultCapabilities(ProviderKey);
+        ProviderCapabilities.GetDefaultCapabilities(ProviderKey)
+            .Select(capability => GeminiTrialMode.Enabled && _automation is not null &&
+                capability.TaskType is JobTaskType.Script or JobTaskType.Image or JobTaskType.VideoPrompt
+                ? capability with
+                {
+                    VerificationStatus = ProviderVerificationStatus.Trial,
+                    AutomationSupported = true,
+                    EvidenceId = "user-enabled-gemini-playwright-trial"
+                }
+                : capability).ToArray();
 
     public Task<ProviderTaskCapabilityDto?> GetCapabilityForTaskAsync(string taskType, CancellationToken ct = default) =>
-        Task.FromResult(ProviderCapabilities.GetDefaultCapability(ProviderKey, taskType));
+        Task.FromResult(GetCapabilities().FirstOrDefault(capability =>
+            string.Equals(capability.TaskType, taskType, StringComparison.OrdinalIgnoreCase)));
 
     public Task<JobExecutionResult> ExecuteAsync(
         JobExecutionContext context,
@@ -31,6 +45,9 @@ public sealed class GeminiWebAdapter : IProviderAdapter
                 ReasonCode: "CAPABILITY_UNSUPPORTED",
                 ErrorMessage: $"Gemini Web không hỗ trợ tác vụ '{context.TaskType}'."));
         }
+
+        if (_automation is not null && context.TaskType is JobTaskType.Script or JobTaskType.Image or JobTaskType.VideoPrompt)
+            return _automation.ExecuteTextAsync(context, onPreSideEffectCommitAsync, onProgressAsync, ct);
 
         return Task.FromResult(new JobExecutionResult(
             Success: false,

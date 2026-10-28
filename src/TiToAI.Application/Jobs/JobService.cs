@@ -42,25 +42,28 @@ public sealed class JobService
 
     private DateTimeOffset UtcNow => _clock?.Invoke() ?? DateTimeOffset.UtcNow;
 
-    public void NotifyWorkflowRunReady(string workspaceId)
+    public void NotifyWorkflowRunReady()
     {
-        _wakeupNotifier.NotifyWakeup(new JobWakeupSignal("workflow.run_ready", workspaceId));
+        _wakeupNotifier.NotifyWakeup(new JobWakeupSignal("workflow.run_ready"));
     }
 
     /// <summary>
     /// Xếp hàng tác vụ mới (job.enqueue): Xác thực ranh giới, đóng băng snapshot bất biến và lưu vào SQLite.
     /// Kích hoạt tín hiệu đánh thức qua Channel để Scheduler phân phối ngay lập tức.
     /// </summary>
-    public async Task<JobEnqueueResponseData> EnqueueAsync(
+    public Task<JobEnqueueResponseData> EnqueueAsync(
         JobEnqueueRequest request,
         CancellationToken cancellationToken = default)
+        => EnqueueCoreAsync(request, null, cancellationToken);
+
+    internal Task<JobEnqueueResponseData> StageWorkflowJobAsync(
+        JobEnqueueRequest request, TiToAIDbContext context, CancellationToken cancellationToken)
+        => EnqueueCoreAsync(request, context, cancellationToken);
+
+    private async Task<JobEnqueueResponseData> EnqueueCoreAsync(
+        JobEnqueueRequest request, TiToAIDbContext? workflowContext, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
-
-        if (string.IsNullOrWhiteSpace(request.WorkspaceId))
-        {
-            throw new JobValidationException("Trường 'workspaceId' không được để trống.", nameof(request.WorkspaceId));
-        }
 
         if (string.IsNullOrWhiteSpace(request.ProjectId))
         {
@@ -81,26 +84,17 @@ public sealed class JobService
 
         var workflowIdempotencyKey = CreateWorkflowIdempotencyKey(request);
 
-        await using var dbContext = new TiToAIDbContext(_dbOptions);
+        await using var ownedContext = workflowContext == null ? new TiToAIDbContext(_dbOptions) : null;
+        var dbContext = workflowContext ?? ownedContext!;
 
-        // 1. Xác thực Không gian làm việc
-        var workspaceExists = await dbContext.Workspaces
-            .AsNoTracking()
-            .AnyAsync(w => w.Id == request.WorkspaceId, cancellationToken).ConfigureAwait(false);
-
-        if (!workspaceExists)
-        {
-            throw new JobValidationException($"Không tìm thấy Không gian làm việc với mã '{request.WorkspaceId}'.", nameof(request.WorkspaceId));
-        }
-
-        // 2. Xác thực Dự án
+        // Xác thực Project aggregate.
         var projectExists = await dbContext.Projects
             .AsNoTracking()
-            .AnyAsync(p => p.Id == request.ProjectId && p.WorkspaceId == request.WorkspaceId, cancellationToken).ConfigureAwait(false);
+            .AnyAsync(p => p.Id == request.ProjectId, cancellationToken).ConfigureAwait(false);
 
         if (!projectExists)
         {
-            throw new JobValidationException($"Không tìm thấy Dự án '{request.ProjectId}' thuộc Không gian làm việc '{request.WorkspaceId}'.", nameof(request.ProjectId));
+            throw new JobValidationException($"Không tìm thấy Dự án '{request.ProjectId}'.", nameof(request.ProjectId));
         }
 
         // 3. Xác thực Phân cảnh (CK_Job_TaskType_Scene: Script => null, Image/Video* => bắt buộc)
@@ -119,7 +113,7 @@ public sealed class JobService
             normalizedSceneId = request.SceneId.Trim();
             var sceneExists = await dbContext.Scenes
                 .AsNoTracking()
-                .AnyAsync(s => s.Id == normalizedSceneId && s.ProjectId == request.ProjectId && s.WorkspaceId == request.WorkspaceId, cancellationToken).ConfigureAwait(false);
+                .AnyAsync(s => s.Id == normalizedSceneId && s.ProjectId == request.ProjectId, cancellationToken).ConfigureAwait(false);
 
             if (!sceneExists)
             {
@@ -159,7 +153,6 @@ public sealed class JobService
         var jobEntity = new Job
         {
             Id = jobId,
-            WorkspaceId = request.WorkspaceId,
             ProjectId = request.ProjectId,
             SceneId = normalizedSceneId,
             TaskType = request.TaskType,
@@ -186,6 +179,11 @@ public sealed class JobService
                 Value = jobId,
                 UpdatedAtUtc = nowIso
             });
+        }
+
+        if (workflowContext != null)
+        {
+            return ToEnqueueResponse(jobEntity);
         }
 
         try
@@ -219,7 +217,6 @@ public sealed class JobService
         // 6. Gửi tín hiệu đánh thức tức thời tới Scheduler qua Channel
         _wakeupNotifier.NotifyWakeup(new JobWakeupSignal(
             Source: "job.enqueue",
-            WorkspaceId: request.WorkspaceId,
             JobId: jobId
         ));
 
@@ -233,18 +230,18 @@ public sealed class JobService
             return null;
         }
 
-        var material = string.Join("\0", request.WorkspaceId, request.ProjectId, request.WorkflowRunId, request.WorkflowStepKey);
+        var material = string.Join("\0", request.ProjectId, request.WorkflowRunId, request.WorkflowStepKey);
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
         return $"workflow.job.{hash}";
     }
 
     private static void ValidateWorkflowJobIdentity(Job job, JobEnqueueRequest request, string? sceneId)
     {
-        if (job.WorkspaceId != request.WorkspaceId || job.ProjectId != request.ProjectId ||
+        if (job.ProjectId != request.ProjectId ||
             job.SceneId != sceneId || job.TaskType != request.TaskType)
         {
             throw new JobValidationException(
-                "Workflow step key đã được dùng cho một job có phạm vi hoặc loại tác vụ khác.",
+                "Workflow step key đã được dùng cho một job thuộc Project hoặc loại tác vụ khác.",
                 nameof(request.WorkflowStepKey));
         }
     }
@@ -252,7 +249,6 @@ public sealed class JobService
     private static JobEnqueueResponseData ToEnqueueResponse(Job job) => new(
         JobId: job.Id,
         State: job.State,
-        WorkspaceId: job.WorkspaceId,
         TaskType: job.TaskType,
         ProviderKey: job.ProviderKey,
         StorageRootId: job.StorageRootId,
@@ -263,18 +259,16 @@ public sealed class JobService
     /// Lấy chi tiết trạng thái của một tác vụ (job.get_status).
     /// </summary>
     public async Task<JobGetStatusResponseData> GetStatusAsync(
-        string workspaceId,
         string jobId,
         CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
         ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
 
         await using var dbContext = new TiToAIDbContext(_dbOptions);
 
         var job = await dbContext.Jobs
             .AsNoTracking()
-            .FirstOrDefaultAsync(j => j.Id == jobId && j.WorkspaceId == workspaceId, cancellationToken).ConfigureAwait(false);
+            .FirstOrDefaultAsync(j => j.Id == jobId, cancellationToken).ConfigureAwait(false);
 
         if (job is null)
         {
@@ -297,7 +291,6 @@ public sealed class JobService
 
         var detail = new JobDetailDto(
             Id: job.Id,
-            WorkspaceId: job.WorkspaceId,
             ProjectId: job.ProjectId,
             SceneId: job.SceneId,
             TaskType: job.TaskType,
@@ -315,7 +308,9 @@ public sealed class JobService
             UpdatedAtUtc: job.UpdatedAtUtc,
             ProfileId: binding?.ProfileId,
             HasUnresolvedSideEffect: hasUnresolved,
-            Revision: job.Revision
+            Revision: job.Revision,
+            Activity: (await new JobActivityLog(_dbOptions).ReadAsync(jobId, cancellationToken).ConfigureAwait(false))
+                .Select(entry => new JobActivityEntryDto(entry.AtUtc, entry.Step, entry.Message)).ToArray()
         );
 
         return new JobGetStatusResponseData(detail);
@@ -326,7 +321,6 @@ public sealed class JobService
     /// và các tác vụ terminal (Canceled/Failed) còn unresolved (đang giữ ActiveSlotOccupancy hoặc side-effect in-flight chưa giải quyết).
     /// </summary>
     public async Task<JobListActiveResponseData> ListActiveAsync(
-        string? workspaceId = null,
         CancellationToken cancellationToken = default)
     {
         await using var dbContext = new TiToAIDbContext(_dbOptions);
@@ -337,11 +331,6 @@ public sealed class JobService
                 || ((j.State == JobState.Canceled || j.State == JobState.Failed) &&
                     (dbContext.ActiveSlotOccupancies.Any(o => o.JobId == j.Id) ||
                      (j.SideEffectSubmitted == 1 && (j.ResultReference == null || j.ResultReference == "") && (j.ResultText == null || j.ResultText == "")))));
-
-        if (!string.IsNullOrWhiteSpace(workspaceId))
-        {
-            query = query.Where(j => j.WorkspaceId == workspaceId);
-        }
 
         var jobs = await query
             .OrderBy(j => j.CreatedAtUtc)
@@ -373,7 +362,6 @@ public sealed class JobService
 
             return new JobSummaryDto(
                 Id: j.Id,
-                WorkspaceId: j.WorkspaceId,
                 ProjectId: j.ProjectId,
                 SceneId: j.SceneId,
                 TaskType: j.TaskType,
@@ -404,17 +392,15 @@ public sealed class JobService
     /// - Nếu đang AwaitingUser: Chuyển ngay sang Canceled.
     /// </summary>
     public async Task<JobCancelResponseData> CancelAsync(
-        string workspaceId,
         string jobId,
         CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
         ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
 
         await using var dbContext = new TiToAIDbContext(_dbOptions);
 
         var job = await dbContext.Jobs
-            .FirstOrDefaultAsync(j => j.Id == jobId && j.WorkspaceId == workspaceId, cancellationToken).ConfigureAwait(false);
+            .FirstOrDefaultAsync(j => j.Id == jobId, cancellationToken).ConfigureAwait(false);
 
         if (job is null)
         {
@@ -519,17 +505,15 @@ public sealed class JobService
     /// Kiểm tra tính đủ điều kiện thông qua Browser Gatekeeper / Session Checkpoint Coordinator.
     /// </summary>
     public async Task<JobResumeResponseData> ResumeAsync(
-        string workspaceId,
         string jobId,
         CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
         ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
 
         await using var dbContext = new TiToAIDbContext(_dbOptions);
         var job = await dbContext.Jobs
             .Include(j => j.ExecutionBinding)
-            .FirstOrDefaultAsync(j => j.Id == jobId && j.WorkspaceId == workspaceId, cancellationToken)
+            .FirstOrDefaultAsync(j => j.Id == jobId, cancellationToken)
             .ConfigureAwait(false);
 
         if (job is null)
@@ -579,7 +563,7 @@ public sealed class JobService
         job.UpdatedAtUtc = UtcNow.ToString("o");
         await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
-        _wakeupNotifier?.NotifyWakeup(new JobWakeupSignal("job.resume", workspaceId, jobId, profileId));
+        _wakeupNotifier?.NotifyWakeup(new JobWakeupSignal("job.resume", jobId, profileId));
 
         return new JobResumeResponseData(
             JobId: jobId,
@@ -606,13 +590,12 @@ public sealed class JobService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        ArgumentException.ThrowIfNullOrWhiteSpace(request.WorkspaceId);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.JobId);
 
         await using var dbContext = new TiToAIDbContext(_dbOptions);
 
         var job = await dbContext.Jobs
-            .FirstOrDefaultAsync(j => j.Id == request.JobId && j.WorkspaceId == request.WorkspaceId, cancellationToken)
+            .FirstOrDefaultAsync(j => j.Id == request.JobId, cancellationToken)
             .ConfigureAwait(false);
 
         if (job is null)
@@ -701,7 +684,7 @@ public sealed class JobService
 
         await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
-        _wakeupNotifier?.NotifyWakeup(new JobWakeupSignal("job.retry", request.WorkspaceId, request.JobId));
+        _wakeupNotifier?.NotifyWakeup(new JobWakeupSignal("job.retry", request.JobId));
 
         return new JobRetryResponseData(
             JobId: job.Id,
@@ -742,11 +725,6 @@ public sealed class JobService
                      j.SideEffectSubmitted == 1 &&
                      (j.ResultReference == null || j.ResultReference == "") &&
                      (j.ResultText == null || j.ResultText == "")));
-
-        if (!string.IsNullOrWhiteSpace(request.WorkspaceId))
-        {
-            query = query.Where(j => j.WorkspaceId == request.WorkspaceId);
-        }
 
         if (!string.IsNullOrWhiteSpace(request.ProjectId))
         {
@@ -802,7 +780,6 @@ public sealed class JobService
             bindings.TryGetValue(j.Id, out var profileId);
             return new JobSummaryDto(
                 Id: j.Id,
-                WorkspaceId: j.WorkspaceId,
                 ProjectId: j.ProjectId,
                 SceneId: j.SceneId,
                 TaskType: j.TaskType,

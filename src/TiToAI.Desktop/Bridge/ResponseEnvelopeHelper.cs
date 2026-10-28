@@ -67,7 +67,6 @@ public static class ResponseEnvelopeHelper
 
     public static EventEnvelope CreateEvent(
         string eventName,
-        string? workspaceId,
         long sequence,
         object payload)
     {
@@ -87,7 +86,6 @@ public static class ResponseEnvelopeHelper
             Id: Guid.NewGuid(),
             Type: "event",
             EventName: eventName,
-            WorkspaceId: workspaceId,
             Sequence: sequence,
             Payload: payloadElement,
             ServerTimestampUtc: DateTimeOffset.UtcNow,

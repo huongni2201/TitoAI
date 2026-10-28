@@ -46,11 +46,9 @@ public sealed partial class ProjectWorkflowService
     /// Nếu chưa có, trả về giá trị mặc định hợp lệ.
     /// </summary>
     public async Task<ProjectWorkflowConfigDto> GetWorkflowConfigAsync(
-        string workspaceId,
         string projectId,
         CancellationToken cancellationToken = default)
     {
-        var normalizedWorkspaceId = NormalizeAndValidateGuid(workspaceId, nameof(workspaceId));
         var normalizedProjectId = NormalizeAndValidateGuid(projectId, nameof(projectId));
 
         await using var dbContext = new TiToAIDbContext(_dbOptions);
@@ -61,11 +59,6 @@ public sealed partial class ProjectWorkflowService
         if (project == null)
         {
             throw new ProjectWorkflowValidationException($"Không tìm thấy dự án '{normalizedProjectId}'.");
-        }
-
-        if (project.WorkspaceId != normalizedWorkspaceId)
-        {
-            throw new UnauthorizedAccessException($"Dự án '{normalizedProjectId}' không thuộc Workspace '{normalizedWorkspaceId}'.");
         }
 
         var key = GetConfigKey(normalizedProjectId);
@@ -92,7 +85,6 @@ public sealed partial class ProjectWorkflowService
         // Mặc định cấu hình mới theo CLIP_DURATION_STORYBOARD_PLAN: 1 clip, ưu tiên 15 giây nếu hỗ trợ
         return new ProjectWorkflowConfigDto(
             ProjectId: normalizedProjectId,
-            WorkspaceId: normalizedWorkspaceId,
             WorkflowMode: WorkflowModes.ModelAndProduct,
             GoalPrompt: string.Empty,
             ModelAssetId: null,
@@ -119,7 +111,6 @@ public sealed partial class ProjectWorkflowService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var normalizedWorkspaceId = NormalizeAndValidateGuid(request.WorkspaceId, nameof(request.WorkspaceId));
         var normalizedProjectId = NormalizeAndValidateGuid(request.ProjectId, nameof(request.ProjectId));
 
         if (!WorkflowModes.IsValid(request.WorkflowMode))
@@ -136,22 +127,17 @@ public sealed partial class ProjectWorkflowService
             throw new ProjectWorkflowValidationException($"Không tìm thấy dự án '{normalizedProjectId}'.");
         }
 
-        if (project.WorkspaceId != normalizedWorkspaceId)
-        {
-            throw new UnauthorizedAccessException($"Dự án '{normalizedProjectId}' không thuộc Workspace '{normalizedWorkspaceId}'.");
-        }
-
         // Kiểm tra quyền sở hữu các asset được gán
-        await ValidateAssetBelongsToWorkspaceAsync(dbContext, normalizedWorkspaceId, request.ModelAssetId, "ảnh mẫu", cancellationToken);
-        await ValidateAssetBelongsToWorkspaceAsync(dbContext, normalizedWorkspaceId, request.ProductAssetId, "ảnh sản phẩm", cancellationToken);
-        await ValidateAssetBelongsToWorkspaceAsync(dbContext, normalizedWorkspaceId, request.ReadyImageAssetId, "ảnh có sẵn", cancellationToken);
+        await ValidateAssetBelongsToProjectAsync(dbContext, normalizedProjectId, request.ModelAssetId, "ảnh mẫu", cancellationToken);
+        await ValidateAssetBelongsToProjectAsync(dbContext, normalizedProjectId, request.ProductAssetId, "ảnh sản phẩm", cancellationToken);
+        await ValidateAssetBelongsToProjectAsync(dbContext, normalizedProjectId, request.ReadyImageAssetId, "ảnh có sẵn", cancellationToken);
         if (request.AudioOption == AudioOptions.CustomAudio)
         {
-            await ValidateAssetBelongsToWorkspaceAsync(dbContext, normalizedWorkspaceId, request.AudioAssetId, "tệp âm thanh", cancellationToken);
+            await ValidateAssetBelongsToProjectAsync(dbContext, normalizedProjectId, request.AudioAssetId, "tệp âm thanh", cancellationToken);
         }
 
         // Lấy config hiện tại để bảo toàn foundation image và runState nếu có
-        var existing = await GetWorkflowConfigAsync(normalizedWorkspaceId, normalizedProjectId, cancellationToken);
+        var existing = await GetWorkflowConfigAsync(normalizedProjectId, cancellationToken);
         bool workflowInputsChanged = existing.WorkflowMode != request.WorkflowMode ||
                                      existing.GoalPrompt != (request.GoalPrompt ?? string.Empty) ||
                                      existing.ModelAssetId != request.ModelAssetId ||
@@ -217,7 +203,7 @@ public sealed partial class ProjectWorkflowService
         if (!isInitialConfig && (modelOrProductChanged || workflowModeChanged || durationChanged || audioChanged || briefChanged))
         {
             var scenes = await dbContext.Scenes
-                .Where(s => s.ProjectId == normalizedProjectId && s.WorkspaceId == normalizedWorkspaceId)
+                .Where(s => s.ProjectId == normalizedProjectId)
                 .ToListAsync(cancellationToken).ConfigureAwait(false);
 
             foreach (var sc in scenes)
@@ -268,7 +254,6 @@ public sealed partial class ProjectWorkflowService
                 var metaObj = new SceneWorkflowDetailDto(
                     SceneId: sc.Id,
                     ProjectId: sc.ProjectId,
-                    WorkspaceId: sc.WorkspaceId,
                     SequenceOrder: sc.SequenceOrder,
                     Name: sc.Name,
                     TargetDurationSeconds: Convert.ToInt32(sc.TargetDurationSeconds),

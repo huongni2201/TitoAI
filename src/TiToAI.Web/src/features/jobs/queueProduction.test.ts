@@ -106,7 +106,6 @@ window.chrome = {
 
             const detail: any = customDetail || {
               id: jobId || "job_default",
-              workspaceId: (req.payload.workspaceId as string) || "ws_test",
               projectId: requestedJob?.projectId || "prj_test",
               sceneId: requestedJob?.sceneId || null,
               taskType: requestedJob?.taskType || "Script",
@@ -221,7 +220,7 @@ window.chrome = {
           success,
           data: responseData,
           error: errorData,
-          contractVersion: "1.0.4",
+          contractVersion: "1.1.0",
         };
 
         const event = new domWindow.MessageEvent("message", {
@@ -253,15 +252,14 @@ const { JobReconcileDialog } = await import("./JobReconcileDialog.tsx");
 const { useQueueState } = await import("./useQueueState.ts");
 
 // Helper emit bridge events
-function emitBridgeEvent(eventName: string, payload: unknown, workspaceId: string | null = "ws_prod_test") {
+function emitBridgeEvent(eventName: string, payload: unknown) {
   const envelope = {
     id: `evt_${Date.now()}_${eventSeq++}`,
     type: "event",
     eventName,
-    workspaceId,
     seq: eventSeq++,
     payload,
-    contractVersion: "1.0.4",
+    contractVersion: "1.1.0",
     timestampUtc: new Date().toISOString(),
   };
 
@@ -291,7 +289,6 @@ function resetMockState() {
   executedCommandsHistory = [];
   commandDelayMs = 5;
   listActiveDelayMs = 5;
-  bridgeClient.setActiveWorkspaceId("ws_prod_test");
 }
 
 test("AUTO-VIDEO: job bị chặn và job handoff lịch sử không mở đường nhập kết quả", async () => {
@@ -309,7 +306,7 @@ test("AUTO-VIDEO: job bị chặn và job handoff lịch sử không mở đư�
   }).type, "login", "Mất phiên sau submit vẫn cần CTA đăng nhập đúng profile");
 
   const job: any = {
-    id: "legacy-handoff-job", workspaceId: "ws_prod_test", projectId: "prj_01", sceneId: null,
+    id: "legacy-handoff-job", projectId: "prj_01", sceneId: null,
     taskType: "VideoRender", state: "AwaitingUser", reasonCode: "automation_blocked",
     providerKey: "museai", storageRootId: "root-1", attempts: 1, maxAttempts: 3,
     sideEffectSubmitted: 0, cancelRequested: false, revision: 2, createdAtUtc: new Date().toISOString(),
@@ -345,7 +342,6 @@ test("AC1 (R1): Succeeded -> progress Running trễ phải giữ nguyên Succeed
 
   const finishedJob = {
     id: "job_ac1_terminal",
-    workspaceId: "ws_prod_test",
     projectId: "prj_01",
     sceneId: "scene_01",
     taskType: "Script",
@@ -380,7 +376,6 @@ test("AC1 (R1): Succeeded -> progress Running trễ phải giữ nguyên Succeed
   await act(async () => {
     emitBridgeEvent("job.progress_updated", {
       jobId: finishedJob.id,
-      workspaceId: "ws_prod_test",
       projectId: "prj_01",
       sceneId: "scene_01",
       state: "Running",
@@ -410,7 +405,6 @@ test("AC2 (R1): Response list cũ về sau event mới: Không được lùi tr�
 
   const initialJob = {
     id: "job_ac2_race",
-    workspaceId: "ws_prod_test",
     projectId: "prj_01",
     sceneId: null,
     taskType: "Script",
@@ -443,7 +437,6 @@ test("AC2 (R1): Response list cũ về sau event mới: Không được lùi tr�
   await act(async () => {
     emitBridgeEvent("job.state_changed", {
       jobId: initialJob.id,
-      workspaceId: "ws_prod_test",
       projectId: "prj_01",
       previousState: "Running",
       newState: "Succeeded",
@@ -472,7 +465,6 @@ test("AC3 (R1): Gap detection: Khi event có jobRevision nhảy cóc, tự độ
 
   const currentJob = {
     id: "job_ac3_gap",
-    workspaceId: "ws_prod_test",
     projectId: "prj_01",
     sceneId: null,
     taskType: "Script",
@@ -506,7 +498,6 @@ test("AC3 (R1): Gap detection: Khi event có jobRevision nhảy cóc, tự độ
   await act(async () => {
     emitBridgeEvent("job.state_changed", {
       jobId: currentJob.id,
-      workspaceId: "ws_prod_test",
       projectId: "prj_01",
       previousState: "Running",
       newState: "AwaitingUser",
@@ -542,7 +533,6 @@ test("AC4 (R5): Job mới qua event: placeholder loading khi chưa hydrate, khó
   const unknownJobId = "job_ac4_unknown";
   mockJobDetails.set(unknownJobId, {
     id: unknownJobId,
-    workspaceId: "ws_prod_test",
     projectId: "prj_video_01",
     sceneId: "scene_04_render",
     taskType: "VideoRender",
@@ -582,7 +572,6 @@ test("AC4 (R5): Job mới qua event: placeholder loading khi chưa hydrate, khó
   await act(async () => {
     emitBridgeEvent("job.state_changed", {
       jobId: unknownJobId,
-      workspaceId: "ws_prod_test",
       projectId: "prj_video_01",
       previousState: "Queued",
       newState: "Running",
@@ -617,7 +606,6 @@ test("AC5 (R2): Click Retry trên Failed sideEffect=0: gọi job.retry với exp
 
   const retryableJob = {
     id: "job_ac5_retry",
-    workspaceId: "ws_prod_test",
     projectId: "prj_01",
     sceneId: null,
     taskType: "Script",
@@ -673,7 +661,6 @@ test("AC5 (R2): Click Retry trên Failed sideEffect=0: gọi job.retry với exp
   const retryCall = executedCommandsHistory.find((c) => c.command === "job.retry");
   assert.ok(retryCall, "Phải phát lệnh 'job.retry' qua bridge");
   assert.equal(retryCall.payload.jobId, retryableJob.id);
-  assert.equal(retryCall.payload.workspaceId, retryableJob.workspaceId);
   assert.equal(
     retryCall.payload.expectedRevision,
     retryableJob.revision,
@@ -691,7 +678,6 @@ test("AC6 (R2): Failed có sideEffectSubmitted=1 hoặc undefined: CẤM có nú
 
   const unsafeJobWithSideEffect = {
     id: "job_ac6_side_effect_1",
-    workspaceId: "ws_prod_test",
     projectId: "prj_01",
     sceneId: null,
     taskType: "Image",
@@ -707,7 +693,6 @@ test("AC6 (R2): Failed có sideEffectSubmitted=1 hoặc undefined: CẤM có nú
 
   const unsafeJobUndefinedSideEffect = {
     id: "job_ac6_undefined",
-    workspaceId: "ws_prod_test",
     projectId: "prj_01",
     sceneId: null,
     taskType: "Script",
@@ -770,7 +755,6 @@ test("AC7 (R3): Cancel uncertain -> reload -> Đối soát CTA hiện; dialog gi
 
   const canceledUnresolvedJob = {
     id: "job_ac7_canceled_unresolved",
-    workspaceId: "ws_prod_test",
     projectId: "prj_01",
     sceneId: null,
     taskType: "Script",
@@ -832,7 +816,6 @@ test("AC8 (R4): Click Login khi providerKey khác profileId: Gửi đúng profil
 
   const loginRequiredJob = {
     id: "job_ac8_login",
-    workspaceId: "ws_prod_test",
     projectId: "prj_01",
     sceneId: null,
     taskType: "Script",
@@ -894,7 +877,6 @@ test("AC9 (R4): Job chưa bind tài khoản: Điều hướng Settings -> Tài k
 
   const unassignedJob = {
     id: "job_ac9_unassigned",
-    workspaceId: "ws_prod_test",
     projectId: "prj_01",
     sceneId: null,
     taskType: "Script",
@@ -955,7 +937,6 @@ test("AC10 (R6): Complete -> reload: Tab Hoàn tất lấy từ job.list_history
   mockHistoryJobs = [
     {
       id: "job_ac10_history_done",
-      workspaceId: "ws_prod_test",
       projectId: "prj_01",
       sceneId: null,
       taskType: "Script",
@@ -1016,7 +997,6 @@ test("AC11 (Acc. 8): Double-click, conflict: Nút bị disable khi đang xử l�
 
   const targetJob = {
     id: "job_ac11_guard",
-    workspaceId: "ws_prod_test",
     projectId: "prj_01",
     sceneId: null,
     taskType: "Script",

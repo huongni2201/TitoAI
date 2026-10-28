@@ -1,6 +1,5 @@
 # TiToAI — Quyết định Kiến trúc & Hợp đồng Tạo nội dung qua AI Web (AC0)
 
-> **Delta sản phẩm 2026-10-27:** [VIDEO_FIRST_ARCHITECTURE_PLAN.md](../plans/VIDEO_FIRST_ARCHITECTURE_PLAN.md) bỏ Workspace scope và định nghĩa Project là một video đích. Nội dung/caption TikTok vẫn thuộc video Project đó; publish là attempt riêng cần user xác nhận và capability đã xác minh.
 
 Ngày 2026-10-27 (UTC+07).  
 Trạng thái: **CHỐT CONTRACT (AC0 HOÀN TẤT) & HƯỚNG DẪN AI TỰ NHIÊN (AC1 HOÀN TẤT)**.  
@@ -25,7 +24,7 @@ Hệ thống giữ nguyên 3 mục đích Prompt cốt lõi: `Script`, `Image`, 
 | Operation | Purpose áp dụng | Provider cấu hình (Settings) | Đầu vào chính | Đầu ra mong đợi |
 |---|---|---|---|---|
 | `SuggestIdeas` | `Script` | `ai.providers.script` | `AnalyticsContext`, `ChannelProfile`, `RecentIdeas` | Phân tích kênh + 5 ý tưởng có `evidenceRefs` & `tiktokPost` |
-| `GenerateScript` | `Script` | `ai.providers.script` | `userBrief` hoặc `selectedIdea`, `ChannelProfile` | Kịch bản, danh sách cảnh (`scenes`) & `tiktokPost` |
+| `GenerateScript` | `Script` | `ai.providers.script` | template đã render hoặc `selectedIdea`, `ChannelProfile` | Kịch bản, danh sách cảnh (`scenes`) & `tiktokPost` |
 | `GenerateVideoPrompts` | `VideoPrompt` | `ai.providers.videoPrompt` | Kịch bản đã duyệt, danh sách cảnh, ảnh tham chiếu | Prompt tiếng Anh per-scene (`promptEn`) & `tiktokPost` |
 
 ---
@@ -77,7 +76,6 @@ Các DTOs đã được định nghĩa tại `src/TiToAI.Contracts/Content/Conte
 - `tiktokPost` (`TikTokPostDto`): Phương án bài đăng TikTok cập nhật theo prompt video.
 
 ### 3.5. Hợp đồng Analytics Snapshot (`AnalyticsContextDto`)
-- `snapshotId` (`string`), `workspaceId` (`string`), `channelIdentity` (`string`), `source` (`string`).
 - `capturedAtUtc`, `periodStartUtc`, `periodEndUtc`, `timezone`.
 - `isComplete` (`bool`): Đánh dấu snapshot có đầy đủ dữ liệu kỳ hay bị khuyết.
 - `metrics` (`IReadOnlyDictionary<string, double?>`): Bắt buộc phân biệt `null` (chưa biết/thiếu dữ liệu) với `0.0` (giá trị thực sự bằng không).
@@ -85,7 +83,6 @@ Các DTOs đã được định nghĩa tại `src/TiToAI.Contracts/Content/Conte
 
 ### 3.6. Snapshot Job Bất biến (`ContentJobSnapshotDto`)
 Lưu trữ đầy đủ tại thời điểm enqueue trong SQLite:
-`snapshotId`, `operation`, `workspaceId`, `projectId`, `templateId`, `templateVersionId`, `analyticsSnapshotHash`, `renderedPromptText`, `outputSchemaVersion`, `targetProvider`, `capturedAtUtc`.
 
 ---
 
@@ -109,7 +106,6 @@ Lưu trữ đầy đủ tại thời điểm enqueue trong SQLite:
 Triển khai tại `src/TiToAI.Application/Content/ContentCandidateParser.cs`:
 1. **Trích xuất JSON:** Tự động phát hiện và bóc tách khối mã markdown ````json ... ```` hoặc chuỗi JSON thuần.
 2. **Không crash khi lỗi:** Khi JSON lỗi cú pháp, thiếu trường bắt buộc hoặc rỗng, parser trả về `isCompliant = false`, danh sách `Errors` chi tiết và bảo toàn nguyên vẹn `rawText`.
-3. **Chống Prompt Injection:** Không cho phép nội dung caption, bình luận hoặc phản hồi AI tự động thực thi mã lệnh, script hay tự ý chuyển đổi Workspace/Project.
 
 ---
 

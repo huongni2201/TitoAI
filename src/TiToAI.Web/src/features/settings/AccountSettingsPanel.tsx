@@ -7,6 +7,10 @@ import {
 import { RefreshCw, Plus, Check, AlertCircle, X, ShieldCheck, ShieldAlert, Laptop, Trash2, Pencil, Film, Sparkles } from "lucide-react";
 import { IconTikTok } from "../../components/Icons";
 import { cn } from "../../lib/utils";
+import { browserManagerApi } from "../browsers/browserManagerApi";
+
+const hasVerifiedSession = (account: ProviderAccountDto) =>
+  !!account.verifiedIdentity && account.sessionStatus?.toLowerCase() === "connected";
 
 const PROVIDER_NAMES: Record<string, string> = {
   "chatgpt-web": "ChatGPT Web",
@@ -176,6 +180,15 @@ export function AccountSettingsPanel() {
     void fetchAccounts();
   }, [fetchAccounts]);
 
+  useEffect(() => browserManagerApi.onProfileStateChanged(({ payload }) => {
+    if (!payload?.profileId || !payload.sessionStatus) return;
+    setAccounts((previous) => previous.map((account) =>
+      account.profileId === payload.profileId
+        ? { ...account, sessionStatus: payload.sessionStatus }
+        : account
+    ));
+  }), []);
+
   // Đếm số lượng tài khoản theo từng tab
   const tabCounts = useMemo(() => {
     const counts: Record<ProviderTabKey, number> = {
@@ -216,8 +229,8 @@ export function AccountSettingsPanel() {
 
       if (statusFilter === "enabled" && !acc.enabled) return false;
       if (statusFilter === "disabled" && acc.enabled) return false;
-      if (statusFilter === "verified" && !acc.verifiedIdentity) return false;
-      if (statusFilter === "unverified" && acc.verifiedIdentity) return false;
+      if (statusFilter === "verified" && !hasVerifiedSession(acc)) return false;
+      if (statusFilter === "unverified" && hasVerifiedSession(acc)) return false;
       return true;
     });
   }, [accounts, activeProviderTab, statusFilter]);
@@ -269,6 +282,7 @@ export function AccountSettingsPanel() {
     setSuccessNotice(null);
     try {
       const res = await accountSettingsApi.probeSession(acc.id);
+      await fetchAccounts();
       if (res.isVerified && res.accountIdentity) {
         setSuccessNotice(
           `Phiên đăng nhập hợp lệ: Danh tính "${res.accountIdentity}" (Trạng thái: ${res.sessionStatus}). Bạn đã có thể bật hoạt động cho tài khoản này.`
@@ -279,7 +293,6 @@ export function AccountSettingsPanel() {
           `${detail} Vui lòng bấm "Đăng nhập trình duyệt" để hoàn tất đăng nhập trước khi kiểm tra lại.`
         );
       }
-      await fetchAccounts();
     } catch (err: unknown) {
       const msg =
         err && typeof err === "object" && "message" in err
@@ -429,7 +442,7 @@ export function AccountSettingsPanel() {
             Quản lý Tài khoản Dịch vụ AI
           </h3>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Hồ sơ tài khoản AI độc lập toàn ứng dụng. Tác vụ từ bất kỳ Workspace nào cũng được cấp phát theo năng lực và Provider tương ứng.
+            Hồ sơ tài khoản AI dùng chung toàn ứng dụng. Tác vụ được cấp phát theo năng lực và Provider tương ứng.
           </p>
         </div>
 
@@ -713,13 +726,13 @@ export function AccountSettingsPanel() {
                 {/* Danh tính và số tác vụ đồng thời */}
                 <div className="flex items-center gap-x-4 min-w-0 text-xs text-muted-foreground">
                   <span className="flex min-w-0 items-center gap-1">
-                    {acc.verifiedIdentity ? (
+                    {hasVerifiedSession(acc) ? (
                       <>
                         <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
                         <span className="shrink-0">Danh tính:</span>
                         <strong
                           className="min-w-0 truncate font-semibold text-emerald-600 dark:text-emerald-400"
-                          title={acc.verifiedIdentity}
+                          title={acc.verifiedIdentity ?? undefined}
                         >
                           {acc.verifiedIdentity}
                         </strong>
@@ -754,7 +767,7 @@ export function AccountSettingsPanel() {
                       {isProbing ? "Đang kiểm tra..." : "Kiểm tra phiên"}
                     </Button>
 
-                    <Button
+                    {!hasVerifiedSession(acc) && <Button
                       type="button"
                       variant="outline"
                       size="sm"
@@ -763,7 +776,7 @@ export function AccountSettingsPanel() {
                       title="Mở cửa sổ trình duyệt để đăng nhập tài khoản này"
                     >
                       Đăng nhập trình duyệt
-                    </Button>
+                    </Button>}
 
                     <Button
                       type="button"

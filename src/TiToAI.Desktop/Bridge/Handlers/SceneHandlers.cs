@@ -1,7 +1,6 @@
 using System.Text.Json;
 using TiToAI.Application.Projects;
 using TiToAI.Application.Scenes;
-using TiToAI.Application.Workspaces;
 using TiToAI.Contracts.Bridge;
 using TiToAI.Contracts.Scenes;
 
@@ -69,16 +68,16 @@ public sealed class SceneHandlers
         try
         {
             var payload = ParsePayload<SceneListByProjectRequest>(request);
-            if (payload is null || string.IsNullOrWhiteSpace(payload.WorkspaceId) || string.IsNullOrWhiteSpace(payload.ProjectId))
+            if (payload is null || string.IsNullOrWhiteSpace(payload.ProjectId))
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
                     "INVALID_ARGUMENT",
-                    "Payload thiếu các trường bắt buộc 'workspaceId' hoặc 'projectId'.",
+                    "Payload thiếu các trường bắt buộc 'projectId'.",
                     retryable: false);
             }
 
-            var scenes = await _sceneService.ListByProjectAsync(payload.WorkspaceId, payload.ProjectId, cancellationToken);
+            var scenes = await _sceneService.ListByProjectAsync(payload.ProjectId, cancellationToken);
             var data = new SceneListByProjectResponseData(scenes);
             return ResponseEnvelopeHelper.CreateSuccess(request.Id, data);
         }
@@ -100,18 +99,17 @@ public sealed class SceneHandlers
         {
             var payload = ParsePayload<SceneGetRequest>(request);
             if (payload is null ||
-                string.IsNullOrWhiteSpace(payload.WorkspaceId) ||
                 string.IsNullOrWhiteSpace(payload.ProjectId) ||
                 string.IsNullOrWhiteSpace(payload.SceneId))
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
                     "INVALID_ARGUMENT",
-                    "Payload thiếu các trường bắt buộc (workspaceId, projectId, sceneId).",
+                    "Payload thiếu các trường bắt buộc (projectId, sceneId).",
                     retryable: false);
             }
 
-            var scene = await _sceneService.GetAsync(payload.WorkspaceId, payload.ProjectId, payload.SceneId, cancellationToken);
+            var scene = await _sceneService.GetAsync(payload.ProjectId, payload.SceneId, cancellationToken);
             var data = new SceneGetResponseData(scene);
             return ResponseEnvelopeHelper.CreateSuccess(request.Id, data);
         }
@@ -133,13 +131,12 @@ public sealed class SceneHandlers
         {
             var payload = ParsePayload<SceneCreateRequest>(request);
             if (payload is null ||
-                string.IsNullOrWhiteSpace(payload.WorkspaceId) ||
                 string.IsNullOrWhiteSpace(payload.ProjectId))
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
                     "INVALID_ARGUMENT",
-                    "Payload thiếu các trường bắt buộc 'workspaceId' hoặc 'projectId'.",
+                    "Payload thiếu các trường bắt buộc 'projectId'.",
                     retryable: false);
             }
 
@@ -164,14 +161,13 @@ public sealed class SceneHandlers
         {
             var payload = ParsePayload<SceneUpdateRequest>(request);
             if (payload is null ||
-                string.IsNullOrWhiteSpace(payload.WorkspaceId) ||
                 string.IsNullOrWhiteSpace(payload.ProjectId) ||
                 string.IsNullOrWhiteSpace(payload.SceneId))
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
                     "INVALID_ARGUMENT",
-                    "Payload thiếu các trường bắt buộc (workspaceId, projectId, sceneId).",
+                    "Payload thiếu các trường bắt buộc (projectId, sceneId).",
                     retryable: false);
             }
 
@@ -197,18 +193,17 @@ public sealed class SceneHandlers
         {
             var payload = ParsePayload<SceneDeleteRequest>(request);
             if (payload is null ||
-                string.IsNullOrWhiteSpace(payload.WorkspaceId) ||
                 string.IsNullOrWhiteSpace(payload.ProjectId) ||
                 string.IsNullOrWhiteSpace(payload.SceneId))
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
                     "INVALID_ARGUMENT",
-                    "Payload thiếu các trường bắt buộc (workspaceId, projectId, sceneId).",
+                    "Payload thiếu các trường bắt buộc (projectId, sceneId).",
                     retryable: false);
             }
 
-            var result = await _sceneService.DeleteAsync(payload.WorkspaceId, payload.ProjectId, payload.SceneId, cancellationToken);
+            var result = await _sceneService.DeleteAsync(payload.ProjectId, payload.SceneId, cancellationToken);
             return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
         }
         catch (OperationCanceledException)
@@ -229,14 +224,13 @@ public sealed class SceneHandlers
         {
             var payload = ParsePayload<SceneReorderRequest>(request);
             if (payload is null ||
-                string.IsNullOrWhiteSpace(payload.WorkspaceId) ||
                 string.IsNullOrWhiteSpace(payload.ProjectId) ||
                 payload.SceneIds is null)
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
                     "INVALID_ARGUMENT",
-                    "Payload thiếu các trường bắt buộc (workspaceId, projectId, sceneIds).",
+                    "Payload thiếu các trường bắt buộc (projectId, sceneIds).",
                     retryable: false);
             }
 
@@ -274,29 +268,17 @@ public sealed class SceneHandlers
             ProjectNotFoundException prjNotFound =>
                 ResponseEnvelopeHelper.CreateError(requestId, "ENTITY_NOT_FOUND", prjNotFound.Message, retryable: false),
 
-            WorkspaceNotFoundException wsNotFound =>
-                ResponseEnvelopeHelper.CreateError(requestId, "ENTITY_NOT_FOUND", wsNotFound.Message, retryable: false),
-
             SceneValidationException validation =>
                 ResponseEnvelopeHelper.CreateError(requestId, "VALIDATION_FAILED", validation.Message, retryable: false),
 
             ProjectValidationException prjValidation =>
                 ResponseEnvelopeHelper.CreateError(requestId, "VALIDATION_FAILED", prjValidation.Message, retryable: false),
 
-            WorkspaceValidationException wsValidation =>
-                ResponseEnvelopeHelper.CreateError(requestId, "VALIDATION_FAILED", wsValidation.Message, retryable: false),
-
-            WorkspaceConcurrencyConflictException conflict =>
-                ResponseEnvelopeHelper.CreateError(requestId, "CONCURRENCY_CONFLICT", conflict.Message, retryable: false),
-
             SceneConcurrencyConflictException sceneConflict =>
                 ResponseEnvelopeHelper.CreateError(requestId, "CONCURRENCY_CONFLICT", sceneConflict.Message, retryable: false),
 
             ProjectConcurrencyConflictException prjConflict =>
                 ResponseEnvelopeHelper.CreateError(requestId, "CONCURRENCY_CONFLICT", prjConflict.Message, retryable: false),
-
-            UnauthorizedWorkspaceException unauthorized =>
-                ResponseEnvelopeHelper.CreateError(requestId, "UNAUTHORIZED_WORKSPACE", unauthorized.Message, retryable: false),
 
             ArgumentException arg =>
                 ResponseEnvelopeHelper.CreateError(requestId, "INVALID_ARGUMENT", arg.Message, retryable: false),

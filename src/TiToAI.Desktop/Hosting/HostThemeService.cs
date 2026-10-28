@@ -302,7 +302,7 @@ public sealed class HostThemeService : IHostThemeService
         var router = _getRouter?.Invoke();
         if (router != null)
         {
-            _ = router.PostEventAsync("theme.changed", null, new
+            _ = router.PostEventAsync("theme.changed", new
             {
                 preference = CurrentPreference,
                 effectiveTheme = CurrentEffectiveTheme
@@ -388,7 +388,7 @@ public sealed class HostThemeService : IHostThemeService
         var router = _getRouter?.Invoke();
         if (router != null)
         {
-            _ = router.PostEventAsync("theme.changed", null, new
+            _ = router.PostEventAsync("theme.changed", new
             {
                 preference = CurrentPreference,
                 effectiveTheme = CurrentEffectiveTheme

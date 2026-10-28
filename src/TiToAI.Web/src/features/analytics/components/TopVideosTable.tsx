@@ -110,7 +110,7 @@ export function TopVideosTable({
               Không tìm thấy video nào trong kỳ này
             </p>
             <p className="text-xs text-muted-foreground max-w-sm mx-auto">
-              Chưa có dữ liệu video cho Workspace đã chọn. Bạn có thể nhập tệp CSV/JSON báo cáo nội dung TikTok.
+              Chưa có dữ liệu video cho tài khoản TikTok đã chọn. Bạn có thể nhập tệp CSV/JSON báo cáo nội dung TikTok.
             </p>
           </div>
         ) : (

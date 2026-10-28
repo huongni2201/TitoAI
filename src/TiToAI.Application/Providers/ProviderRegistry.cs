@@ -188,7 +188,8 @@ public sealed class ProviderRegistry
             return false;
         }
 
-        return string.Equals(capability.VerificationStatus, ProviderVerificationStatus.Verified, StringComparison.OrdinalIgnoreCase)
+        return (string.Equals(capability.VerificationStatus, ProviderVerificationStatus.Verified, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(capability.VerificationStatus, ProviderVerificationStatus.Trial, StringComparison.OrdinalIgnoreCase))
             && capability.AutomationSupported;
     }
 
@@ -258,11 +259,9 @@ public sealed class ProviderRegistry
     /// </summary>
     public async Task<ProviderListResponseData> GetProviderListAsync(
         ProviderAccountService accountService,
-        ProviderListRequest request,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(accountService);
-        ArgumentNullException.ThrowIfNull(request);
 
         // 1. Lấy danh sách capabilities toàn app
         var tasks = GetCapabilities();

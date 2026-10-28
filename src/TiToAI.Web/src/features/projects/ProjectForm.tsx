@@ -23,7 +23,6 @@ import { Loader2, AlertCircle } from "lucide-react";
 export interface ProjectFormProps {
   isOpen: boolean;
   mode: "create" | "edit";
-  workspaceId: string;
   project?: ProjectDetailDto | ProjectSummaryDto | null;
   onClose: () => void;
   onSuccess: (projectId: string) => void;
@@ -32,7 +31,6 @@ export interface ProjectFormProps {
 export function ProjectForm({
   isOpen,
   mode,
-  workspaceId,
   project,
   onClose,
   onSuccess,
@@ -95,14 +93,12 @@ export function ProjectForm({
     try {
       if (mode === "create") {
         const newProjectId = await projectApi.createProject({
-          workspaceId,
           name: trimmedName,
           description: trimmedDesc,
         });
         onSuccess(newProjectId);
       } else if (mode === "edit" && project) {
         const updated = await projectApi.updateProject({
-          workspaceId: project.workspaceId,
           projectId: project.projectId,
           name: trimmedName,
           description: trimmedDesc,

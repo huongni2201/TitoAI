@@ -29,14 +29,14 @@ import {
 } from "lucide-react";
 
 export interface ProjectPageProps {
-  workspaceId: string;
   projectId: string;
   onBack: () => void;
+  onOpenPublishing?: (projectId: string) => void;
 }
 
 type ProjectTab = "production" | "scenes" | "overview" | "assets";
 
-export function ProjectPage({ workspaceId, projectId, onBack }: ProjectPageProps) {
+export function ProjectPage({ projectId, onBack, onOpenPublishing }: ProjectPageProps) {
   const [project, setProject] = useState<ProjectDetailDto | null>(null);
   const [scenes, setScenes] = useState<SceneDto[]>([]);
   const [activeTab, setActiveTab] = useState<ProjectTab>("production");
@@ -54,7 +54,7 @@ export function ProjectPage({ workspaceId, projectId, onBack }: ProjectPageProps
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const fetchData = useCallback(async () => {
-    if (!workspaceId || !projectId) return;
+    if (!projectId) return;
 
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -67,8 +67,8 @@ export function ProjectPage({ workspaceId, projectId, onBack }: ProjectPageProps
 
     try {
       const [prj, sceneList] = await Promise.all([
-        projectApi.getProject(workspaceId, projectId),
-        projectApi.listScenes(workspaceId, projectId),
+        projectApi.getProject(projectId),
+        projectApi.listScenes(projectId),
       ]);
 
       if (controller.signal.aborted) return;
@@ -85,7 +85,7 @@ export function ProjectPage({ workspaceId, projectId, onBack }: ProjectPageProps
         setIsLoading(false);
       }
     }
-  }, [workspaceId, projectId]);
+  }, [projectId]);
 
   useEffect(() => {
     fetchData();
@@ -219,16 +219,15 @@ export function ProjectPage({ workspaceId, projectId, onBack }: ProjectPageProps
         {/* Tab 1 (Mặc định): Sản xuất video */}
         <TabsContent value="production" className="mt-4">
           <VideoProductionTab
-            workspaceId={workspaceId}
             projectId={projectId}
             onRefreshProject={fetchData}
+            onOpenPublishing={onOpenPublishing}
           />
         </TabsContent>
 
         {/* Tab 2: Bảng phân cảnh */}
         <TabsContent value="scenes" className="mt-4">
           <SceneTable
-            workspaceId={workspaceId}
             projectId={projectId}
             scenes={scenes}
             isLoading={isLoading}
@@ -382,7 +381,6 @@ export function ProjectPage({ workspaceId, projectId, onBack }: ProjectPageProps
       <SceneForm
         isOpen={isSceneFormOpen}
         mode={sceneFormMode}
-        workspaceId={workspaceId}
         projectId={projectId}
         scene={editingScene}
         onClose={() => setIsSceneFormOpen(false)}
@@ -396,7 +394,6 @@ export function ProjectPage({ workspaceId, projectId, onBack }: ProjectPageProps
       <ProjectForm
         isOpen={isEditProjectOpen}
         mode="edit"
-        workspaceId={workspaceId}
         project={project}
         onClose={() => setIsEditProjectOpen(false)}
         onSuccess={() => {

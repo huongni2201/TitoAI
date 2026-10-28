@@ -35,7 +35,7 @@ public sealed partial class ProjectWorkflowService
         }
 
         var nowIso = DateTimeOffset.UtcNow.ToString("o");
-        var config = await GetWorkflowConfigAsync(job.WorkspaceId, job.ProjectId, cancellationToken).ConfigureAwait(false);
+        var config = await GetWorkflowConfigAsync(job.ProjectId, cancellationToken).ConfigureAwait(false);
         var jobRunId = GetWorkflowRunId(job.ConfigSnapshotJson);
         if (jobRunId != null && !string.Equals(jobRunId, config.CurrentRunId, StringComparison.Ordinal))
         {
@@ -82,7 +82,30 @@ public sealed partial class ProjectWorkflowService
                 return true;
             }
 
-            var sceneItems = ExtractScenePlanItems(job.ResultText, config.TargetSceneCount, config.TargetDurationPerSceneSeconds);
+            var storyboard = TryParseStoryboard(job.ResultText, config.TargetDurationPerSceneSeconds);
+            if (storyboard != null)
+            {
+                await new StoryboardContentService(_dbOptions).SaveAsync(job.ProjectId, job.ResultText, config.TargetDurationPerSceneSeconds, cancellationToken).ConfigureAwait(false);
+            }
+            var sceneItems = storyboard != null
+                ? StoryboardScenePlan(storyboard)
+                : ExtractScenePlanItems(job.ResultText, config.TargetSceneCount, config.TargetDurationPerSceneSeconds);
+            if (sceneItems.Count == 0)
+            {
+                var cfgSetting = await dbContext.AppSettings.FirstOrDefaultAsync(
+                    setting => setting.Key == GetConfigKey(job.ProjectId), cancellationToken).ConfigureAwait(false);
+                if (cfgSetting != null)
+                {
+                    cfgSetting.Value = JsonSerializer.Serialize(config with
+                    {
+                        RunState = WorkflowRunState.Failed,
+                        UpdatedAtUtc = nowIso
+                    }, JsonOptions);
+                    cfgSetting.UpdatedAtUtc = nowIso;
+                }
+                await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                return false;
+            }
             if (sceneItems.Count > 0)
             {
                 var createdScenes = new List<Scene>();
@@ -93,11 +116,10 @@ public sealed partial class ProjectWorkflowService
                     {
                         Id = Guid.NewGuid().ToString("D").ToLowerInvariant(),
                         ProjectId = job.ProjectId,
-                        WorkspaceId = job.WorkspaceId,
                         SequenceOrder = i + 1,
                         Name = item.Name,
                         TargetDurationSeconds = item.TargetDurationSeconds > 0 ? item.TargetDurationSeconds : config.TargetDurationPerSceneSeconds,
-                        PromptText = !string.IsNullOrWhiteSpace(item.MotionPromptDraft) ? item.MotionPromptDraft : null,
+                        PromptText = null,
                         ImageAssetId = config.WorkflowMode == WorkflowModes.ReadyImage ? config.ReadyImageAssetId :
                                        config.WorkflowMode == WorkflowModes.ProductOnly ? config.ProductAssetId : null,
                         AudioAssetId = config.AudioOption == AudioOptions.CustomAudio ? config.AudioAssetId : null,
@@ -106,6 +128,12 @@ public sealed partial class ProjectWorkflowService
                         UpdatedAtUtc = nowIso
                     };
                     dbContext.Scenes.Add(newScene);
+                    dbContext.AppSettings.Add(new AppSetting
+                    {
+                        Key = $"scene.plan.{newScene.Id}",
+                        Value = item.Purpose,
+                        UpdatedAtUtc = nowIso
+                    });
                     createdScenes.Add(newScene);
                 }
 
@@ -113,7 +141,7 @@ public sealed partial class ProjectWorkflowService
                 if (!isPaused && _jobService != null)
                 {
                     await EnqueueJobsForExistingScenesAsync(
-                        dbContext, job.WorkspaceId, job.ProjectId, config, createdScenes, cancellationToken,
+                        dbContext, job.ProjectId, config, createdScenes, cancellationToken,
                         deferDispatch: true).ConfigureAwait(false);
                     await RunWorkflowContinuationSweepAsync(cancellationToken).ConfigureAwait(false);
                 }
@@ -164,7 +192,6 @@ public sealed partial class ProjectWorkflowService
             var staleDetail = new SceneWorkflowDetailDto(
                 SceneId: scene.Id,
                 ProjectId: scene.ProjectId,
-                WorkspaceId: scene.WorkspaceId,
                 SequenceOrder: scene.SequenceOrder,
                 Name: scene.Name,
                 TargetDurationSeconds: Convert.ToInt32(scene.TargetDurationSeconds),
@@ -222,18 +249,16 @@ public sealed partial class ProjectWorkflowService
 
             // Kích hoạt bước tiếp theo: VideoPrompt
             // Chú ý: Kể cả khi scene.PromptText đã có draft từ Script, VẪN enqueue VideoPrompt
-            // để AI writer hoàn thiện thành motion prompt đầy đủ với Template và USER_BRIEF (§3.3, PV-R5, PV-R11)
+            // để AI writer hoàn thiện thành motion prompt đầy đủ với template đã render (§3.3, PV-R5, PV-R11)
             if (!isPaused)
             {
                 var composition = await composer.ComposeVideoPromptAiRequestAsync(
-                    job.WorkspaceId,
                     config,
                     scene,
                     cancellationToken).ConfigureAwait(false);
 
                 continuationIntent = new WorkflowContinuationIntent(
                     IntentId: Guid.NewGuid().ToString("D").ToLowerInvariant(),
-                    WorkspaceId: job.WorkspaceId,
                     ProjectId: job.ProjectId,
                     SceneId: scene.Id,
                     TaskType: JobTaskType.VideoPrompt,
@@ -251,7 +276,6 @@ public sealed partial class ProjectWorkflowService
             var contentParsed = ContentCandidateParser.ParseVideoContent(
                 job.ResultText ?? string.Empty,
                 job.ProjectId,
-                job.WorkspaceId,
                 scene.Id,
                 scene.SequenceOrder,
                 scene.ImageAssetId);
@@ -288,21 +312,8 @@ public sealed partial class ProjectWorkflowService
                 }, cancellationToken).ConfigureAwait(false);
             }
 
-            if (!isPaused)
-            {
-                continuationIntent = new WorkflowContinuationIntent(
-                    IntentId: Guid.NewGuid().ToString("D").ToLowerInvariant(),
-                    WorkspaceId: job.WorkspaceId,
-                    ProjectId: job.ProjectId,
-                    SceneId: scene.Id,
-                    TaskType: JobTaskType.VideoRender,
-                    CustomPromptText: scene.PromptText,
-                    MediaSnapshot: BuildMediaSnapshot(config, scene),
-                    RunId: config.CurrentRunId ?? string.Empty,
-                    CreatedAtUtc: nowIso,
-                    WorkflowStepKey: $"render.{scene.Id}.{scene.UpdatedAtUtc}"
-                );
-            }
+            // Pause at ReadyForVideo until the real video adapter has been verified.
+            // The selected image and motion prompt remain persisted for a later render job.
         }
         // 4. Áp dụng kết quả VideoRender -> Lưu video và kiểm tra hoàn tất run
         else if (job.TaskType == JobTaskType.VideoRender)
@@ -310,6 +321,41 @@ public sealed partial class ProjectWorkflowService
             scene.VideoAssetId = job.ResultReference;
             scene.Status = "Completed";
             scene.UpdatedAtUtc = nowIso;
+
+            // Publish only a complete, linked video Asset as the Project's selected revision.
+            // Chỉ render cho cả Project (ảnh của mọi phân cảnh) mới thành video cuối khi có nhiều cảnh; clip một cảnh thì không.
+            var sceneCount = await dbContext.Scenes.CountAsync(s => s.ProjectId == job.ProjectId, cancellationToken).ConfigureAwait(false);
+            var hasFinalVideo = false;
+            if ((sceneCount == 1 || CountSnapshotImages(job.ConfigSnapshotJson) == sceneCount) && !string.IsNullOrWhiteSpace(job.ResultReference))
+            {
+                var outputAsset = await dbContext.Assets.FirstOrDefaultAsync(
+                    a => a.Id == job.ResultReference && a.AssetType == "Video" && a.Status == "Linked",
+                    cancellationToken).ConfigureAwait(false);
+                var project = await dbContext.Projects.FirstOrDefaultAsync(
+                    p => p.Id == job.ProjectId, cancellationToken).ConfigureAwait(false);
+                if (outputAsset != null && project != null)
+                {
+                    hasFinalVideo = true;
+                    var revisionNumber = await dbContext.VideoRevisions
+                        .Where(v => v.ProjectId == project.Id)
+                        .Select(v => (int?)v.Revision)
+                        .MaxAsync(cancellationToken).ConfigureAwait(false) ?? 0;
+                    var videoRevision = new VideoRevision
+                    {
+                        Id = Guid.NewGuid().ToString("D").ToLowerInvariant(),
+                        ProjectId = project.Id,
+                        Revision = revisionNumber + 1,
+                        State = "Ready",
+                        AssetId = outputAsset.Id,
+                        ContentHash = outputAsset.Sha256Hash,
+                        CreatedAtUtc = nowIso
+                    };
+                    dbContext.VideoRevisions.Add(videoRevision);
+                    project.CurrentVideoRevisionId = videoRevision.Id;
+                    project.Revision += 1;
+                    project.UpdatedAtUtc = nowIso;
+                }
+            }
 
             // Cập nhật trạng thái hoàn tất vào VideoContentItem
             await UpdateContentItemVideoStatusAsync(dbContext, job.ProjectId, scene.Id, job.ResultReference, "Completed", nowIso, cancellationToken).ConfigureAwait(false);
@@ -326,10 +372,8 @@ public sealed partial class ProjectWorkflowService
                 candidateHistory.Add(job.ResultReference);
             }
 
-            var remainingScenes = await dbContext.Scenes
-                .CountAsync(s => s.ProjectId == job.ProjectId && string.IsNullOrWhiteSpace(s.VideoAssetId), cancellationToken).ConfigureAwait(false);
-
-            if (remainingScenes == 0)
+            // Một render cho cả Project gắn video với phân cảnh neo; các phân cảnh khác chỉ giữ ảnh.
+            if (hasFinalVideo)
             {
                 var updatedConfig = config with
                 {
@@ -350,7 +394,6 @@ public sealed partial class ProjectWorkflowService
         var updatedDetail = new SceneWorkflowDetailDto(
             SceneId: scene.Id,
             ProjectId: scene.ProjectId,
-            WorkspaceId: scene.WorkspaceId,
             SequenceOrder: scene.SequenceOrder,
             Name: scene.Name,
             TargetDurationSeconds: Convert.ToInt32(scene.TargetDurationSeconds),
@@ -409,7 +452,6 @@ public sealed partial class ProjectWorkflowService
             try
             {
                 await _jobService.EnqueueAsync(new JobEnqueueRequest(
-                    WorkspaceId: continuationIntent.WorkspaceId,
                     ProjectId: continuationIntent.ProjectId,
                     SceneId: continuationIntent.SceneId,
                     TaskType: continuationIntent.TaskType,
@@ -457,7 +499,7 @@ public sealed partial class ProjectWorkflowService
                 var intent = JsonSerializer.Deserialize<WorkflowContinuationIntent>(setting.Value, JsonOptions);
                 if (intent != null)
                 {
-                    var config = await GetWorkflowConfigAsync(intent.WorkspaceId, intent.ProjectId, cancellationToken).ConfigureAwait(false);
+                    var config = await GetWorkflowConfigAsync(intent.ProjectId, cancellationToken).ConfigureAwait(false);
                     if (!string.Equals(config.CurrentRunId, intent.RunId, StringComparison.Ordinal) ||
                         config.RunState is WorkflowRunState.Idle or WorkflowRunState.Failed or WorkflowRunState.Completed)
                     {
@@ -472,7 +514,6 @@ public sealed partial class ProjectWorkflowService
                     }
 
                     await _jobService.EnqueueAsync(new JobEnqueueRequest(
-                        WorkspaceId: intent.WorkspaceId,
                         ProjectId: intent.ProjectId,
                         SceneId: intent.SceneId,
                         TaskType: intent.TaskType,
@@ -553,6 +594,39 @@ public sealed partial class ProjectWorkflowService
         _ => $"{taskType.ToLowerInvariant()}.{sceneId}"
     };
 
+    private static int CountSnapshotImages(string? configSnapshotJson)
+    {
+        if (string.IsNullOrWhiteSpace(configSnapshotJson)) return 0;
+        using var doc = JsonDocument.Parse(configSnapshotJson);
+        return doc.RootElement.TryGetProperty("MediaSnapshot", out var media) &&
+               media.TryGetProperty("ImageAssetIds", out var ids) && ids.ValueKind == JsonValueKind.Array
+            ? ids.GetArrayLength()
+            : 0;
+    }
+
+    /// <summary>Storyboard hợp lệ thì trả về; kết quả Script không phải storyboard sẽ đi theo đường scenes cũ.</summary>
+    private static StoryboardContent? TryParseStoryboard(string resultText, int durationSeconds)
+    {
+        try
+        {
+            return StoryboardContentService.Parse(resultText, durationSeconds);
+        }
+        catch (ProjectWorkflowValidationException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Mỗi shot thành một phân cảnh theo thứ tự; imagePrompt được giữ làm purpose để tạo ảnh.</summary>
+    private static IReadOnlyList<ScenePlanItemDto> StoryboardScenePlan(StoryboardContent storyboard) =>
+        storyboard.Shots.Select((shot, index) => new ScenePlanItemDto(
+            SequenceOrder: index + 1,
+            Name: shot.Description,
+            Purpose: shot.ImagePrompt,
+            TargetDurationSeconds: shot.EndSeconds - shot.StartSeconds,
+            ImageStrategy: SceneImageStrategy.ReuseFoundation,
+            MotionPromptDraft: string.Empty)).ToArray();
+
     private static IReadOnlyList<ScenePlanItemDto> ExtractScenePlanItems(string resultText, int fallbackCount, int fallbackDuration)
     {
         var cleaned = resultText.Trim();
@@ -593,11 +667,9 @@ public sealed partial class ProjectWorkflowService
                         MotionPromptDraft: motionPrompt
                     ));
                 }
-                if (list.Count > 0)
+                if (list.Count == Math.Max(1, fallbackCount))
                 {
-                    // A Project produces one video. Scene entries from legacy/misbehaving providers
-                    // are internal storyboard candidates; do not fan them out into separate videos.
-                    return list.Take(Math.Max(1, fallbackCount)).ToList();
+                    return list;
                 }
             }
 

@@ -1,7 +1,6 @@
 using System.Text.Json;
 using TiToAI.Application.Documents;
 using TiToAI.Application.Scenes;
-using TiToAI.Application.Workspaces;
 using TiToAI.Contracts.Bridge;
 using TiToAI.Contracts.Documents;
 
@@ -54,13 +53,12 @@ public sealed class DocumentHandlers
         {
             var payload = ParsePayload<DocumentExportRequest>(request);
             if (payload is null ||
-                string.IsNullOrWhiteSpace(payload.WorkspaceId) ||
                 string.IsNullOrWhiteSpace(payload.SceneId))
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
                     "INVALID_ARGUMENT",
-                    "Payload thiếu các trường bắt buộc 'workspaceId' hoặc 'sceneId'.",
+                    "Payload thiếu các trường bắt buộc 'sceneId'.",
                     retryable: false);
             }
 
@@ -97,9 +95,6 @@ public sealed class DocumentHandlers
 
             SceneNotFoundException sceneNotFound =>
                 ResponseEnvelopeHelper.CreateError(requestId, "ENTITY_NOT_FOUND", sceneNotFound.Message, retryable: false),
-
-            WorkspaceNotFoundException wsNotFound =>
-                ResponseEnvelopeHelper.CreateError(requestId, "ENTITY_NOT_FOUND", wsNotFound.Message, retryable: false),
 
             ArgumentException arg =>
                 ResponseEnvelopeHelper.CreateError(requestId, "INVALID_ARGUMENT", arg.Message, retryable: false),

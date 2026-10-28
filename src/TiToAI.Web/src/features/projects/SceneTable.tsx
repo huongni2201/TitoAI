@@ -41,7 +41,6 @@ import { cn } from "@/lib/utils";
 import { AssetPicker, AssetPreviewDialog, type AssetItem } from "../library";
 
 export interface SceneTableProps {
-  workspaceId: string;
   projectId: string;
   scenes: SceneDto[];
   isLoading: boolean;
@@ -57,7 +56,6 @@ function formatDuration(seconds: number): string {
 }
 
 export function SceneTable({
-  workspaceId,
   projectId,
   scenes,
   isLoading,
@@ -86,7 +84,6 @@ export function SceneTable({
     setErrorMessage(null);
     try {
       await projectApi.updateScene({
-        workspaceId,
         projectId,
         sceneId: scene.sceneId,
         expectedRevision: scene.revision,
@@ -110,7 +107,6 @@ export function SceneTable({
     setErrorMessage(null);
     try {
       await projectApi.updateScene({
-        workspaceId,
         projectId,
         sceneId: scene.sceneId,
         expectedRevision: scene.revision,
@@ -135,7 +131,6 @@ export function SceneTable({
       const response = await bridgeClient.invoke<{ asset?: { id: string } | null; canceled?: boolean }>(
         "asset.import_audio",
         {
-          workspaceId,
           projectId,
           sceneId,
         }
@@ -160,7 +155,6 @@ export function SceneTable({
       const response = await bridgeClient.invoke<{ asset?: { id: string } | null; canceled?: boolean }>(
         "asset.select_reference_image",
         {
-          workspaceId,
           projectId,
           sceneId,
         }
@@ -202,7 +196,6 @@ export function SceneTable({
 
     try {
       await projectApi.reorderScenes({
-        workspaceId,
         projectId,
         sceneIds: newSceneIds,
         expectedSceneRevisions,
@@ -232,7 +225,7 @@ export function SceneTable({
     setErrorMessage(null);
 
     try {
-      await projectApi.deleteScene(workspaceId, projectId, deletingScene.sceneId);
+      await projectApi.deleteScene(projectId, deletingScene.sceneId);
       setDeletingScene(null);
       onRefresh();
     } catch (err: unknown) {
@@ -651,7 +644,6 @@ export function SceneTable({
       {/* Modal chọn tài nguyên từ Thư viện */}
       {pickerState && (
         <AssetPicker
-          workspaceId={workspaceId}
           projectId={projectId}
           assetType={pickerState.type}
           onSelect={handleSelectFromLibrary}
@@ -663,7 +655,6 @@ export function SceneTable({
       {previewAssetId && (
         <AssetPreviewDialog
           assetId={previewAssetId}
-          workspaceId={workspaceId}
           onClose={() => setPreviewAssetId(null)}
         />
       )}

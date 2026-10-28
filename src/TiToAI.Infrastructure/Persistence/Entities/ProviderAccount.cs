@@ -2,7 +2,7 @@ namespace TiToAI.Infrastructure.Persistence.Entities;
 
 /// <summary>
 /// Tài khoản AI cấp toàn ứng dụng (ChatGPT, Gemini, MuseAI) theo execution-contract-v1.1 §1.
-/// Dùng chung cho mọi Workspace/TikTok mà không gắn cố định vào một kênh.
+/// Dùng chung toàn ứng dụng, không gắn cố định vào một Project hoặc TikTok account.
 /// </summary>
 public class ProviderAccount
 {

@@ -3,10 +3,13 @@ using System.Collections.Concurrent;
 using System.Threading;
 using System.Threading.Tasks;
 using TiToAI.Application.Jobs;
+using TiToAI.Application.Providers;
 using TiToAI.Browser;
 using TiToAI.Browser.Abstractions;
 using TiToAI.Browser.Models;
 using TiToAI.Contracts.Browser;
+using TiToAI.Contracts.Jobs;
+using TiToAI.Contracts.Providers;
 
 namespace TiToAI.Desktop.Hosting;
 
@@ -22,6 +25,7 @@ public sealed class HostBrowserGatekeeper : IBrowserGatekeeper, IDisposable
     private readonly ITabPool _tabPool;
     private readonly IBrowserProcessController? _processController;
     private readonly BrowserSessionCheckpointCoordinator? _checkpointCoordinator;
+    private readonly JobActivityLog? _activity;
 
     private readonly ConcurrentDictionary<string, string> _profileVisibility = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> _profileOperational = new(StringComparer.OrdinalIgnoreCase);
@@ -33,13 +37,15 @@ public sealed class HostBrowserGatekeeper : IBrowserGatekeeper, IDisposable
         LoginCoordinator loginCoordinator,
         ITabPool tabPool,
         IBrowserProcessController? processController = null,
-        BrowserSessionCheckpointCoordinator? checkpointCoordinator = null)
+        BrowserSessionCheckpointCoordinator? checkpointCoordinator = null,
+        JobActivityLog? activity = null)
     {
         _profileRegistry = profileRegistry ?? throw new ArgumentNullException(nameof(profileRegistry));
         _loginCoordinator = loginCoordinator ?? throw new ArgumentNullException(nameof(loginCoordinator));
         _tabPool = tabPool ?? throw new ArgumentNullException(nameof(tabPool));
         _processController = processController;
         _checkpointCoordinator = checkpointCoordinator;
+        _activity = activity;
 
         _profileStateChangedHandler = payload =>
         {
@@ -110,31 +116,46 @@ public sealed class HostBrowserGatekeeper : IBrowserGatekeeper, IDisposable
         string jobId,
         CancellationToken cancellationToken = default)
     {
-        try
         {
-            // Chỉ mở browser automation khi đã reserve được job đủ điều kiện. Browser chạy ẩn trong lúc xử lý job.
+            // User-requested trial: show ChatGPT jobs so their browser actions can be inspected.
             if (_processController != null && !_processController.IsRunning(profileId))
             {
                 try
                 {
-                    await _processController.LaunchPersistentContextAsync(profileId, isHeadless: true, cancellationToken: cancellationToken).ConfigureAwait(false);
+                    if (_activity != null)
+                        await _activity.WriteAsync(jobId, "browser", "Đang khởi động browser cho tác vụ.", cancellationToken).ConfigureAwait(false);
+                    var profile = await _profileRegistry.GetProfileAsync(profileId, cancellationToken).ConfigureAwait(false);
+                    var visibleTrial = ((ChatGptTrialMode.Enabled && profile?.ProviderKey == ProviderKeys.ChatGPTWeb) ||
+                        (GeminiTrialMode.Enabled && profile?.ProviderKey == ProviderKeys.GeminiWeb)) &&
+                        role is JobTaskType.Script or JobTaskType.Image or JobTaskType.VideoPrompt;
+                    if (visibleTrial)
+                        await _processController.LaunchVisibleAutomationContextAsync(profileId, cancellationToken).ConfigureAwait(false);
+                    else
+                        await _processController.LaunchPersistentContextAsync(profileId, isHeadless: true, cancellationToken: cancellationToken).ConfigureAwait(false);
+                    if (_activity != null)
+                        await _activity.WriteAsync(jobId, "browser", "Browser đã khởi động.", cancellationToken).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[HostBrowserGatekeeper] Không thể mở browser automation cho profile {profileId}: {ex.Message}");
+                    if (_activity != null)
+                        await _activity.WriteAsync(jobId, "error", $"Browser không khởi động được ({ex.GetType().Name}).", CancellationToken.None).ConfigureAwait(false);
+                    throw;
                 }
             }
 
-            var handle = await _tabPool.AcquireTabAsync(profileId, role, jobId, cancellationToken).ConfigureAwait(false);
-            return new TabLeaseDisposable(async () =>
+            try
             {
-                await handle.DisposeAsync().ConfigureAwait(false);
-            });
-        }
-        catch (InvalidOperationException)
-        {
-            // Role tab đang bận xử lý job khác trong TabPool
-            return null;
+                var handle = await _tabPool.AcquireTabAsync(profileId, role, jobId, cancellationToken).ConfigureAwait(false);
+                return new TabLeaseDisposable(async () =>
+                {
+                    await handle.DisposeAsync().ConfigureAwait(false);
+                });
+            }
+            catch (InvalidOperationException)
+            {
+                // Role tab đang bận xử lý job khác trong TabPool
+                return null;
+            }
         }
     }
 

@@ -452,7 +452,6 @@ public static class ProviderRegistryAndWorkflowSmokeTests
             var def = activeRes.Definition;
             Assert(def.WorkflowId == WorkflowDefinitionService.DefaultWorkflowId, "WorkflowId phải là default.");
             Assert(def.Version == 1, "Phiên bản khởi tạo mặc định phải là Version 1.");
-            Assert(def.Scope == "global", "Scope phải là global.");
             Assert(def.Steps.Count == 4, "Workflow phải có đúng 4 bước tuyến tính.");
 
             // 2. Kiểm tra chi tiết 4 bước
@@ -734,7 +733,6 @@ public static class ProviderRegistryAndWorkflowSmokeTests
 
         var contextImage = new JobExecutionContext(
             JobId: "job-img-01",
-            WorkspaceId: "ws-01",
             ProjectId: "proj-01",
             SceneId: "scene-01",
             TaskType: JobTaskType.Image,
@@ -769,7 +767,6 @@ public static class ProviderRegistryAndWorkflowSmokeTests
         // 2. Thử execute với MuseAI cho VideoRender khi chưa verify: Phải từ chối automation ngầm
         var contextVideo = new JobExecutionContext(
             JobId: "job-vid-01",
-            WorkspaceId: "ws-01",
             ProjectId: "proj-01",
             SceneId: "scene-01",
             TaskType: JobTaskType.VideoRender,
@@ -791,7 +788,6 @@ public static class ProviderRegistryAndWorkflowSmokeTests
         // 3. MuseAI cho Script: Unsupported
         var contextUnsupported = new JobExecutionContext(
             JobId: "job-unsupported",
-            WorkspaceId: "ws-01",
             ProjectId: "proj-01",
             SceneId: "scene-01",
             TaskType: JobTaskType.Script,
@@ -868,7 +864,7 @@ public static class ProviderRegistryAndWorkflowSmokeTests
 
         using (var db = new TiToAIDbContext(dbOptions))
         {
-            db.Database.Migrate();
+            db.Database.EnsureCreated();
         }
 
         var registry = new StorageRootRegistry(dbOptions, tempDir);

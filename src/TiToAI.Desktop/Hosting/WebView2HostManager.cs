@@ -4,6 +4,7 @@ using System.Windows;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
 using TiToAI.Desktop.Bridge;
+using TiToAI.Application.Assets;
 
 namespace TiToAI.Desktop.Hosting;
 
@@ -15,6 +16,7 @@ public sealed class WebView2HostManager : IDisposable
     private readonly IHostThemeService _themeService;
     private readonly IBridgeDispatcher _dispatcher;
     private CoreWebView2? _coreWebView2;
+    private AssetService? _assetService;
 
     public string AssetsFolderPath { get; private set; } = string.Empty;
 
@@ -42,7 +44,7 @@ public sealed class WebView2HostManager : IDisposable
         return Path.Combine(AppContext.BaseDirectory, "wwwroot");
     }
 
-    public async Task InitializeAsync(WebView2 webView, Window window)
+    public async Task InitializeAsync(WebView2 webView, Window window, AssetService? assetService = null)
     {
         ArgumentNullException.ThrowIfNull(webView);
         ArgumentNullException.ThrowIfNull(window);
@@ -79,6 +81,7 @@ public sealed class WebView2HostManager : IDisposable
             _coreWebView2.WebMessageReceived -= BridgeRouter.OnWebMessageReceived;
             _coreWebView2.NavigationStarting -= OnNavigationStarting;
             _coreWebView2.NewWindowRequested -= OnNewWindowRequested;
+            _coreWebView2.WebResourceRequested -= OnWebResourceRequested;
             BridgeRouter.Dispose();
             BridgeRouter = null;
         }
@@ -91,6 +94,11 @@ public sealed class WebView2HostManager : IDisposable
             AssetsFolderPath,
             CoreWebView2HostResourceAccessKind.Allow
         );
+
+        _assetService = assetService;
+        coreWebView2.AddWebResourceRequestedFilter("https://media.titoai.local/media/*", CoreWebView2WebResourceContext.All);
+        coreWebView2.WebResourceRequested -= OnWebResourceRequested;
+        coreWebView2.WebResourceRequested += OnWebResourceRequested;
 
         // ĐĂNG KÝ EVENT HANDLERS TRƯỚC NAVIGATION
         BridgeRouter = new BridgeMessageRouter(_dispatcher, coreWebView2, window.Dispatcher);
@@ -122,6 +130,7 @@ public sealed class WebView2HostManager : IDisposable
             {
                 _coreWebView2.NavigationStarting -= OnNavigationStarting;
                 _coreWebView2.NewWindowRequested -= OnNewWindowRequested;
+                _coreWebView2.WebResourceRequested -= OnWebResourceRequested;
                 if (BridgeRouter != null)
                 {
                     _coreWebView2.WebMessageReceived -= BridgeRouter.OnWebMessageReceived;
@@ -141,6 +150,60 @@ public sealed class WebView2HostManager : IDisposable
         }
 
         IsInitialized = false;
+    }
+
+    private async void OnWebResourceRequested(object? sender, CoreWebView2WebResourceRequestedEventArgs e)
+    {
+        var deferral = e.GetDeferral();
+        var core = (CoreWebView2)sender!;
+        Stream? content = null;
+        try
+        {
+            var uri = new Uri(e.Request.Uri);
+            var id = uri.AbsolutePath["/media/".Length..];
+            if (_assetService is null || !Guid.TryParse(id, out _) || e.Request.Method != "GET")
+                throw new FileNotFoundException();
+
+            var result = await _assetService.OpenPreviewAsync(id);
+            content = result.Content;
+            var length = content.Length;
+            var range = e.Request.Headers.Contains("Range") ? e.Request.Headers.GetHeader("Range") : null;
+            long start = 0, end = length - 1;
+            if (range != null)
+            {
+                var parts = range.StartsWith("bytes=", StringComparison.OrdinalIgnoreCase) ? range[6..].Split('-') : [];
+                var valid = parts.Length == 2 && length > 0;
+                if (valid && parts[0].Length == 0)
+                {
+                    valid = long.TryParse(parts[1], out var suffix) && suffix > 0;
+                    if (valid) start = Math.Max(0, length - suffix);
+                }
+                else if (valid)
+                {
+                    valid = long.TryParse(parts[0], out start) &&
+                        (parts[1].Length == 0 || long.TryParse(parts[1], out end));
+                }
+                if (!valid || start < 0 || start >= length || end < start)
+                {
+                    content.Dispose();
+                    content = null;
+                    e.Response = core.Environment.CreateWebResourceResponse(null, 416, "Range Not Satisfiable", $"Content-Range: bytes */{length}");
+                    return;
+                }
+                end = Math.Min(end, length - 1);
+            }
+            var body = new PreviewStream(content, start, Math.Max(0, end - start + 1));
+            content = null;
+            var headers = $"Content-Type: {result.ContentType}\r\nContent-Length: {body.Length}\r\nAccept-Ranges: bytes\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store";
+            if (range != null) headers += $"\r\nContent-Range: bytes {start}-{end}/{length}";
+            e.Response = core.Environment.CreateWebResourceResponse(body, range == null ? 200 : 206, range == null ? "OK" : "Partial Content", headers);
+        }
+        catch
+        {
+            content?.Dispose();
+            e.Response = core.Environment.CreateWebResourceResponse(null, 404, "Not Found", "Cache-Control: no-store");
+        }
+        finally { deferral.Complete(); }
     }
 
     private void OnNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs e)

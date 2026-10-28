@@ -555,7 +555,7 @@ public sealed class AnalyticsImportExportService : IAnalyticsDataParser
         }
 
         // Bỏ qua BOM nếu có
-        if (csv.StartsWith("\uFEFF"))
+        if (csv[0] == '\uFEFF')
         {
             csv = csv.Substring(1);
         }

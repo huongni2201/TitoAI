@@ -70,7 +70,7 @@ public static class AccountConcurrencyAndBrowserLifecycleSmokeTests
 
         using (var db = new TiToAIDbContext(dbOptions))
         {
-            db.Database.Migrate();
+            db.Database.EnsureCreated();
         }
 
         var registry = new StorageRootRegistry(dbOptions, tempDir);
@@ -292,21 +292,12 @@ public static class AccountConcurrencyAndBrowserLifecycleSmokeTests
                     UpdatedAtUtc = now
                 });
 
-                // Tạo 5 Workspace độc lập
+                // Tạo 5 Project độc lập.
                 for (int i = 1; i <= 5; i++)
                 {
-                    db.Workspaces.Add(new Workspace
-                    {
-                        Id = $"ws_n2_{i}",
-                        Name = $"Kênh TikTok {i}",
-                        Status = "Active",
-                        CreatedAtUtc = now,
-                        UpdatedAtUtc = now
-                    });
                     db.Projects.Add(new Project
                     {
                         Id = $"prj_n2_{i}",
-                        WorkspaceId = $"ws_n2_{i}",
                         Name = $"Dự án {i}",
                         Status = "Draft",
                         CreatedAtUtc = now,
@@ -328,7 +319,6 @@ public static class AccountConcurrencyAndBrowserLifecycleSmokeTests
             for (int i = 1; i <= 5; i++)
             {
                 var res = await jobService.EnqueueAsync(new JobEnqueueRequest(
-                    WorkspaceId: $"ws_n2_{i}",
                     ProjectId: $"prj_n2_{i}",
                     SceneId: null,
                     TaskType: JobTaskType.Script,
@@ -455,18 +445,9 @@ public static class AccountConcurrencyAndBrowserLifecycleSmokeTests
 
                 for (int i = 1; i <= 3; i++)
                 {
-                    db.Workspaces.Add(new Workspace
-                    {
-                        Id = $"ws_legacy_{i}",
-                        Name = $"Kênh {i}",
-                        Status = "Active",
-                        CreatedAtUtc = now,
-                        UpdatedAtUtc = now
-                    });
                     db.Projects.Add(new Project
                     {
                         Id = $"prj_legacy_{i}",
-                        WorkspaceId = $"ws_legacy_{i}",
                         Name = $"Dự án {i}",
                         Status = "Draft",
                         CreatedAtUtc = now,
@@ -487,7 +468,6 @@ public static class AccountConcurrencyAndBrowserLifecycleSmokeTests
             for (int i = 1; i <= 3; i++)
             {
                 await jobService.EnqueueAsync(new JobEnqueueRequest(
-                    WorkspaceId: $"ws_legacy_{i}",
                     ProjectId: $"prj_legacy_{i}",
                     SceneId: null,
                     TaskType: JobTaskType.Script,
@@ -577,18 +557,9 @@ public static class AccountConcurrencyAndBrowserLifecycleSmokeTests
 
                 for (int i = 1; i <= 3; i++)
                 {
-                    db.Workspaces.Add(new Workspace
-                    {
-                        Id = $"ws_red_{i}",
-                        Name = $"Kênh {i}",
-                        Status = "Active",
-                        CreatedAtUtc = now,
-                        UpdatedAtUtc = now
-                    });
                     db.Projects.Add(new Project
                     {
                         Id = $"prj_red_{i}",
-                        WorkspaceId = $"ws_red_{i}",
                         Name = $"Dự án {i}",
                         Status = "Draft",
                         CreatedAtUtc = now,
@@ -606,8 +577,8 @@ public static class AccountConcurrencyAndBrowserLifecycleSmokeTests
             var jobService = new JobService(dbOptions, snapshotFactory, scheduler);
 
             // Enqueue 2 jobs ban đầu
-            var j1 = await jobService.EnqueueAsync(new JobEnqueueRequest($"ws_red_1", $"prj_red_1", null, JobTaskType.Script, CustomPromptText: "Task 1"));
-            var j2 = await jobService.EnqueueAsync(new JobEnqueueRequest($"ws_red_2", $"prj_red_2", null, JobTaskType.Script, CustomPromptText: "Task 2"));
+            var j1 = await jobService.EnqueueAsync(new JobEnqueueRequest($"prj_red_1", null, JobTaskType.Script, CustomPromptText: "Task 1"));
+            var j2 = await jobService.EnqueueAsync(new JobEnqueueRequest($"prj_red_2", null, JobTaskType.Script, CustomPromptText: "Task 2"));
 
             // Dispatch: cả 2 jobs chạy
             int d1 = await scheduler.DispatchPendingJobsAsync();
@@ -645,7 +616,7 @@ public static class AccountConcurrencyAndBrowserLifecycleSmokeTests
             }
 
             // Enqueue job thứ 3
-            var j3 = await jobService.EnqueueAsync(new JobEnqueueRequest($"ws_red_3", $"prj_red_3", null, JobTaskType.Script, CustomPromptText: "Task 3"));
+            var j3 = await jobService.EnqueueAsync(new JobEnqueueRequest($"prj_red_3", null, JobTaskType.Script, CustomPromptText: "Task 3"));
 
             // Thử dispatch: Không được nhận thêm vì số đang chạy (2) >= N mới (1)
             int d2 = await scheduler.DispatchPendingJobsAsync();
@@ -746,8 +717,7 @@ public static class AccountConcurrencyAndBrowserLifecycleSmokeTests
                     UpdatedAtUtc = now
                 });
 
-                db.Workspaces.Add(new Workspace { Id = "ws_lc", Name = "Kênh LC", Status = "Active", CreatedAtUtc = now, UpdatedAtUtc = now });
-                db.Projects.Add(new Project { Id = "prj_lc", WorkspaceId = "ws_lc", Name = "Dự án LC", Status = "Draft", CreatedAtUtc = now, UpdatedAtUtc = now });
+                db.Projects.Add(new Project { Id = "prj_lc", Name = "Dự án LC", Status = "Draft", CreatedAtUtc = now, UpdatedAtUtc = now });
 
                 await db.SaveChangesAsync();
             }
@@ -774,7 +744,7 @@ public static class AccountConcurrencyAndBrowserLifecycleSmokeTests
             var jobService = new JobService(dbOptions, snapshotFactory, scheduler);
 
             // 2. Enqueue Job 1
-            var j1 = await jobService.EnqueueAsync(new JobEnqueueRequest("ws_lc", "prj_lc", null, JobTaskType.Script, CustomPromptText: "Task LC 1"));
+            var j1 = await jobService.EnqueueAsync(new JobEnqueueRequest("prj_lc", null, JobTaskType.Script, CustomPromptText: "Task LC 1"));
 
             // Dispatch Job 1: Reserve thành công -> Browser automation mở chạy ẩn!
             int d1 = await scheduler.DispatchPendingJobsAsync();
@@ -814,7 +784,7 @@ public static class AccountConcurrencyAndBrowserLifecycleSmokeTests
             Assert(pState != null && pState.SessionStatus == "Connected", "Đóng browser phải bảo toàn phiên đăng nhập (SessionStatus vẫn là Connected).");
 
             // 4. Enqueue Job 2 tiếp theo: Browser automation mở lại và tiếp tục dùng phiên đã lưu
-            var j2 = await jobService.EnqueueAsync(new JobEnqueueRequest("ws_lc", "prj_lc", null, JobTaskType.Script, CustomPromptText: "Task LC 2"));
+            var j2 = await jobService.EnqueueAsync(new JobEnqueueRequest("prj_lc", null, JobTaskType.Script, CustomPromptText: "Task LC 2"));
             int d2 = await scheduler.DispatchPendingJobsAsync();
             Assert(d2 == 1, "Job 2 phải được dispatch");
 

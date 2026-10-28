@@ -3,7 +3,6 @@ namespace TiToAI.Infrastructure.Persistence.Entities;
 public class Job
 {
     public string Id { get; set; } = string.Empty;
-    public string WorkspaceId { get; set; } = string.Empty;
     public string ProjectId { get; set; } = string.Empty;
     public string? SceneId { get; set; }
     public string TaskType { get; set; } = string.Empty; // Script | Image | VideoPrompt | VideoRender

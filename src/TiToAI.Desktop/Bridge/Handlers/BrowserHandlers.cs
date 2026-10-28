@@ -64,7 +64,7 @@ public sealed class BrowserHandlers
     }
 
     /// <summary>
-    /// Xử lý lệnh browser.list_profiles: Liệt kê các profile theo workspaceId (hoặc toàn bộ nếu null).
+    /// Xử lý lệnh browser.list_profiles: Liệt kê toàn bộ profile cấp ứng dụng.
     /// </summary>
     public async Task<ResponseEnvelope> HandleListProfilesAsync(RequestEnvelope request, CancellationToken cancellationToken)
     {
@@ -72,14 +72,21 @@ public sealed class BrowserHandlers
 
         try
         {
-            BrowserListProfilesRequest? payload = null;
-            if (request.Payload.ValueKind != JsonValueKind.Null && request.Payload.ValueKind != JsonValueKind.Undefined)
+            if (request.Payload.ValueKind is not (JsonValueKind.Object or JsonValueKind.Null or JsonValueKind.Undefined))
             {
-                payload = ParsePayload<BrowserListProfilesRequest>(request);
+                return ResponseEnvelopeHelper.CreateError(
+                    request.Id,
+                    "INVALID_ARGUMENT",
+                    "Payload của browser.list_profiles phải là object.",
+                    retryable: false);
             }
 
-            string? workspaceId = string.IsNullOrWhiteSpace(payload?.WorkspaceId) ? null : payload.WorkspaceId;
-            var profiles = await _profileRegistry.ListProfilesAsync(workspaceId, cancellationToken);
+            if (request.Payload.ValueKind == JsonValueKind.Object)
+            {
+                _ = ParsePayload<BrowserListProfilesRequest>(request);
+            }
+
+            var profiles = await _profileRegistry.ListProfilesAsync(cancellationToken);
 
             var dtoList = profiles.Select(MapToDto).ToList();
             var responseData = new BrowserListProfilesResponseData(dtoList);

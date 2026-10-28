@@ -2,6 +2,7 @@ using System.IO;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using TiToAI.Application.Projects;
+using TiToAI.Application.Scenes;
 using TiToAI.Contracts.Bridge;
 using TiToAI.Contracts.Projects;
 using TiToAI.Desktop.Bridge;
@@ -29,26 +30,20 @@ public static class ProjectFirstSmokeTests
             }
 
             var service = new ProjectService(options);
-            var firstId = (await service.CreateAsync(new ProjectCreateRequest(null, "Video đầu tiên", null))).ProjectId;
+            var firstId = (await service.CreateAsync(new ProjectCreateRequest("Video đầu tiên", null))).ProjectId;
 
-            string scopeId;
-            await using (var db = new TiToAIDbContext(options))
-            {
-                scopeId = (await db.Projects.SingleAsync(p => p.Id == firstId)).WorkspaceId;
-            }
-
-            var secondId = (await service.CreateAsync(new ProjectCreateRequest(scopeId, "Video thứ hai", null))).ProjectId;
+            var secondId = (await service.CreateAsync(new ProjectCreateRequest("Video thứ hai", null))).ProjectId;
             var allProjects = await service.ListAllAsync();
 
-            Assert(allProjects.Count == 2, "project.list phải liệt kê Project thuộc mọi legacy scope.");
+            Assert(allProjects.Count == 2, "project.list phải liệt kê toàn bộ Project.");
             Assert(allProjects.Select(p => p.ProjectId).ToHashSet().SetEquals(new[] { firstId, secondId }),
                 "Danh sách toàn cục phải chứa đúng hai Project đã tạo.");
             Assert(allProjects.All(p => !p.HasVideo), "Project mới chưa có video đầu ra.");
 
             var dispatcher = new BridgeDispatcher();
             new ProjectHandlers(service).Register(dispatcher);
+            new SceneHandlers(new SceneService(options)).Register(dispatcher);
             Assert(dispatcher.IsCommandAllowed("project.list"), "Project-first command phải được đăng ký.");
-            Assert(!dispatcher.IsCommandAllowed("workspace.list"), "Workspace list không còn là bridge command hoạt động.");
 
             using var payloadDocument = JsonDocument.Parse("{}");
             var request = new RequestEnvelope(
@@ -67,7 +62,30 @@ public static class ProjectFirstSmokeTests
             });
             Assert(responseData?.Projects.Count == 2, "project.list phải trả đủ hai Project.");
 
-            Console.WriteLine("[PASS] Project-first create/list works without a user-selected Workspace.");
+            async Task<ResponseEnvelope> DispatchProjectAsync(string command, string json)
+            {
+                using var document = JsonDocument.Parse(json);
+                return await dispatcher.DispatchAsync(new RequestEnvelope(
+                    Guid.NewGuid(), "request", command, document.RootElement.Clone(),
+                    DateTimeOffset.UtcNow, BridgeContract.Version), CancellationToken.None);
+            }
+
+            var createScene = await DispatchProjectAsync("scene.create", $$"""{"projectId":"{{firstId}}","name":"Cảnh thử","targetDurationSeconds":5}""");
+            Assert(createScene.Success, "scene.create phải hoạt động.");
+            var scenes = await DispatchProjectAsync("scene.list_by_project", $$"""{"projectId":"{{firstId}}"}""");
+            Assert(scenes.Success, "scene.list_by_project phải hoạt động.");
+            var invalidScenes = await DispatchProjectAsync("scene.list_by_project", "{}");
+            Assert(!invalidScenes.Success, "scene.list_by_project phải từ chối request thiếu projectId.");
+
+            var get = await DispatchProjectAsync("project.get", $$"""{"projectId":"{{firstId}}"}""");
+            Assert(get.Success, "project.get phải hoạt động.");
+            var update = await DispatchProjectAsync("project.update", $$"""{"projectId":"{{firstId}}","name":"Đã sửa","description":""}""");
+            Assert(update.Success, "project.update phải hoạt động.");
+            var delete = await DispatchProjectAsync("project.delete", $$"""{"projectId":"{{secondId}}"}""");
+            Assert(delete.Success, "project.delete phải hoạt động.");
+            var missingId = await DispatchProjectAsync("project.get", "{}");
+            Assert(!missingId.Success, "project.get phải từ chối request thiếu projectId.");
+            Console.WriteLine("[PASS] Project create/list and Project-scoped scene operations work.");
             return 0;
         }
         finally

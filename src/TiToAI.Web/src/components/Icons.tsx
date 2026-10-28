@@ -16,7 +16,6 @@ import {
   Eye,
   Film,
   Folder,
-  FolderKanban,
   Globe,
   HardDrive,
   Image,
@@ -70,7 +69,6 @@ function createIcon(IconComponent: LucideIcon, defaultSize = 16) {
 }
 
 export const IconOverview = createIcon(LayoutDashboard, 18);
-export const IconWorkspace = createIcon(FolderKanban, 18);
 export const IconProject = createIcon(Video, 18);
 export const IconBrowser = createIcon(Globe, 18);
 export const IconLibrary = createIcon(Image, 18);

@@ -18,7 +18,6 @@ namespace TiToAI.Application.Jobs;
 /// </summary>
 public sealed record JobRecoveryItemResult(
     string JobId,
-    string WorkspaceId,
     string PreviousState,
     string NewState,
     string? ReasonCode,
@@ -221,7 +220,6 @@ public sealed class JobCrashRecoveryService
 
                 var itemResult = new JobRecoveryItemResult(
                     JobId: job.Id,
-                    WorkspaceId: job.WorkspaceId,
                     PreviousState: prevState,
                     NewState: newState,
                     ReasonCode: reasonCode,
@@ -231,11 +229,11 @@ public sealed class JobCrashRecoveryService
                 itemResults.Add(itemResult);
 
                 // CHỈ PHÁT EVENT VÀ NOTIFY SAU KHI TRANSACTION COMMIT THÀNH CÔNG!
-                NotifyStateChanged(job.Id, job.WorkspaceId, job.ProjectId, prevState, newState, reasonCode, job.ResultReference, job.Revision);
+                NotifyStateChanged(job.Id, job.ProjectId, prevState, newState, reasonCode, job.ResultReference, job.Revision);
 
                 if (newState == JobState.Queued)
                 {
-                    _wakeupNotifier?.NotifyWakeup(new JobWakeupSignal("crash_recovery_retry", job.WorkspaceId, job.Id));
+                    _wakeupNotifier?.NotifyWakeup(new JobWakeupSignal("crash_recovery_retry", job.Id));
                 }
             }
         }
@@ -261,7 +259,6 @@ public sealed class JobCrashRecoveryService
 
     private void NotifyStateChanged(
         string jobId,
-        string workspaceId,
         string? projectId,
         string prevState,
         string newState,
@@ -271,7 +268,6 @@ public sealed class JobCrashRecoveryService
     {
         OnJobStateChanged?.Invoke(new JobStateChangedPayload(
             JobId: jobId,
-            WorkspaceId: workspaceId,
             ProjectId: projectId,
             PreviousState: prevState,
             NewState: newState,

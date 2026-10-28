@@ -56,6 +56,7 @@ wrapDispatchEvent(domWindow.EventTarget?.prototype);
 // Mock control state
 type MockMode = "empty" | "null_metrics" | "populated";
 let currentMockMode: MockMode = "empty";
+let mockTikTokSyncError: string | null = null;
 let mockTikTokSessionOverride: {
   isLoggedIn: boolean;
   profileId: string | null;
@@ -84,16 +85,26 @@ window.chrome = {
         let success = true;
 
         switch (req.command) {
+          case "analytics.list_tiktok_accounts": {
+            responseData = {
+              accounts: [{
+                accountId: "acc_test_01",
+                accountIdentity: "@shopify4304",
+                profileId: "prof_tiktok_01",
+                sessionStatus: "Connected",
+              }],
+            };
+            break;
+          }
           case "analytics.get_summary": {
             const { periodDays } = req.payload as { periodDays?: number };
             if (currentMockMode === "empty") {
               responseData = {
-                workspaceId: req.payload.workspaceId,
                 periodDays: periodDays ?? 30,
                 startDate: null,
                 endDate: null,
                 totalVideos: 0,
-                totalViews: 0,
+                totalViews: null,
                 totalLikes: 0,
                 totalComments: 0,
                 totalShares: 0,
@@ -106,7 +117,6 @@ window.chrome = {
               };
             } else if (currentMockMode === "null_metrics") {
               responseData = {
-                workspaceId: req.payload.workspaceId,
                 periodDays: periodDays ?? 30,
                 startDate: "2026-10-01",
                 endDate: "2026-10-27",
@@ -124,7 +134,6 @@ window.chrome = {
               };
             } else {
               responseData = {
-                workspaceId: req.payload.workspaceId,
                 periodDays: periodDays ?? 30,
                 startDate: "2026-10-01",
                 endDate: "2026-10-27",
@@ -164,7 +173,6 @@ window.chrome = {
               responseData = [
                 {
                   id: "v_null_01",
-                  workspaceId: req.payload.workspaceId,
                   videoKey: "tk_v_null",
                   title: "Video thử nghiệm null metrics",
                   views: 45000,
@@ -179,7 +187,6 @@ window.chrome = {
               responseData = [
                 {
                   id: "v_pop_01",
-                  workspaceId: req.payload.workspaceId,
                   videoKey: "tk_v_01",
                   title: "Video TikTok Top 1",
                   views: 150000,
@@ -197,7 +204,6 @@ window.chrome = {
           case "analytics.import_data": {
             responseData = {
               snapshotId: "snap_test_99",
-              workspaceId: req.payload.workspaceId,
               recordCount: 5,
               success: true,
               message: "Đã nhập thành công 5 bản ghi video!",
@@ -252,6 +258,10 @@ window.chrome = {
           }
 
           case "analytics.sync_tiktok_channel": {
+            if (mockTikTokSyncError) {
+              responseData = { success: false, message: mockTikTokSyncError, requiresLogin: true };
+              break;
+            }
             responseData = {
               success: true,
               snapshotId: "snap_sync_001",
@@ -300,6 +310,15 @@ const { bridgeClient } = await import("../../services/bridgeClient.ts");
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+async function selectFirstAnalyticsAccount(container: HTMLElement) {
+  const accountButton = container.querySelector<HTMLButtonElement>('[data-testid^="analytics-select-account-"]');
+  assert.ok(accountButton, "Phải hiển thị tài khoản TikTok để chọn");
+  await act(async () => {
+    accountButton.click();
+    await sleep(60);
+  });
+}
+
 function setTextareaValue(element: HTMLTextAreaElement, value: string) {
   const proto = Object.getPrototypeOf(element);
   const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
@@ -314,23 +333,23 @@ function setTextareaValue(element: HTMLTextAreaElement, value: string) {
 
 test("T25-Test 1: Render đúng Empty State khi chưa có dữ liệu (totalVideos === 0)", async () => {
   currentMockMode = "empty";
-  bridgeClient.setActiveWorkspaceId("ws_empty_01");
 
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = ReactDOM.createRoot(container);
 
   await act(async () => {
-    root.render(React.createElement(AnalyticsPage, { workspaceId: "ws_empty_01" }));
+    root.render(React.createElement(AnalyticsPage, { active: true }));
   });
 
   await act(async () => {
     await sleep(60);
   });
+  await selectFirstAnalyticsAccount(container);
 
   // Kiểm tra empty state xuất hiện
-  const emptyState = container.querySelector('[data-testid="workspace-empty-state"]');
-  assert.ok(emptyState, "Phải hiển thị khối Empty State khi workspace chưa có dữ liệu");
+  const emptyState = container.querySelector('[data-testid="analytics-account-empty-state"]');
+  assert.ok(emptyState, "Phải hiển thị khối Empty State khi tài khoản chưa có dữ liệu");
   assert.ok(
     container.textContent?.includes("Chưa có dữ liệu phân tích cho kênh này"),
     "Phải hiển thị thông báo hướng dẫn người dùng"
@@ -345,17 +364,23 @@ test("T25-Test 1: Render đúng Empty State khi chưa có dữ liệu (totalVide
 
 test("T25-Test 2: Xử lý giá trị null hiển thị ký tự '—' (không hiển thị 0 hay NaN)", async () => {
   currentMockMode = "null_metrics";
-  bridgeClient.setActiveWorkspaceId("ws_null_02");
 
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = ReactDOM.createRoot(container);
 
   await act(async () => {
-    root.render(React.createElement(AnalyticsPage, { workspaceId: "ws_null_02" }));
+    root.render(React.createElement(AnalyticsPage, { active: true }));
   });
 
   await act(async () => {
+    await sleep(60);
+  });
+  await selectFirstAnalyticsAccount(container);
+  const contentTab = container.querySelector<HTMLButtonElement>('[data-testid="analytics-dataset-content"]');
+  assert.ok(contentTab, "Phải có tab Nội dung để xem số liệu Affiliate.");
+  await act(async () => {
+    contentTab.click();
     await sleep(60);
   });
 
@@ -401,19 +426,19 @@ test("T25-Test 2: Xử lý giá trị null hiển thị ký tự '—' (không h
 test("T25-Test 3: Thay đổi bộ lọc kỳ ngày (7 ngày -> 30 ngày) kích hoạt gọi lại API", async () => {
   currentMockMode = "populated";
   capturedBridgeRequests.length = 0;
-  bridgeClient.setActiveWorkspaceId("ws_filter_03");
 
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = ReactDOM.createRoot(container);
 
   await act(async () => {
-    root.render(React.createElement(AnalyticsPage, { workspaceId: "ws_filter_03" }));
+    root.render(React.createElement(AnalyticsPage, { active: true }));
   });
 
   await act(async () => {
     await sleep(60);
   });
+  await selectFirstAnalyticsAccount(container);
 
   // Ban đầu gọi với default 30 ngày
   const initialCall = capturedBridgeRequests.find(
@@ -444,19 +469,19 @@ test("T25-Test 3: Thay đổi bộ lọc kỳ ngày (7 ngày -> 30 ngày) kích 
 test("T25-Test 4: Mở dialog Import, nhập dữ liệu và submit thành công", async () => {
   currentMockMode = "populated";
   capturedBridgeRequests.length = 0;
-  bridgeClient.setActiveWorkspaceId("ws_import_04");
 
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = ReactDOM.createRoot(container);
 
   await act(async () => {
-    root.render(React.createElement(AnalyticsPage, { workspaceId: "ws_import_04" }));
+    root.render(React.createElement(AnalyticsPage, { active: true }));
   });
 
   await act(async () => {
     await sleep(60);
   });
+  await selectFirstAnalyticsAccount(container);
 
   // Bấm mở Dialog Import
   const openImportBtn = container.querySelector('[data-testid="open-import-dialog-btn"]') as HTMLButtonElement;
@@ -490,7 +515,7 @@ test("T25-Test 4: Mở dialog Import, nhập dữ liệu và submit thành công
   // Kiểm tra request import đã được gửi qua Bridge
   const importReq = capturedBridgeRequests.find((r) => r.command === "analytics.import_data");
   assert.ok(importReq, "Phải kích hoạt RPC command analytics.import_data");
-  assert.equal(importReq.payload.workspaceId, "ws_import_04");
+  assert.equal(importReq.payload.accountId, "acc_test_01");
   assert.equal(importReq.payload.format, "csv");
   assert.equal(importReq.payload.rawContent, sampleCsv);
 
@@ -506,19 +531,19 @@ test("T25-Test 5: Mở modal TikTok Sync Dialog và hiển thị trạng thái k
   currentMockMode = "populated";
   mockTikTokSessionOverride = null;
   capturedBridgeRequests.length = 0;
-  bridgeClient.setActiveWorkspaceId("ws_sync_05");
 
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = ReactDOM.createRoot(container);
 
   await act(async () => {
-    root.render(React.createElement(AnalyticsPage, { workspaceId: "ws_sync_05" }));
+    root.render(React.createElement(AnalyticsPage, { active: true }));
   });
 
   await act(async () => {
     await sleep(60);
   });
+  await selectFirstAnalyticsAccount(container);
 
   // Bấm mở Dialog Kéo dữ liệu từ kênh TikTok
   const syncBtn = container.querySelector('[data-testid="sync-tiktok-btn"]') as HTMLButtonElement;
@@ -534,7 +559,7 @@ test("T25-Test 5: Mở modal TikTok Sync Dialog và hiển thị trạng thái k
     (r) => r.command === "analytics.check_tiktok_session"
   );
   assert.ok(checkSessionReq, "Phải gọi bridge command analytics.check_tiktok_session");
-  assert.equal(checkSessionReq.payload.workspaceId, "ws_sync_05");
+  assert.equal(checkSessionReq.payload.accountId, "acc_test_01");
 
   // Kiểm tra Dialog đã mở và hiển thị badge đã kết nối
   const connectedBadge = document.querySelector('[data-testid="tiktok-session-connected-badge"]');
@@ -561,19 +586,19 @@ test("T25-Test 6: TikTok Sync Dialog xử lý trạng thái chưa đăng nhập 
     errorMessage: null,
   };
   capturedBridgeRequests.length = 0;
-  bridgeClient.setActiveWorkspaceId("ws_sync_06");
 
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = ReactDOM.createRoot(container);
 
   await act(async () => {
-    root.render(React.createElement(AnalyticsPage, { workspaceId: "ws_sync_06" }));
+    root.render(React.createElement(AnalyticsPage, { active: true }));
   });
 
   await act(async () => {
     await sleep(60);
   });
+  await selectFirstAnalyticsAccount(container);
 
   // Mở Dialog Sync
   const syncBtn = container.querySelector('[data-testid="sync-tiktok-btn"]') as HTMLButtonElement;
@@ -603,7 +628,7 @@ test("T25-Test 6: TikTok Sync Dialog xử lý trạng thái chưa đăng nhập 
     (r) => r.command === "analytics.open_tiktok_login"
   );
   assert.ok(openLoginReq, "Phải kích hoạt bridge command analytics.open_tiktok_login");
-  assert.equal(openLoginReq.payload.workspaceId, "ws_sync_06");
+  assert.equal(openLoginReq.payload.accountId, "acc_test_01");
 
   root.unmount();
   container.remove();
@@ -620,19 +645,19 @@ test("T25-Test 7: Kích hoạt nút Kéo dữ liệu từ kênh TikTok và nhậ
     errorMessage: null,
   };
   capturedBridgeRequests.length = 0;
-  bridgeClient.setActiveWorkspaceId("ws_sync_07");
 
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = ReactDOM.createRoot(container);
 
   await act(async () => {
-    root.render(React.createElement(AnalyticsPage, { workspaceId: "ws_sync_07" }));
+    root.render(React.createElement(AnalyticsPage, { active: true }));
   });
 
   await act(async () => {
     await sleep(60);
   });
+  await selectFirstAnalyticsAccount(container);
 
   // Mở Dialog Sync
   const syncBtn = container.querySelector('[data-testid="sync-tiktok-btn"]') as HTMLButtonElement;
@@ -656,7 +681,7 @@ test("T25-Test 7: Kích hoạt nút Kéo dữ liệu từ kênh TikTok và nhậ
     (r) => r.command === "analytics.sync_tiktok_channel"
   );
   assert.ok(syncReq, "Phải kích hoạt bridge command analytics.sync_tiktok_channel");
-  assert.equal(syncReq.payload.workspaceId, "ws_sync_07");
+  assert.equal(syncReq.payload.accountId, "acc_test_01");
 
   // Kiểm tra thông báo thành công hiển thị
   const successNotice = document.querySelector('[data-testid="tiktok-sync-success"]');
@@ -669,4 +694,47 @@ test("T25-Test 7: Kích hoạt nút Kéo dữ liệu từ kênh TikTok và nhậ
   root.unmount();
   container.remove();
   mockTikTokSessionOverride = null;
+});
+
+test("T25-Test 8: Giữ lỗi xác minh phiên và xóa lỗi cũ khi kiểm tra lại thành công", async () => {
+  currentMockMode = "populated";
+  const detail = "Không thể xác minh phiên TikTok vì profile đang được sử dụng.";
+  mockTikTokSessionOverride = {
+    isLoggedIn: false, profileId: "prof_tiktok_01", accountIdentity: "@shopify4304",
+    sessionStatus: "Unverified", errorMessage: detail,
+  };
+  mockTikTokSyncError = detail;
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = ReactDOM.createRoot(container);
+  try {
+    await act(async () => {
+      root.render(React.createElement(AnalyticsPage, { active: true }));
+    });
+    await act(async () => { await sleep(60); });
+    await selectFirstAnalyticsAccount(container);
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-testid="sync-tiktok-btn"]')!.click();
+      await sleep(60);
+    });
+    assert.ok(document.body.textContent?.includes(detail), "Phải hiển thị lỗi probe thay vì che bằng hướng dẫn đăng nhập chung");
+    assert.ok(document.querySelector('[data-testid="tiktok-session-disconnected-badge"]')?.textContent?.includes("Chưa xác minh"));
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('[data-testid="tiktok-start-sync-btn"]')!.click();
+      await sleep(60);
+    });
+    assert.ok(document.querySelector('[data-testid="tiktok-sync-error"]')?.textContent?.includes(detail), "Sync phải giữ nguyên thông báo backend");
+    mockTikTokSessionOverride = { ...mockTikTokSessionOverride!, isLoggedIn: true, sessionStatus: "Connected", errorMessage: null };
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('[data-testid="tiktok-recheck-session-btn"]')!.click();
+      await sleep(60);
+    });
+    assert.ok(document.querySelector('[data-testid="tiktok-session-connected-badge"]'));
+    assert.equal(document.querySelector('[data-testid="tiktok-sync-error"]'), null);
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+    mockTikTokSessionOverride = null;
+    mockTikTokSyncError = null;
+  }
 });

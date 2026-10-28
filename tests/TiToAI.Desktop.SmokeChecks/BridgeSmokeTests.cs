@@ -2,19 +2,15 @@ using System;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.Data.Sqlite;
-using Microsoft.EntityFrameworkCore;
 using TiToAI.Contracts.Bridge;
 using TiToAI.Desktop.Bridge;
 using TiToAI.Desktop.Hosting;
-using TiToAI.Infrastructure.Persistence;
 using TiToAI.Infrastructure.Persistence.Entities;
 
 namespace TiToAI.Desktop.SmokeChecks;
 
 /// <summary>
-/// Smoke checks kiểm tra các hành vi cốt lõi của WebView2 Bridge Router, Dispatcher, Theme Service
-/// và Workspace Query Handler theo contract v1.0.4 mà không phụ thuộc vào test framework bên ngoài.
+/// Smoke checks kiểm tra WebView2 Bridge Router, Dispatcher và Theme Service.
 /// </summary>
 public static class BridgeSmokeTests
 {
@@ -61,7 +57,7 @@ public static class BridgeSmokeTests
         {
             "id": "{{reqId}}",
             "type": "request",
-            "command": "workspace.list",
+            "command": "settings.get",
             "payload": {},
             "clientTimestampUtc": "{{DateTimeOffset.UtcNow:O}}",
             "contractVersion": "1.0.4"
@@ -108,7 +104,7 @@ public static class BridgeSmokeTests
             "id": "{{targetId}}",
             "type": "request",
             "command": "job.enqueue",
-            "payload": { "workspaceId": "w1" },
+            "payload": { "projectId": "project-1" },
             "contractVersion": "1.0.4"
         }
         """;
@@ -162,8 +158,8 @@ public static class BridgeSmokeTests
         {
             "id": "{{duplicateId}}",
             "type": "request",
-            "command": "workspace.get",
-            "payload": { "workspaceId": "w-test" },
+            "command": "project.get",
+            "payload": { "projectId": "project-test" },
             "contractVersion": "1.0.4"
         }
         """;
@@ -278,7 +274,7 @@ public static class BridgeSmokeTests
             "type": "request",
             "command": "settings.browse_folder",
             "payload": {
-                "selectedPath": "D:\\Workspace\\TitoAI\\Media",
+                "selectedPath": "D:\\TiToAI\\Media",
                 "relativeStoragePath": "audio/channel_01.mp3"
             },
             "contractVersion": "1.0.4"
@@ -324,7 +320,7 @@ public static class BridgeSmokeTests
         var request = new RequestEnvelope(
             Id: reqId,
             Type: "request",
-            Command: "workspace.list",
+            Command: "settings.get",
             Payload: default,
             ClientTimestampUtc: DateTimeOffset.UtcNow,
             ContractVersion: "1.0.4"
@@ -386,7 +382,7 @@ public static class BridgeSmokeTests
         {
             "id": "{{reqId}}",
             "type": "request",
-            "command": "workspace.list",
+            "command": "settings.get",
             "payload": {},
             "contractVersion": "1.0.4"
         }
@@ -401,160 +397,6 @@ public static class BridgeSmokeTests
         Assert(!message.Contains(secretPath, StringComparison.OrdinalIgnoreCase), "Thông báo lỗi không được chứa đường dẫn máy cục bộ");
         Assert(!message.Contains(secretToken, StringComparison.OrdinalIgnoreCase), "Thông báo lỗi không được chứa secret token");
         Assert(message.Contains(reqId.ToString("D"), StringComparison.OrdinalIgnoreCase), "Thông báo lỗi phải chứa correlation ID để đối soát");
-    }
-
-    /// <summary>
-    /// Test Case 9: WorkspaceQueryHandler - DB rỗng trả về danh sách rỗng (DB rỗng mới trả rỗng)
-    /// </summary>
-    public static async Task Test_WorkspaceQueryHandler_ReturnsEmptyWhenDbEmpty()
-    {
-        using var connection = new SqliteConnection("Data Source=:memory:");
-        await connection.OpenAsync();
-
-        var options = new DbContextOptionsBuilder<TiToAIDbContext>()
-            .UseSqlite(connection)
-            .Options;
-
-        await using (var db = new TiToAIDbContext(options))
-        {
-            await db.Database.EnsureCreatedAsync();
-        }
-
-        var handler = new WorkspaceQueryHandler(options);
-        var dispatcher = new BridgeDispatcher();
-        handler.Register(dispatcher);
-
-        var reqId = Guid.NewGuid();
-        var request = new RequestEnvelope(
-            Id: reqId,
-            Type: "request",
-            Command: "workspace.list",
-            Payload: default,
-            ClientTimestampUtc: DateTimeOffset.UtcNow,
-            ContractVersion: "1.0.4");
-
-        var response = await dispatcher.DispatchAsync(request, CancellationToken.None);
-        Assert(response != null, "Response không được null");
-        Assert(response!.Success, "Response phải thành công");
-        Assert(response.Data.HasValue, "Response.Data phải có giá trị");
-
-        if (!response.Data.HasValue)
-        {
-            throw new InvalidOperationException("Response.Data không được null");
-        }
-
-        var root = response.Data.Value;
-        Assert(root.TryGetProperty("workspaces", out var workspacesProp), "Payload phải chứa thuộc tính 'workspaces'");
-        Assert(workspacesProp.ValueKind == JsonValueKind.Array, "'workspaces' phải là mảng JSON");
-        Assert(workspacesProp.GetArrayLength() == 0, "Khi DB rỗng, mảng workspaces phải rỗng (0 phần tử)");
-    }
-
-    /// <summary>
-    /// Test Case 10: WorkspaceQueryHandler - Projection từ SQLite DB thật
-    /// Trả về đúng WorkspaceSummaryDto với các trường: workspaceId, name, channelHandle, topic, status.
-    /// </summary>
-    public static async Task Test_WorkspaceQueryHandler_ProjectsWorkspaceFromRealDatabase()
-    {
-        using var connection = new SqliteConnection("Data Source=:memory:");
-        await connection.OpenAsync();
-
-        var options = new DbContextOptionsBuilder<TiToAIDbContext>()
-            .UseSqlite(connection)
-            .Options;
-
-        await using (var db = new TiToAIDbContext(options))
-        {
-            await db.Database.EnsureCreatedAsync();
-
-            db.Workspaces.Add(new Workspace
-            {
-                Id = "w-test-123",
-                Name = "Kênh Tin Tức 24h",
-                ChannelHandle = "@news24h_tiktok",
-                Topic = "Tin tức công nghệ",
-                Status = "Active",
-                CreatedAtUtc = DateTimeOffset.UtcNow.ToString("O"),
-                UpdatedAtUtc = DateTimeOffset.UtcNow.ToString("O")
-            });
-            await db.SaveChangesAsync();
-        }
-
-        var handler = new WorkspaceQueryHandler(options);
-        var dispatcher = new BridgeDispatcher();
-        handler.Register(dispatcher);
-
-        var reqId = Guid.NewGuid();
-        var request = new RequestEnvelope(
-            Id: reqId,
-            Type: "request",
-            Command: "workspace.list",
-            Payload: default,
-            ClientTimestampUtc: DateTimeOffset.UtcNow,
-            ContractVersion: "1.0.4");
-
-        var response = await dispatcher.DispatchAsync(request, CancellationToken.None);
-        Assert(response != null && response.Success, "Response phải thành công");
-        Assert(response!.Data.HasValue, "Response Data phải tồn tại");
-
-        if (!response.Data.HasValue)
-        {
-            throw new InvalidOperationException("Response Data không được null");
-        }
-
-        var root = response.Data.Value;
-        Assert(root.TryGetProperty("workspaces", out var workspacesProp), "Phải có trường 'workspaces'");
-        Assert(workspacesProp.GetArrayLength() == 1, "Mảng workspaces phải có 1 phần tử");
-
-        var item = workspacesProp[0];
-        Assert(item.GetProperty("workspaceId").GetString() == "w-test-123", "workspaceId phải khớp");
-        Assert(item.GetProperty("name").GetString() == "Kênh Tin Tức 24h", "name phải khớp");
-        Assert(item.GetProperty("channelHandle").GetString() == "@news24h_tiktok", "channelHandle phải khớp");
-        Assert(item.GetProperty("topic").GetString() == "Tin tức công nghệ", "topic phải khớp");
-        Assert(item.GetProperty("status").GetString() == "Active", "status phải khớp");
-    }
-
-    /// <summary>
-    /// Test Case 11: WorkspaceQueryHandler - Unregister và tránh duplicate handler
-    /// Khi Unregister, lệnh workspace.list quay về trạng thái chưa khả dụng (INTERNAL_ERROR) mà không ném exception unhandled.
-    /// </summary>
-    public static async Task Test_WorkspaceQueryHandler_Unregister_RemovesHandlerCleanly()
-    {
-        using var connection = new SqliteConnection("Data Source=:memory:");
-        await connection.OpenAsync();
-
-        var options = new DbContextOptionsBuilder<TiToAIDbContext>()
-            .UseSqlite(connection)
-            .Options;
-
-        await using (var db = new TiToAIDbContext(options))
-        {
-            await db.Database.EnsureCreatedAsync();
-        }
-
-        var handler = new WorkspaceQueryHandler(options);
-        var dispatcher = new BridgeDispatcher();
-
-        handler.Register(dispatcher);
-        // Đăng ký lại để kiểm tra idempotent / không xung đột
-        handler.Register(dispatcher);
-
-        var reqId = Guid.NewGuid();
-        var request = new RequestEnvelope(
-            Id: reqId,
-            Type: "request",
-            Command: "workspace.list",
-            Payload: default,
-            ClientTimestampUtc: DateTimeOffset.UtcNow,
-            ContractVersion: "1.0.4");
-
-        var resBefore = await dispatcher.DispatchAsync(request, CancellationToken.None);
-        Assert(resBefore.Success, "Trước khi unregister, handler phải hoạt động");
-
-        handler.Unregister(dispatcher);
-
-        var resAfter = await dispatcher.DispatchAsync(request, CancellationToken.None);
-        Assert(!resAfter.Success, "Sau khi unregister, lệnh không được thành công");
-        Assert(resAfter.Error?.Code == "INTERNAL_ERROR", "Mã lỗi phải là INTERNAL_ERROR khi handler đã bị gỡ");
     }
 
     /// <summary>
@@ -589,7 +431,7 @@ public static class BridgeSmokeTests
         {
             "id": "{{reqId}}",
             "type": "request",
-            "command": "workspace.list",
+            "command": "settings.get",
             "payload": {},
             "contractVersion": "1.0.4"
         }
@@ -633,7 +475,7 @@ public static class BridgeSmokeTests
         {
             "id": "{{reqId}}",
             "type": "request",
-            "command": "workspace.list",
+            "command": "settings.get",
             "payload": {},
             "contractVersion": "1.0.4"
         }
@@ -648,7 +490,7 @@ public static class BridgeSmokeTests
 
         // PostResponseAsync và PostEventAsync không ném ngoại lệ sau dispose
         await router.PostResponseAsync(ResponseEnvelopeHelper.CreateSuccess(reqId));
-        await router.PostEventAsync("test.event", null, new { val = 1 });
+        await router.PostEventAsync("test.event", new { val = 1 });
     }
 
     /// <summary>
@@ -672,7 +514,7 @@ public static class BridgeSmokeTests
             {
                 "id": "{{reqId}}",
                 "type": "request",
-                "command": "workspace.list",
+                "command": "settings.get",
                 "payload": {},
                 "contractVersion": "1.0.4"
             }
@@ -743,7 +585,7 @@ public static class BridgeSmokeTests
         {
             "id": "{{targetId}}",
             "type": "request",
-            "command": "workspace.list",
+            "command": "settings.get",
             "payload": {},
             "contractVersion": "1.0.4"
         }
@@ -804,7 +646,7 @@ public static class BridgeSmokeTests
         {
             "id": "{{Guid.NewGuid()}}",
             "type": "request",
-            "command": "workspace.list",
+            "command": "settings.get",
             "payload": {},
             "contractVersion": "1.0.4"
         }
@@ -858,7 +700,7 @@ public static class BridgeSmokeTests
         {
             "id": "{{reqId}}",
             "type": "request",
-            "command": "workspace.list",
+            "command": "settings.get",
             "payload": {},
             "contractVersion": "1.0.4"
         }

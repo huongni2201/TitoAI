@@ -11,14 +11,6 @@
     <PackageReference Include="Microsoft.Web.WebView2" />
   </ItemGroup>
 
-  <ItemGroup>
-    <Content Include="..\TiToAI.Web\dist\**\*">
-      <Link>wwwroot\%(RecursiveDir)%(Filename)%(Extension)</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-    </Content>
-  </ItemGroup>
-
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
@@ -26,5 +18,23 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
   </PropertyGroup>
+
+  <Target Name="BuildWebUi" BeforeTargets="CoreCompile">
+    <Exec Command="pnpm run build" WorkingDirectory="$(MSBuildProjectDirectory)\..\TiToAI.Web" />
+  </Target>
+
+  <Target Name="CopyWebUi" AfterTargets="Build">
+    <ItemGroup>
+      <WebUiFile Include="$(MSBuildProjectDirectory)\..\TiToAI.Web\dist\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(WebUiFile)" DestinationFiles="@(WebUiFile->'$(TargetDir)wwwroot\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="PublishWebUi" AfterTargets="Publish">
+    <ItemGroup>
+      <WebUiPublishFile Include="$(MSBuildProjectDirectory)\..\TiToAI.Web\dist\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(WebUiPublishFile)" DestinationFiles="@(WebUiPublishFile->'$(PublishDir)wwwroot\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
 
 </Project>

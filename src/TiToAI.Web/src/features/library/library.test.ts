@@ -22,11 +22,10 @@ globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
 const mockAssets = [
   {
     assetId: "ast_img_01",
-    workspaceId: "ws_01",
     projectId: "prj_01",
     assetType: "Image",
     storageRootId: "root-default-images",
-    relativePath: "ws_01/projects/prj_01/images/ref_01.png",
+    relativePath: "projects/prj_01/images/ref_01.png",
     byteSize: 1024 * 500, // 500 KB
     sha256Hash: "abcdef1234567890abcdef1234567890",
     status: "Linked",
@@ -35,11 +34,10 @@ const mockAssets = [
   },
   {
     assetId: "ast_aud_02",
-    workspaceId: "ws_01",
     projectId: "prj_01",
     assetType: "Audio",
     storageRootId: "root-internal-audio",
-    relativePath: "ws_01/projects/prj_01/audio/voice_01.mp3",
+    relativePath: "projects/prj_01/audio/voice_01.mp3",
     byteSize: 1024 * 1024 * 2, // 2 MB
     sha256Hash: "123456abcdef123456abcdef123456ab",
     status: "Linked",
@@ -48,11 +46,10 @@ const mockAssets = [
   },
   {
     assetId: "ast_vid_03",
-    workspaceId: "ws_01",
     projectId: "prj_02",
     assetType: "Video",
     storageRootId: "root-default-videos",
-    relativePath: "ws_01/projects/prj_02/videos/final_01.mp4",
+    relativePath: "projects/prj_02/videos/final_01.mp4",
     byteSize: 1024 * 1024 * 15, // 15 MB
     sha256Hash: "fedcba0987654321fedcba0987654321",
     status: "Linked",
@@ -111,7 +108,6 @@ window.chrome = {
             if (item) {
               responseData = {
                 assetId: item.assetId,
-                workspaceId: item.workspaceId,
                 assetType: item.assetType,
                 relativePath: item.relativePath,
                 mimeType: item.mimeType,
@@ -134,19 +130,13 @@ window.chrome = {
             break;
           }
           case "asset.upload": {
-            const { workspaceId, projectId, assetType, fileName } = req.payload as {
-              workspaceId: string;
-              projectId?: string;
-              assetType: string;
-              fileName?: string;
-            };
+            const { projectId, assetType, fileName } = req.payload as { projectId?: string; assetType: string; fileName?: string; };
             const newAsset = {
               assetId: "ast_uploaded_99",
-              workspaceId,
               projectId: projectId || null,
               assetType: assetType || "Image",
               storageRootId: "root-default-images",
-              relativePath: `${workspaceId}/media/${fileName || "new_upload.png"}`,
+              relativePath: `media/${fileName || "new_upload.png"}`,
               byteSize: 1024 * 120,
               sha256Hash: "999999abcdef123456abcdef12345699",
               status: "Linked",
@@ -197,13 +187,12 @@ const { bridgeClient } = await import("../../services/bridgeClient.ts");
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 test("T12b: LibraryPage render danh sách tài nguyên và filter loại", async () => {
-  bridgeClient.setActiveWorkspaceId("ws_01");
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = ReactDOM.createRoot(container);
 
   await act(async () => {
-    root.render(React.createElement(LibraryPage, { workspaceId: "ws_01" }));
+    root.render(React.createElement(LibraryPage, {}));
   });
   await act(async () => {
     await sleep(50);
@@ -212,6 +201,13 @@ test("T12b: LibraryPage render danh sách tài nguyên và filter loại", async
   // Assert các cards tài nguyên được render
   const cards = container.querySelectorAll(".asset-card");
   assert.equal(cards.length, 3, "Phải hiển thị đủ 3 tài nguyên ban đầu");
+  assert.equal(cards[0].querySelector("img")?.getAttribute("src"), "https://media.titoai.local/media/ast_img_01");
+  assert.ok(cards[1].querySelector("audio[controls]"));
+  assert.ok(cards[2].querySelector("video[controls]"));
+  await act(async () => {
+    cards[0].querySelector("img")?.dispatchEvent(new domWindow.Event("error") as unknown as Event);
+  });
+  assert.ok(cards[0].textContent?.includes("Không thể xem trước tệp này"));
 
   // Kiểm tra tên tệp hiển thị
   assert.ok(
@@ -254,7 +250,6 @@ test("T12b: LibraryPage render danh sách tài nguyên và filter loại", async
 });
 
 test("T12b: AssetPreviewDialog hiển thị metadata và trạng thái tệp", async () => {
-  bridgeClient.setActiveWorkspaceId("ws_01");
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = ReactDOM.createRoot(container);
@@ -264,7 +259,6 @@ test("T12b: AssetPreviewDialog hiển thị metadata và trạng thái tệp", a
     root.render(
       React.createElement(AssetPreviewDialog, {
         assetId: "ast_img_01",
-        workspaceId: "ws_01",
         onClose: () => {
           closed = true;
         },
@@ -277,6 +271,7 @@ test("T12b: AssetPreviewDialog hiển thị metadata và trạng thái tệp", a
 
   const dialog = container.querySelector(".asset-preview-dialog");
   assert.ok(dialog, "Phải render dialog xem trước tài nguyên");
+  assert.ok(dialog.querySelector("img"), "Dialog hiển thị ảnh xem trước");
   assert.ok(
     container.textContent?.includes("ast_img_01"),
     "Phải hiển thị assetId"
@@ -286,7 +281,7 @@ test("T12b: AssetPreviewDialog hiển thị metadata và trạng thái tệp", a
     "Phải hiển thị đúng mimeType"
   );
   assert.ok(
-    container.textContent?.includes("Tệp vật lý sẵn sàng và toàn vẹn"),
+    container.textContent?.includes("Tệp vật lý sẵn sàng"),
     "Phải báo trạng thái tệp sẵn sàng"
   );
 
@@ -308,7 +303,6 @@ test("T12b: AssetPreviewDialog hiển thị metadata và trạng thái tệp", a
 });
 
 test("T12b: AssetPicker chọn tài nguyên và trả về cho Scene", async () => {
-  bridgeClient.setActiveWorkspaceId("ws_01");
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = ReactDOM.createRoot(container);
@@ -318,9 +312,7 @@ test("T12b: AssetPicker chọn tài nguyên và trả về cho Scene", async () 
 
   await act(async () => {
     root.render(
-      React.createElement(AssetPicker, {
-        workspaceId: "ws_01",
-        assetType: "Image",
+      React.createElement(AssetPicker, {        assetType: "Image",
         onSelect: (item: unknown) => {
           selectedResult = item;
         },
@@ -366,7 +358,6 @@ test("T12b: AssetPicker chọn tài nguyên và trả về cho Scene", async () 
 });
 
 test("T12b: AssetPicker không có checkbox Chỉ trong dự án hiện tại và hỗ trợ upload tự lưu vào media", async () => {
-  bridgeClient.setActiveWorkspaceId("ws_01");
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = ReactDOM.createRoot(container);
@@ -376,9 +367,7 @@ test("T12b: AssetPicker không có checkbox Chỉ trong dự án hiện tại v�
 
   await act(async () => {
     root.render(
-      React.createElement(AssetPicker, {
-        workspaceId: "ws_01",
-        projectId: "prj_01",
+      React.createElement(AssetPicker, {        projectId: "prj_01",
         assetType: "Image",
         onSelect: (item: unknown) => {
           selectedResult = item;

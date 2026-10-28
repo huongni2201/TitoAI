@@ -161,7 +161,7 @@ const messageListeners: ((event: MessageEvent) => void)[] = [];
             id: req.id,
             type: "response",
             success: isSuccess,
-            contractVersion: "1.0.4",
+            contractVersion: "1.1.0",
             data: isSuccess ? payloadData : undefined,
             error: isSuccess ? undefined : errorObj,
           },

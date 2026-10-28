@@ -15,7 +15,7 @@ namespace TiToAI.Application.Analytics;
 /// <summary>
 /// Dịch vụ nghiệp vụ phân tích chỉ số TikTok & Dashboard Affiliate.
 /// Triển khai theo nguyên tắc:
-/// - Cô lập dữ liệu theo WorkspaceId.
+/// - Cô lập dữ liệu theo TikTok account.
 /// - Không tự biên số liệu giả: dữ liệu khuyết trả về null.
 /// - Snapshot bất biến (immutable snapshots) cho mỗi lần thu thập/nhập khẩu.
 /// </summary>
@@ -52,38 +52,46 @@ public sealed class AnalyticsService : IAnalyticsService
         throw new InvalidOperationException("DbContext provider chưa được cấu hình cho AnalyticsService.");
     }
 
-    private static async Task<Account> RequireTikTokAccountAsync(
+    private static async Task<string> RequireTikTokAccountAsync(
         TiToAIDbContext dbContext,
         string accountId,
         CancellationToken cancellationToken)
     {
-        var account = await dbContext.Accounts.AsNoTracking()
-            .FirstOrDefaultAsync(a => a.Id == accountId &&
-                (a.Provider == "tiktok" || a.Provider == "TikTok" || a.Provider == "tiktok-channel") &&
-                a.Status != "Unlinked", cancellationToken);
-        return account ?? throw new KeyNotFoundException($"Không tìm thấy tài khoản TikTok đang liên kết '{accountId}'.");
+        var profileId = await dbContext.BrowserProfiles.AsNoTracking()
+            .Where(p => p.Id == accountId && p.Kind == "TikTok" && p.Lifecycle == "Active")
+            .Select(p => p.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+        return profileId
+            ?? throw new KeyNotFoundException($"Không tìm thấy tài khoản TikTok đang liên kết '{accountId}'.");
     }
 
     public async Task<IReadOnlyList<TikTokAnalyticsAccountDto>> ListTikTokAccountsAsync(CancellationToken cancellationToken = default)
     {
         await using var dbContext = CreateDbContext();
-        return await dbContext.Accounts.AsNoTracking()
-            .Where(a => (a.Provider == "tiktok" || a.Provider == "TikTok" || a.Provider == "tiktok-channel") && a.Status != "Unlinked")
-            .OrderBy(a => a.AccountIdentity)
-            .Select(a => new TikTokAnalyticsAccountDto(a.Id, a.AccountIdentity, a.ProfileId, a.Status))
+        var accounts = await dbContext.BrowserProfiles
+            .AsNoTracking()
+            .Where(p => p.Kind == "TikTok" && p.Lifecycle == "Active" && p.AccountIdentity != null)
+            .OrderBy(p => p.AccountIdentity)
+            .Select(a => new TikTokAnalyticsAccountDto(
+                a.Id,
+                a.AccountIdentity!,
+                a.Id,
+                a.SessionStatus))
             .ToListAsync(cancellationToken);
+
+        return accounts;
     }
 
     /// <inheritdoc />
     public async Task<AnalyticsSummaryDto> GetSummaryAsync(GetAnalyticsSummaryRequest request, CancellationToken cancellationToken = default)
     {
         if (request == null) throw new ArgumentNullException(nameof(request));
-        if (string.IsNullOrWhiteSpace(request.AccountId) && string.IsNullOrWhiteSpace(request.WorkspaceId))
+        if (string.IsNullOrWhiteSpace(request.AccountId))
         {
             throw new ArgumentException("Cần chọn tài khoản TikTok.", nameof(request.AccountId));
         }
 
-        string? normalizedAccountId = request.AccountId?.Trim();
+        string normalizedAccountId = request.AccountId.Trim();
 
         DateTime? fromUtc = null;
         DateTime? toUtc = null;
@@ -105,13 +113,11 @@ public sealed class AnalyticsService : IAnalyticsService
 
         await using var dbContext = CreateDbContext();
 
-        var normalizedWorkspaceId = normalizedAccountId is not null
-            ? (await RequireTikTokAccountAsync(dbContext, normalizedAccountId, cancellationToken)).WorkspaceId
-            : request.WorkspaceId!.Trim();
+        await RequireTikTokAccountAsync(dbContext, normalizedAccountId, cancellationToken);
 
         var query = dbContext.Set<VideoAnalyticsRecord>()
             .AsNoTracking()
-            .Where(r => normalizedAccountId is not null ? r.AccountId == normalizedAccountId : r.WorkspaceId == normalizedWorkspaceId);
+            .Where(r => r.AccountId == normalizedAccountId);
 
         if (fromUtc.HasValue)
         {
@@ -126,13 +132,13 @@ public sealed class AnalyticsService : IAnalyticsService
         var records = await query.ToListAsync(cancellationToken);
         var reportQuery = dbContext.Set<TikTokAnalyticsDailyRecord>()
             .AsNoTracking()
-            .Where(r => (normalizedAccountId is not null ? r.AccountId == normalizedAccountId : r.WorkspaceId == normalizedWorkspaceId) && r.DataType == "overview");
+            .Where(r => r.AccountId == normalizedAccountId && r.DataType == "overview");
         if (fromUtc.HasValue) reportQuery = reportQuery.Where(r => r.PeriodDateUtc >= fromUtc.Value.Date);
         if (toUtc.HasValue) reportQuery = reportQuery.Where(r => r.PeriodDateUtc < toUtc.Value.Date.AddDays(1));
         var reportRecords = await reportQuery.ToListAsync(cancellationToken);
         var viewersQuery = dbContext.Set<TikTokAnalyticsDailyRecord>()
             .AsNoTracking()
-            .Where(r => (normalizedAccountId is not null ? r.AccountId == normalizedAccountId : r.WorkspaceId == normalizedWorkspaceId) && r.DataType == "viewers");
+            .Where(r => r.AccountId == normalizedAccountId && r.DataType == "viewers");
         if (fromUtc.HasValue) viewersQuery = viewersQuery.Where(r => r.PeriodDateUtc >= fromUtc.Value.Date);
         if (toUtc.HasValue) viewersQuery = viewersQuery.Where(r => r.PeriodDateUtc < toUtc.Value.Date.AddDays(1));
         var viewersRecords = await viewersQuery.ToListAsync(cancellationToken);
@@ -140,7 +146,6 @@ public sealed class AnalyticsService : IAnalyticsService
         if (records.Count == 0 && reportRecords.Count == 0 && viewersRecords.Count == 0)
         {
             return new AnalyticsSummaryDto(
-                WorkspaceId: normalizedWorkspaceId,
                 PeriodDays: request.PeriodDays,
                 StartDate: fromUtc,
                 EndDate: toUtc,
@@ -228,12 +233,11 @@ public sealed class AnalyticsService : IAnalyticsService
 
         var latestSnapshot = await dbContext.Set<AnalyticsSnapshot>()
             .AsNoTracking()
-            .Where(s => normalizedAccountId is not null ? s.AccountId == normalizedAccountId : s.WorkspaceId == normalizedWorkspaceId)
+            .Where(s => s.AccountId == normalizedAccountId)
             .OrderByDescending(s => s.CreatedAtUtc)
             .FirstOrDefaultAsync(cancellationToken);
 
         return new AnalyticsSummaryDto(
-            WorkspaceId: normalizedWorkspaceId,
             PeriodDays: request.PeriodDays,
             StartDate: fromUtc,
             EndDate: toUtc,
@@ -256,18 +260,16 @@ public sealed class AnalyticsService : IAnalyticsService
     public async Task<IReadOnlyList<AnalyticsTimeseriesPointDto>> GetTimeseriesAsync(GetAnalyticsTimeseriesRequest request, CancellationToken cancellationToken = default)
     {
         if (request == null) throw new ArgumentNullException(nameof(request));
-        if (string.IsNullOrWhiteSpace(request.AccountId) && string.IsNullOrWhiteSpace(request.WorkspaceId))
+        if (string.IsNullOrWhiteSpace(request.AccountId))
         {
             throw new ArgumentException("Cần chọn tài khoản TikTok.", nameof(request.AccountId));
         }
 
-        var normalizedAccountId = request.AccountId?.Trim();
+        var normalizedAccountId = request.AccountId.Trim();
         var metric = request.Metric?.Trim().ToLowerInvariant() ?? "views";
 
         await using var dbContext = CreateDbContext();
-        var normalizedWorkspaceId = normalizedAccountId is not null
-            ? (await RequireTikTokAccountAsync(dbContext, normalizedAccountId, cancellationToken)).WorkspaceId
-            : request.WorkspaceId!.Trim();
+        await RequireTikTokAccountAsync(dbContext, normalizedAccountId, cancellationToken);
 
         if (string.Equals(request.DataType, "overview", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(request.DataType, "viewers", StringComparison.OrdinalIgnoreCase))
@@ -275,7 +277,7 @@ public sealed class AnalyticsService : IAnalyticsService
             var reportType = request.DataType!.Trim().ToLowerInvariant();
             var reportQuery = dbContext.Set<TikTokAnalyticsDailyRecord>()
                 .AsNoTracking()
-                .Where(r => (normalizedAccountId is not null ? r.AccountId == normalizedAccountId : r.WorkspaceId == normalizedWorkspaceId) && r.DataType == reportType);
+                .Where(r => r.AccountId == normalizedAccountId && r.DataType == reportType);
 
             if (request.PeriodDays is > 0)
             {
@@ -310,7 +312,7 @@ public sealed class AnalyticsService : IAnalyticsService
 
         var query = dbContext.Set<VideoAnalyticsRecord>()
             .AsNoTracking()
-            .Where(r => normalizedAccountId is not null ? r.AccountId == normalizedAccountId : r.WorkspaceId == normalizedWorkspaceId);
+            .Where(r => r.AccountId == normalizedAccountId);
 
         if (request.PeriodDays.HasValue && request.PeriodDays.Value > 0)
         {
@@ -367,18 +369,15 @@ public sealed class AnalyticsService : IAnalyticsService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        if (string.IsNullOrWhiteSpace(request.AccountId) && string.IsNullOrWhiteSpace(request.WorkspaceId))
+        if (string.IsNullOrWhiteSpace(request.AccountId))
         {
             throw new ArgumentException("Cần chọn tài khoản TikTok.", nameof(request.AccountId));
         }
 
-        var accountId = request.AccountId?.Trim();
-        string workspaceId;
+        var accountId = request.AccountId.Trim();
         await using (var scopeDb = CreateDbContext())
         {
-            workspaceId = accountId is not null
-                ? (await RequireTikTokAccountAsync(scopeDb, accountId, cancellationToken)).WorkspaceId
-                : request.WorkspaceId!.Trim();
+            await RequireTikTokAccountAsync(scopeDb, accountId, cancellationToken);
         }
         var capturedAtUtc = DateTime.UtcNow;
         var batch = _importExportService.ParseTikTokStudioExports(
@@ -396,7 +395,6 @@ public sealed class AnalyticsService : IAnalyticsService
         {
             Id = Guid.NewGuid().ToString("N"),
             SnapshotId = snapshotId,
-            WorkspaceId = workspaceId,
             AccountId = accountId,
             DataType = r.DataType,
             PeriodDateUtc = r.PeriodDateUtc,
@@ -415,7 +413,6 @@ public sealed class AnalyticsService : IAnalyticsService
         {
             Id = Guid.NewGuid().ToString("N"),
             SnapshotId = snapshotId,
-            WorkspaceId = workspaceId,
             AccountId = accountId,
             VideoKey = r.VideoKey,
             Title = r.Title,
@@ -435,7 +432,6 @@ public sealed class AnalyticsService : IAnalyticsService
         dbContext.Set<AnalyticsSnapshot>().Add(new AnalyticsSnapshot
         {
             Id = snapshotId,
-            WorkspaceId = workspaceId,
             AccountId = accountId,
             Source = "TikTok Studio CSV Export",
             PeriodStart = dates.Count == 0 ? null : dates.Min(),
@@ -470,23 +466,21 @@ public sealed class AnalyticsService : IAnalyticsService
     public async Task<IReadOnlyList<VideoMetricRecordDto>> ListTopVideosAsync(ListTopVideosRequest request, CancellationToken cancellationToken = default)
     {
         if (request == null) throw new ArgumentNullException(nameof(request));
-        if (string.IsNullOrWhiteSpace(request.AccountId) && string.IsNullOrWhiteSpace(request.WorkspaceId))
+        if (string.IsNullOrWhiteSpace(request.AccountId))
         {
             throw new ArgumentException("Cần chọn tài khoản TikTok.", nameof(request.AccountId));
         }
 
-        var normalizedAccountId = request.AccountId?.Trim();
+        var normalizedAccountId = request.AccountId.Trim();
         var sortBy = request.SortBy?.Trim().ToLowerInvariant() ?? "views";
         int limit = request.Limit is > 0 ? request.Limit.Value : 10;
 
         await using var dbContext = CreateDbContext();
-        var normalizedWorkspaceId = normalizedAccountId is not null
-            ? (await RequireTikTokAccountAsync(dbContext, normalizedAccountId, cancellationToken)).WorkspaceId
-            : request.WorkspaceId!.Trim();
+        await RequireTikTokAccountAsync(dbContext, normalizedAccountId, cancellationToken);
 
         var records = await dbContext.Set<VideoAnalyticsRecord>()
             .AsNoTracking()
-            .Where(r => normalizedAccountId is not null ? r.AccountId == normalizedAccountId : r.WorkspaceId == normalizedWorkspaceId)
+            .Where(r => r.AccountId == normalizedAccountId)
             .ToListAsync(cancellationToken);
 
         if (records.Count == 0)
@@ -513,7 +507,6 @@ public sealed class AnalyticsService : IAnalyticsService
         var top = ordered.Take(limit).Select(r => new VideoMetricRecordDto(
             Id: r.Id,
             SnapshotId: r.SnapshotId,
-            WorkspaceId: r.WorkspaceId,
             AccountId: r.AccountId,
             VideoKey: r.VideoKey,
             Title: r.Title,
@@ -535,18 +528,15 @@ public sealed class AnalyticsService : IAnalyticsService
     public async Task<AnalyticsImportResultDto> ImportDataAsync(ImportAnalyticsDataRequest request, CancellationToken cancellationToken = default)
     {
         if (request == null) throw new ArgumentNullException(nameof(request));
-        if (string.IsNullOrWhiteSpace(request.AccountId) && string.IsNullOrWhiteSpace(request.WorkspaceId))
+        if (string.IsNullOrWhiteSpace(request.AccountId))
         {
             throw new ArgumentException("Cần chọn tài khoản TikTok.", nameof(request.AccountId));
         }
 
-        var normalizedAccountId = request.AccountId?.Trim();
-        string normalizedWorkspaceId;
+        var normalizedAccountId = request.AccountId.Trim();
         await using (var scopeDb = CreateDbContext())
         {
-            normalizedWorkspaceId = normalizedAccountId is not null
-                ? (await RequireTikTokAccountAsync(scopeDb, normalizedAccountId, cancellationToken)).WorkspaceId
-                : request.WorkspaceId!.Trim();
+            await RequireTikTokAccountAsync(scopeDb, normalizedAccountId, cancellationToken);
         }
         var batch = _importExportService.ParseRawContent(request.RawContent, request.Format);
 
@@ -554,7 +544,6 @@ public sealed class AnalyticsService : IAnalyticsService
         {
             return new AnalyticsImportResultDto(
                 SnapshotId: string.Empty,
-                WorkspaceId: normalizedWorkspaceId,
                 RecordCount: 0,
                 Success: false,
                 Message: "Không tìm thấy bản ghi video hợp lệ nào trong nội dung đã nhập.",
@@ -574,7 +563,6 @@ public sealed class AnalyticsService : IAnalyticsService
         var snapshot = new AnalyticsSnapshot
         {
             Id = snapshotId,
-            WorkspaceId = normalizedWorkspaceId,
             AccountId = normalizedAccountId,
             Source = source,
             PeriodStart = batch.PeriodStart,
@@ -588,7 +576,6 @@ public sealed class AnalyticsService : IAnalyticsService
         {
             Id = Guid.NewGuid().ToString("N"),
             SnapshotId = snapshotId,
-            WorkspaceId = normalizedWorkspaceId,
             AccountId = normalizedAccountId,
             VideoKey = r.VideoKey,
             Title = r.Title,
@@ -614,7 +601,6 @@ public sealed class AnalyticsService : IAnalyticsService
 
         return new AnalyticsImportResultDto(
             SnapshotId: snapshotId,
-            WorkspaceId: normalizedWorkspaceId,
             RecordCount: entityRecords.Count,
             Success: true,
             Message: $"Nhập khẩu thành công {entityRecords.Count} bản ghi phân tích vào Snapshot '{snapshotId}'.",
@@ -628,21 +614,19 @@ public sealed class AnalyticsService : IAnalyticsService
     public async Task<AnalyticsExportResultDto> ExportDataAsync(ExportAnalyticsDataRequest request, CancellationToken cancellationToken = default)
     {
         if (request == null) throw new ArgumentNullException(nameof(request));
-        if (string.IsNullOrWhiteSpace(request.AccountId) && string.IsNullOrWhiteSpace(request.WorkspaceId))
+        if (string.IsNullOrWhiteSpace(request.AccountId))
         {
             throw new ArgumentException("Cần chọn tài khoản TikTok.", nameof(request.AccountId));
         }
 
-        var normalizedAccountId = request.AccountId?.Trim();
+        var normalizedAccountId = request.AccountId.Trim();
 
         await using var dbContext = CreateDbContext();
-        var normalizedWorkspaceId = normalizedAccountId is not null
-            ? (await RequireTikTokAccountAsync(dbContext, normalizedAccountId, cancellationToken)).WorkspaceId
-            : request.WorkspaceId!.Trim();
+        await RequireTikTokAccountAsync(dbContext, normalizedAccountId, cancellationToken);
 
         var query = dbContext.Set<VideoAnalyticsRecord>()
             .AsNoTracking()
-            .Where(r => normalizedAccountId is not null ? r.AccountId == normalizedAccountId : r.WorkspaceId == normalizedWorkspaceId);
+            .Where(r => r.AccountId == normalizedAccountId);
 
         if (request.PeriodDays.HasValue && request.PeriodDays.Value > 0)
         {
@@ -659,7 +643,7 @@ public sealed class AnalyticsService : IAnalyticsService
             .ToList();
 
         var csvContent = _importExportService.ExportCsv(latestPerVideo);
-        var fileName = $"analytics_{normalizedAccountId ?? normalizedWorkspaceId}_{DateTime.UtcNow:yyyyMMdd_HHmmss}.csv";
+        var fileName = $"analytics_{normalizedAccountId}_{DateTime.UtcNow:yyyyMMdd_HHmmss}.csv";
 
         return new AnalyticsExportResultDto(
             Format: "csv",

@@ -8,25 +8,17 @@ public sealed record WorkflowStepDefinitionDto(
     string TaskType,
     int StepOrder,
     bool RequiresReview,
-    string? PromptTemplateId = null,
-    int? PromptTemplateVersion = null
+    string? PromptTemplateId = null
 );
 
 public sealed record WorkflowDefinitionDto(
     string WorkflowId,
     int Version,
-    string Scope,
-    string? WorkspaceId,
     string Name,
     string Description,
     IReadOnlyList<WorkflowStepDefinitionDto> Steps,
     long Revision,
     string CreatedAtUtc
-);
-
-public sealed record WorkflowGetActiveRequest(
-    string? Scope = "global",
-    string? WorkspaceId = null
 );
 
 public sealed record WorkflowGetActiveResponseData(

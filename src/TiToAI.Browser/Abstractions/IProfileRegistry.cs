@@ -14,9 +14,9 @@ public interface IProfileRegistry
     Task<BrowserProfileInfo?> GetProfileAsync(string profileId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Liệt kê các profile: Nếu workspaceId != null thì lọc Shared AI + profiles thuộc workspace; nếu null thì trả về toàn bộ.
+    /// Liệt kê toàn bộ profile cấp ứng dụng.
     /// </summary>
-    Task<IReadOnlyList<BrowserProfileInfo>> ListProfilesAsync(string? workspaceId = null, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<BrowserProfileInfo>> ListProfilesAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Đảm bảo profile tồn tại trong cơ sở dữ liệu SQLite; nếu chưa có thì tạo mới theo quy chuẩn.
@@ -24,7 +24,6 @@ public interface IProfileRegistry
     Task<BrowserProfileInfo> EnsureProfileAsync(
         string profileId,
         string kind,
-        string? workspaceId = null,
         string? accountIdentity = null,
         CancellationToken cancellationToken = default);
 

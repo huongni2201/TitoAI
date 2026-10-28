@@ -19,7 +19,6 @@ import { AlertTriangle, Loader2, RefreshCw } from "lucide-react";
 export interface SceneFormProps {
   isOpen: boolean;
   mode: "create" | "edit";
-  workspaceId: string;
   projectId: string;
   scene?: SceneDto | null;
   onClose: () => void;
@@ -29,7 +28,6 @@ export interface SceneFormProps {
 export function SceneForm({
   isOpen,
   mode,
-  workspaceId,
   projectId,
   scene,
   onClose,
@@ -110,7 +108,6 @@ export function SceneForm({
     try {
       if (mode === "create") {
         await projectApi.createScene({
-          workspaceId,
           projectId,
           name: trimmedName,
           promptText: trimmedPrompt,
@@ -120,7 +117,6 @@ export function SceneForm({
       } else if (mode === "edit" && scene) {
         // GỬI KÈM expectedRevision: revision ban đầu
         await projectApi.updateScene({
-          workspaceId,
           projectId,
           sceneId: scene.sceneId,
           expectedRevision: initialRevision,
@@ -158,7 +154,7 @@ export function SceneForm({
     setErrorMessage(null);
 
     try {
-      const latestScene = await projectApi.getScene(workspaceId, projectId, scene.sceneId);
+      const latestScene = await projectApi.getScene(projectId, scene.sceneId);
       // Cập nhật lại initialRevision thành revision mới nhất từ server
       setInitialRevision(latestScene.revision);
       setIsConflict(false);

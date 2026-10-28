@@ -57,7 +57,8 @@ public sealed class ProductionJobExecutor : IJobExecutor
                 );
             }
 
-            if (!capability.AutomationSupported || capability.VerificationStatus != ProviderVerificationStatus.Verified)
+            if (!capability.AutomationSupported ||
+                capability.VerificationStatus is not (ProviderVerificationStatus.Verified or ProviderVerificationStatus.Trial))
             {
                 return new JobExecutionResult(
                     Success: false,

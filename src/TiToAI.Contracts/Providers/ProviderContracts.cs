@@ -37,6 +37,7 @@ public static class ProviderKeys
 public static class ProviderVerificationStatus
 {
     public const string Verified = "VERIFIED";
+    public const string Trial = "TRIAL";
     public const string NotVerified = "NOT_VERIFIED";
     public const string Unsupported = "UNSUPPORTED";
 }
@@ -76,10 +77,6 @@ public sealed record ProviderAccountSessionSummaryDto(
     bool Enabled,
     int MaxConcurrentJobs,
     int ActiveJobs
-);
-
-public sealed record ProviderListRequest(
-    string? WorkspaceId = null
 );
 
 public sealed record ProviderListResponseData(

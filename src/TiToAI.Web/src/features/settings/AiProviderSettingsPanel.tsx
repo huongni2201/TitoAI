@@ -274,7 +274,7 @@ export function AiProviderSettingsPanel({
 
   // Tìm thông tin Capability & Accounts của từng provider
   const getProviderInfo = useCallback(
-    (providerKey: string) => {
+    (providerKey: string, taskType: string) => {
       if (!providerKey || !providersData) return null;
 
       const providerCap = providersData.providers?.find(
@@ -291,14 +291,11 @@ export function AiProviderSettingsPanel({
           (t: TaskCapabilityDto) => t.providerKey === providerKey
         ) ?? [];
 
-      // Provider chưa xác minh nếu status === "NOT_VERIFIED" hoặc có task NOT_VERIFIED / automationSupported = false
-      const isUnverified =
-        providerCap?.verificationStatus === "NOT_VERIFIED" ||
-        tasks.some(
-          (t) =>
-            t.verificationStatus === "NOT_VERIFIED" ||
-            t.automationSupported === false
-        );
+      const selectedTask = tasks.find((t) => t.taskType === taskType);
+      const isTrial = selectedTask?.verificationStatus === "TRIAL" &&
+        selectedTask.automationSupported;
+      const isUnverified = !isTrial &&
+        (selectedTask?.verificationStatus !== "VERIFIED" || !selectedTask.automationSupported);
 
       const connectedAccountsCount = accounts.filter(
         (a) => a.enabled !== false
@@ -309,6 +306,7 @@ export function AiProviderSettingsPanel({
         accounts,
         connectedAccountsCount,
         isUnverified,
+        isTrial,
       };
     },
     [providersData]
@@ -401,14 +399,19 @@ export function AiProviderSettingsPanel({
   };
 
   // Render thông tin trạng thái provider bên dưới dropdown
-  const renderProviderStatus = (selectedKey: string) => {
+  const renderProviderStatus = (selectedKey: string, taskType: string) => {
     if (!selectedKey) return null;
-    const info = getProviderInfo(selectedKey);
+    const info = getProviderInfo(selectedKey, taskType);
 
     return (
       <div className="mt-2 space-y-1.5 pt-1 border-t border-border/40 text-xs">
         <div className="flex flex-wrap items-center gap-2">
-          {info?.isUnverified ? (
+          {info?.isTrial ? (
+            <Badge variant="warning" className="gap-1 py-0.5" data-testid="verification-badge">
+              <AlertTriangle className="h-3 w-3" />
+              Đang thử nghiệm — Browser sẽ hiện khi chạy
+            </Badge>
+          ) : info?.isUnverified ? (
             <Badge
               variant="warning"
               className="gap-1 py-0.5"
@@ -552,7 +555,7 @@ export function AiProviderSettingsPanel({
                 {fieldErrors.scriptProvider && (
                   <p className="text-xs text-destructive">{fieldErrors.scriptProvider[0]}</p>
                 )}
-                {renderProviderStatus(scriptProvider)}
+                {renderProviderStatus(scriptProvider, "Script")}
               </div>
 
               {/* Dropdown 2: Image Provider */}
@@ -583,7 +586,7 @@ export function AiProviderSettingsPanel({
                 {fieldErrors.imageProvider && (
                   <p className="text-xs text-destructive">{fieldErrors.imageProvider[0]}</p>
                 )}
-                {renderProviderStatus(imageProvider)}
+                {renderProviderStatus(imageProvider, "Image")}
               </div>
 
               {/* Dropdown 3: Video Prompt Provider */}
@@ -614,7 +617,7 @@ export function AiProviderSettingsPanel({
                 {fieldErrors.videoPromptProvider && (
                   <p className="text-xs text-destructive">{fieldErrors.videoPromptProvider[0]}</p>
                 )}
-                {renderProviderStatus(videoPromptProvider)}
+                {renderProviderStatus(videoPromptProvider, "VideoPrompt")}
               </div>
             </CardContent>
           </Card>

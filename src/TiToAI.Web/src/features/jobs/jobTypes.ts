@@ -62,7 +62,6 @@ export type JobReasonCode =
 
 export interface JobSummaryDto {
   id: string;
-  workspaceId: string;
   projectId: string;
   sceneId: string | null;
   taskType: JobTaskType | string;
@@ -84,7 +83,6 @@ export interface JobSummaryDto {
 
 export interface JobDetailDto {
   id: string;
-  workspaceId: string;
   projectId: string;
   sceneId: string | null;
   taskType: JobTaskType | string;
@@ -103,18 +101,22 @@ export interface JobDetailDto {
   revision: number;
   createdAtUtc: string;
   updatedAtUtc: string;
+  activity?: JobActivityEntryDto[];
 }
 
-export interface JobListActiveRequest {
-  workspaceId?: string;
+export interface JobActivityEntryDto {
+  atUtc: string;
+  step: string;
+  message: string;
 }
+
+export type JobListActiveRequest = Record<string, never>;
 
 export interface JobListActiveResponseData {
   jobs: JobSummaryDto[];
 }
 
 export interface JobGetStatusRequest {
-  workspaceId: string;
   jobId: string;
 }
 
@@ -123,7 +125,6 @@ export interface JobGetStatusResponseData {
 }
 
 export interface JobCancelRequest {
-  workspaceId: string;
   jobId: string;
 }
 
@@ -136,7 +137,6 @@ export interface JobCancelResponseData {
 }
 
 export interface JobResumeRequest {
-  workspaceId: string;
   jobId: string;
 }
 
@@ -147,7 +147,6 @@ export interface JobResumeResponseData {
 }
 
 export interface JobReconcileRequest {
-  workspaceId: string;
   jobId: string;
   action: "mark_succeeded" | "mark_failed" | "cancel" | string;
   confirmedNotReceived?: boolean;
@@ -165,7 +164,6 @@ export interface JobReconcileResponseData {
 }
 
 export interface JobRetryRequest {
-  workspaceId: string;
   jobId: string;
   expectedRevision: number;
 }
@@ -178,7 +176,6 @@ export interface JobRetryResponseData {
 }
 
 export interface JobListHistoryRequest {
-  workspaceId?: string;
   projectId?: string;
   cursor?: string | null;
   pageSize?: number;
@@ -191,7 +188,6 @@ export interface JobListHistoryResponseData {
 
 export interface JobProgressUpdatedPayload {
   jobId: string;
-  workspaceId: string;
   projectId: string;
   sceneId: string | null;
   state: JobState;
@@ -202,7 +198,6 @@ export interface JobProgressUpdatedPayload {
 
 export interface JobStateChangedPayload {
   jobId: string;
-  workspaceId: string;
   projectId: string | null;
   previousState: JobState;
   newState: JobState;

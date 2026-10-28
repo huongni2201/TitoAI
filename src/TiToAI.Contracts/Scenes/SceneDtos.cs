@@ -8,7 +8,6 @@ namespace TiToAI.Contracts.Scenes;
 public sealed record SceneDto(
     [property: JsonPropertyName("sceneId")] string SceneId,
     [property: JsonPropertyName("projectId")] string ProjectId,
-    [property: JsonPropertyName("workspaceId")] string WorkspaceId,
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("sceneSequence")] int SceneSequence,
     [property: JsonPropertyName("targetDurationSeconds")] int TargetDurationSeconds,
@@ -25,7 +24,6 @@ public sealed record SceneDto(
 /// Yêu cầu lấy danh sách Cảnh theo Dự án.
 /// </summary>
 public sealed record SceneListByProjectRequest(
-    [property: JsonPropertyName("workspaceId")] string WorkspaceId,
     [property: JsonPropertyName("projectId")] string ProjectId);
 
 public sealed record SceneListByProjectResponseData(
@@ -35,7 +33,6 @@ public sealed record SceneListByProjectResponseData(
 /// Yêu cầu lấy chi tiết một Cảnh.
 /// </summary>
 public sealed record SceneGetRequest(
-    [property: JsonPropertyName("workspaceId")] string WorkspaceId,
     [property: JsonPropertyName("projectId")] string ProjectId,
     [property: JsonPropertyName("sceneId")] string SceneId);
 
@@ -46,7 +43,6 @@ public sealed record SceneGetResponseData(
 /// Yêu cầu tạo mới một Cảnh.
 /// </summary>
 public sealed record SceneCreateRequest(
-    [property: JsonPropertyName("workspaceId")] string WorkspaceId,
     [property: JsonPropertyName("projectId")] string ProjectId,
     [property: JsonPropertyName("name")] string? Name,
     [property: JsonPropertyName("promptText")] string? PromptText,
@@ -63,7 +59,6 @@ public sealed record SceneCreateResponseData(
 /// Yêu cầu cập nhật một Cảnh với expectedRevision phục vụ kiểm tra xung đột đồng thời (optimistic concurrency).
 /// </summary>
 public sealed record SceneUpdateRequest(
-    [property: JsonPropertyName("workspaceId")] string WorkspaceId,
     [property: JsonPropertyName("projectId")] string ProjectId,
     [property: JsonPropertyName("sceneId")] string SceneId,
     [property: JsonPropertyName("expectedRevision")] string? ExpectedRevision = null,
@@ -82,7 +77,6 @@ public sealed record SceneUpdateResponseData(
 /// Yêu cầu xóa một Cảnh.
 /// </summary>
 public sealed record SceneDeleteRequest(
-    [property: JsonPropertyName("workspaceId")] string WorkspaceId,
     [property: JsonPropertyName("projectId")] string ProjectId,
     [property: JsonPropertyName("sceneId")] string SceneId);
 
@@ -94,7 +88,6 @@ public sealed record SceneDeleteResponseData(
 /// Yêu cầu sắp xếp lại thứ tự các Cảnh trong Dự án (Reorder), hỗ trợ expectedProjectRevision và expectedSceneRevisions.
 /// </summary>
 public sealed record SceneReorderRequest(
-    [property: JsonPropertyName("workspaceId")] string WorkspaceId,
     [property: JsonPropertyName("projectId")] string ProjectId,
     [property: JsonPropertyName("sceneIds")] IReadOnlyList<string> SceneIds,
     [property: JsonPropertyName("expectedProjectRevision")] string? ExpectedProjectRevision = null,

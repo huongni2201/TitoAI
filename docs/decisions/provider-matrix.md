@@ -2,11 +2,10 @@
 
 Cập nhật: 2026-10-27 (UTC+07).
 
-> **Delta kiến trúc sản phẩm 2026-10-27:** [VIDEO_FIRST_ARCHITECTURE_PLAN.md](../plans/VIDEO_FIRST_ARCHITECTURE_PLAN.md) định nghĩa một Project = một video TikTok đích. Capability generation matrix bên dưới không xác nhận năng lực publish TikTok; việc đăng cần adapter/permission verification riêng. Các phần Workspace scope là baseline cũ.
 
 > **Delta hiện hành:** [Luồng tạo video chỉ chạy tự động](../plans/AUTOMATIC_VIDEO_WORKFLOW_PLAN.md) đã bỏ Manual Handoff. Automation vẫn `NOT_VERIFIED`; bỏ handoff không nâng trạng thái xác minh hoặc chứng minh website thật đã chạy.
 
-Nguồn chuẩn: [PRODUCT_IMAGE_VIDEO_WORKFLOW_PLAN.md](../plans/PRODUCT_IMAGE_VIDEO_WORKFLOW_PLAN.md), [execution-contract-v1.1.md](execution-contract-v1.1.md), [contracts.md](contracts.md).
+Nguồn chuẩn: [PRODUCT_IMAGE_VIDEO_WORKFLOW_PLAN.md](../plans/PRODUCT_IMAGE_VIDEO_WORKFLOW_PLAN.md), [execution-contract-v1.1.md](execution-contract-v1.1.md), [VIDEO_FIRST_ARCHITECTURE_PLAN.md](../plans/VIDEO_FIRST_ARCHITECTURE_PLAN.md).
 
 Tài liệu này xác lập ma trận năng lực chính thức của 3 nhà cung cấp AI: **ChatGPT Web**, **Gemini Web**, và **MuseAI** cho quy trình sản xuất video từ ảnh mẫu và sản phẩm.
 

@@ -4,16 +4,30 @@ using TiToAI.Contracts.Providers;
 
 namespace TiToAI.Application.Providers;
 
-/// <summary>Năng lực MuseAI; chặn thực thi khi automation chưa sẵn sàng.</summary>
+/// <summary>MuseAI video render; the Playwright trial runs only when the automation is wired.</summary>
 public sealed class MuseAiVideoAdapter : IProviderAdapter
 {
+    private readonly MuseAiPlaywrightAutomation? _automation;
+
+    public MuseAiVideoAdapter(MuseAiPlaywrightAutomation? automation = null) => _automation = automation;
+
     public string ProviderKey => ProviderKeys.MuseAI;
 
     public IReadOnlyList<ProviderTaskCapabilityDto> GetCapabilities() =>
-        ProviderCapabilities.GetDefaultCapabilities(ProviderKey);
+        ProviderCapabilities.GetDefaultCapabilities(ProviderKey)
+            .Select(capability => MuseAiTrialMode.Enabled && _automation is not null &&
+                capability.TaskType == JobTaskType.VideoRender
+                ? capability with
+                {
+                    VerificationStatus = ProviderVerificationStatus.Trial,
+                    AutomationSupported = true,
+                    EvidenceId = "user-enabled-playwright-trial"
+                }
+                : capability).ToArray();
 
     public Task<ProviderTaskCapabilityDto?> GetCapabilityForTaskAsync(string taskType, CancellationToken ct = default) =>
-        Task.FromResult(ProviderCapabilities.GetDefaultCapability(ProviderKey, taskType));
+        Task.FromResult(GetCapabilities().FirstOrDefault(c =>
+            string.Equals(c.TaskType, taskType, StringComparison.OrdinalIgnoreCase)));
 
     public Task<JobExecutionResult> ExecuteAsync(
         JobExecutionContext context,
@@ -32,9 +46,12 @@ public sealed class MuseAiVideoAdapter : IProviderAdapter
                 ErrorMessage: $"MuseAI không hỗ trợ tác vụ '{context.TaskType}'."));
         }
 
+        if (_automation is not null && context.TaskType == JobTaskType.VideoRender)
+            return _automation.ExecuteRenderAsync(context, onPreSideEffectCommitAsync, onProgressAsync, ct);
+
         return Task.FromResult(new JobExecutionResult(
             Success: false,
             ReasonCode: "automation_blocked",
-            ErrorMessage: "Tự động hóa MuseAI chưa được xác minh. Hãy nhập clip kết quả qua Manual Handoff."));
+            ErrorMessage: "Tự động hóa tạo video của MuseAI chưa sẵn sàng. Vui lòng thử lại khi bộ điều hợp đã được kiểm chứng."));
     }
 }

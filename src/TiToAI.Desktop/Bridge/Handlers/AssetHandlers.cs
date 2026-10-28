@@ -5,7 +5,6 @@ using System.Threading.Tasks;
 using TiToAI.Application.Assets;
 using TiToAI.Application.Projects;
 using TiToAI.Application.Scenes;
-using TiToAI.Application.Workspaces;
 using TiToAI.Contracts.Assets;
 using TiToAI.Contracts.Bridge;
 
@@ -87,14 +86,13 @@ public sealed class AssetHandlers
         {
             var payload = ParsePayload<ImportAudioRequest>(request);
             if (payload is null ||
-                string.IsNullOrWhiteSpace(payload.WorkspaceId) ||
                 string.IsNullOrWhiteSpace(payload.ProjectId) ||
                 string.IsNullOrWhiteSpace(payload.SceneId))
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
                     "INVALID_ARGUMENT",
-                    "Payload thiếu các trường bắt buộc (workspaceId, projectId, sceneId).",
+                    "Payload thiếu các trường bắt buộc (projectId, sceneId).",
                     retryable: false);
             }
 
@@ -115,7 +113,6 @@ public sealed class AssetHandlers
             }
 
             var importRequest = new ImportAudioRequest(
-                WorkspaceId: payload.WorkspaceId,
                 ProjectId: payload.ProjectId,
                 SceneId: payload.SceneId,
                 SourceFilePath: sourceFilePath
@@ -142,14 +139,13 @@ public sealed class AssetHandlers
         {
             var payload = ParsePayload<SelectReferenceImageRequest>(request);
             if (payload is null ||
-                string.IsNullOrWhiteSpace(payload.WorkspaceId) ||
                 string.IsNullOrWhiteSpace(payload.ProjectId) ||
                 string.IsNullOrWhiteSpace(payload.SceneId))
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
                     "INVALID_ARGUMENT",
-                    "Payload thiếu các trường bắt buộc (workspaceId, projectId, sceneId).",
+                    "Payload thiếu các trường bắt buộc (projectId, sceneId).",
                     retryable: false);
             }
 
@@ -170,7 +166,6 @@ public sealed class AssetHandlers
             }
 
             var imageRequest = new SelectReferenceImageRequest(
-                WorkspaceId: payload.WorkspaceId,
                 ProjectId: payload.ProjectId,
                 SceneId: payload.SceneId,
                 SourceFilePath: sourceFilePath
@@ -197,13 +192,12 @@ public sealed class AssetHandlers
         {
             var payload = ParsePayload<GetAssetMetadataRequest>(request);
             if (payload is null ||
-                string.IsNullOrWhiteSpace(payload.AssetId) ||
-                string.IsNullOrWhiteSpace(payload.WorkspaceId))
+                string.IsNullOrWhiteSpace(payload.AssetId))
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
                     "INVALID_ARGUMENT",
-                    "Payload thiếu trường 'assetId' hoặc 'workspaceId'.",
+                    "Payload thiếu trường 'assetId'.",
                     retryable: false);
             }
 
@@ -228,13 +222,12 @@ public sealed class AssetHandlers
         {
             var payload = ParsePayload<OpenFolderRequest>(request);
             if (payload is null ||
-                string.IsNullOrWhiteSpace(payload.AssetId) ||
-                string.IsNullOrWhiteSpace(payload.WorkspaceId))
+                string.IsNullOrWhiteSpace(payload.AssetId))
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
                     "INVALID_ARGUMENT",
-                    "Payload thiếu trường 'assetId' hoặc 'workspaceId'.",
+                    "Payload thiếu trường 'assetId'.",
                     retryable: false);
             }
 
@@ -258,12 +251,12 @@ public sealed class AssetHandlers
         try
         {
             var payload = ParsePayload<ListAssetsRequest>(request);
-            if (payload is null || string.IsNullOrWhiteSpace(payload.WorkspaceId))
+            if (payload is null)
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
                     "INVALID_ARGUMENT",
-                    "Payload thiếu trường 'workspaceId'.",
+                    "Payload không hợp lệ.",
                     retryable: false);
             }
 
@@ -288,13 +281,12 @@ public sealed class AssetHandlers
         {
             var payload = ParsePayload<GetAssetPreviewRequest>(request);
             if (payload is null ||
-                string.IsNullOrWhiteSpace(payload.AssetId) ||
-                string.IsNullOrWhiteSpace(payload.WorkspaceId))
+                string.IsNullOrWhiteSpace(payload.AssetId))
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
                     "INVALID_ARGUMENT",
-                    "Payload thiếu trường 'assetId' hoặc 'workspaceId'.",
+                    "Payload thiếu trường 'assetId'.",
                     retryable: false);
             }
 
@@ -318,12 +310,12 @@ public sealed class AssetHandlers
         try
         {
             var payload = ParsePayload<UploadAssetRequest>(request);
-            if (payload is null || string.IsNullOrWhiteSpace(payload.WorkspaceId))
+            if (payload is null)
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
                     "INVALID_ARGUMENT",
-                    "Payload thiếu trường 'workspaceId'.",
+                    "Payload không hợp lệ.",
                     retryable: false);
             }
 
@@ -355,7 +347,6 @@ public sealed class AssetHandlers
             }
 
             var uploadRequest = new UploadAssetRequest(
-                WorkspaceId: payload.WorkspaceId,
                 ProjectId: payload.ProjectId,
                 AssetType: string.IsNullOrWhiteSpace(payload.AssetType) ? "Image" : payload.AssetType,
                 FileName: payload.FileName,
@@ -474,9 +465,6 @@ public sealed class AssetHandlers
 
             ProjectNotFoundException prjNotFound =>
                 ResponseEnvelopeHelper.CreateError(requestId, "ENTITY_NOT_FOUND", prjNotFound.Message, retryable: false),
-
-            WorkspaceNotFoundException wsNotFound =>
-                ResponseEnvelopeHelper.CreateError(requestId, "ENTITY_NOT_FOUND", wsNotFound.Message, retryable: false),
 
             ArgumentException arg =>
                 ResponseEnvelopeHelper.CreateError(requestId, "INVALID_ARGUMENT", arg.Message, retryable: false),

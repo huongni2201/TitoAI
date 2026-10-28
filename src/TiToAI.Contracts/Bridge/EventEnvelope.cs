@@ -7,7 +7,6 @@ public sealed record EventEnvelope(
     [property: JsonPropertyName("id")] Guid Id,
     [property: JsonPropertyName("type")] string Type,
     [property: JsonPropertyName("eventName")] string EventName,
-    [property: JsonPropertyName("workspaceId")] string? WorkspaceId,
     [property: JsonPropertyName("seq")] long Sequence,
     [property: JsonPropertyName("payload")] JsonElement Payload,
     [property: JsonPropertyName("serverTimestampUtc")] DateTimeOffset ServerTimestampUtc,

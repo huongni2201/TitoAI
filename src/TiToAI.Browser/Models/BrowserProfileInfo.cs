@@ -10,7 +10,6 @@ public sealed class BrowserProfileInfo
 {
     public string ProfileId { get; set; } = string.Empty;
     public string Kind { get; set; } = BrowserProfileKind.SharedAI;
-    public string? WorkspaceId { get; set; }
     public string? AccountIdentity { get; set; }
     public string? ProviderKey { get; set; }
     public string? DisplayName { get; set; }
@@ -27,7 +26,6 @@ public sealed class BrowserProfileInfo
             ProfileId: ProfileId,
             Kind: Kind,
             AccountIdentity: AccountIdentity,
-            WorkspaceId: WorkspaceId,
             VisibilityState: VisibilityState,
             SessionStatus: SessionStatus,
             OperationalState: OperationalState,

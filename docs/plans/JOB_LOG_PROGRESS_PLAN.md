@@ -5,7 +5,6 @@ Ngày 2026-10-27 (UTC+07). **Kế hoạch đề xuất; chưa triển khai hoặ
 ## 1. Hiện trạng và phạm vi
 
 - `JobScheduler` có sự kiện trạng thái/tiến trình; `job.progress_updated` có `progressPercent` dạng số nguyên và `currentStep`. `JobService.ListActiveAsync` hiện trả `null` cho tiến trình; `useQueueState` giữ lịch sử job hoàn tất trong bộ nhớ của phiên. `JobDetailsDialog` đã có cửa sổ chi tiết. Các điểm này được đối chiếu source hiện tại, không chứng minh lịch sử log bền vững hoặc luồng provider thật đã hoạt động.
-- Mở rộng queue và chi tiết job hiện có; cung cấp lịch sử job đã hoàn tất sau khi mở lại app, không chỉ giữ trong RAM. Truy cập job theo Workspace/project/scene gốc; danh sách tổng app chỉ hiển thị metadata phù hợp.
 - Log ở đây là **nhật ký hoạt động cho người dùng**, có cấu trúc và lưu theo job. Log chẩn đoán ứng dụng theo T27b là phạm vi liên quan nhưng riêng; không yêu cầu lưu toàn bộ debug log trong màn hình job.
 - T19–T22 và PV2–PV4 chưa có bằng chứng pipeline/provider live hoàn chỉnh. Chỉ phát log khi bước thực sự xảy ra; công cụ giả trong test không được trình bày là provider live đã xác minh.
 
@@ -30,7 +29,6 @@ Coordinator kiểm tra source/baseline và chốt DTO/version/migration trước
 
 ### 4.1. Lịch sử bền vững
 
-- Một bảng SQLite `JobActivity` append-only: `id` tăng đơn điệu do DB cấp để phân trang/khử trùng, `jobId` với FK, `workspaceId` có kiểm tra scope qua job, `occurredAtUtc`, `attempt`, `stepCode`, `eventCode`, `severity`, `messageArgs` đã giới hạn và làm sạch. Index `(jobId, id)`. Không lưu payload tùy ý, nội dung prompt/kết quả AI, cookie, token, URL có query nhạy cảm, đường dẫn profile hay raw exception; message lấy từ mã và tham số được allow-list.
 - Lưu bước và tiến trình hiện hành theo job với `attempt`, `currentStep`, `progressPercent?`, nguồn/đơn vị nếu có và phiên bản cập nhật; cập nhật cùng transaction với hoạt động tương ứng. Dùng schema mở rộng tương thích migration hiện có và dữ liệu job cũ; không biến log thành nguồn điều khiển scheduler.
 - Mốc chuyển trạng thái và sự kiện nghiệp vụ quan trọng được ghi cùng transaction ngắn với thay đổi job khi cùng DB; chỉ phát thông báo sau commit. Ghi log cho bước thực sự xảy ra, gồm enqueue/reserve/start, submit checkpoint, nhận/lưu kết quả, chờ, retry/resume, cancel/reconcile, success/failure và lỗi lưu. Tránh ghi lặp heartbeat hoặc từng byte; gộp/cập nhật tiến trình tần suất hợp lý, nhưng không làm mất mốc chuyển bước.
 - Bước do worker báo phải kiểm state/owner/lease/fencing token và attempt trong cùng ranh giới ghi. Hành động do người dùng/recovery phải theo điều kiện chuyển trạng thái hiện hành. Một worker hết lease không thể sửa tiến trình hoặc ghi bước thành công. Không để log thay đổi quyết định resend hay giải phóng slot.
@@ -38,9 +36,6 @@ Coordinator kiểm tra source/baseline và chốt DTO/version/migration trước
 
 ### 4.2. Đọc và cập nhật giao diện
 
-- Bổ sung command allow-list phiên bản chốt bởi coordinator, chẳng hạn `job.list_history` và `job.list_activity`, giới hạn kích thước trang và cursor theo `id`; kiểm tra `workspaceId`/`jobId` và quan hệ project/scene ở backend, kể cả request ID hợp lệ thuộc Workspace khác. Lịch sử toàn app chỉ trả dữ liệu cần thiết, không rò prompt/asset của kênh khác. `job.get_status` và danh sách trả snapshot tiến trình bền vững.
-- Mở rộng contract `job.progress_updated` cho tỷ lệ nullable và lần thử, hoặc version event mới nếu cần tương thích với consumer cũ; không đổi kiểu ngầm. Event hoạt động mới mang jobId, workspaceId, activityId và dữ liệu an toàn tối thiểu. Giữ command/event, TypeScript và C# đồng bộ, bao gồm allow-list bridge.
-- Đăng ký nghe trước khi đọc snapshot + trang log; dùng `activityId`/version làm watermark, hợp nhất và khử trùng theo ID. Sau khi snapshot về, bù các bản ghi từ watermark qua cursor để xử lý event tới trước/trong lúc tải, mất event hoặc reconnect. Với UI chuyển job/Workspace, hủy hoặc bỏ response cũ; kiểm scope cả event lẫn query. Timestamp chỉ để hiển thị, không dùng làm thứ tự/khử trùng. Event chỉ là tín hiệu; SQLite là nguồn sự thật.
 - Lưu lịch sử sau restart; mặc định đề xuất giữ **30 ngày sau khi job kết thúc**, tối đa **10.000 dòng/job**, không xóa log job còn active hoặc cần reconcile. Khi chạm giới hạn, giữ các mốc trạng thái và dòng lỗi, gộp/bỏ các cập nhật tiến trình cũ và hiển thị thông báo lịch sử đã rút gọn. Nếu dung lượng thấp hay không thể dọn vì job active, cảnh báo và tiếp tục áp dụng quy tắc lỗi ghi ở §4.1. Không xóa job, asset hoặc dữ liệu người dùng. Xác định thời gian/dung lượng cuối cùng tại T27b; kiểm tra backup/restore DB cùng T26.
 
 ## 5. Thứ tự triển khai và ownership
@@ -60,8 +55,5 @@ Không đổi trạng thái T17/T27/G3 chỉ từ plan này. G3 vẫn cần T18�
 
 ## 6. Nghiệm thu
 
-- Job chạy qua nhiều bước: từng mốc xuất hiện đúng thứ tự, đúng attempt và job/Workspace; chờ, login/manual, retry, cancel, reconcile và lỗi lưu phản ánh hành vi thực; không có log “thành công” khi commit thất bại.
 - Test DB SQLite thật: rollback giữa job và activity; worker token cũ, concurrent writer, restart, lịch sử terminal, phân trang cùng timestamp, retention và khôi phục sau sự cố. Test side-effect không chắc chắn bảo đảm không resend hoặc giải phóng slot sai.
-- Test bridge/scope: sai Workspace/job, cursor không hợp lệ, giới hạn trang, event duplicate/out-of-order/mất/reconnect và event đến trong lúc tải; không lộ dữ liệu cross-workspace. Canary chứa token/cookie/prompt/path/URL nhạy cảm không xuất hiện trong DB activity, DTO, log diagnostics hoặc export.
-- Test UI: hai chế độ thanh, `null` khác 0, chỉ `Succeeded` sau lưu mới là 100%, retry và trạng thái terminal; lịch sử sau restart, job cũ không log, lỗi/rỗng/tải thêm, cập nhật khi đang cuộn, đổi Workspace, keyboard/focus và hai theme.
 - Test workflow: mẫu số chỉ tính clip đã chốt, một nhánh lỗi không được tính thành hoàn thành; đối chiếu job con với scene/run. Provider không hỗ trợ tiến độ phải hiển thị bước đang chờ. Test bằng adapter giả chỉ xác nhận wiring; live/Windows/WebView2/DPI cần chạy riêng khi môi trường sẵn sàng và ghi đúng kết quả.

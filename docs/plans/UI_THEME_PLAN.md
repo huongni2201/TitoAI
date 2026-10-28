@@ -13,7 +13,6 @@ Tài liệu này bổ sung `SOURCE_PLAN.md` theo yêu cầu mới của người
 - Hỗ trợ **Sáng (Light)**, **Tối (Dark)** và **Theo hệ thống (System)**. Mặc định lần đầu là Theo hệ thống Windows.
 - Có lựa chọn giao diện trong trang Cài đặt → Giao diện theo `SETTINGS_PLAN.md`; bộ chuyển nhanh trên app shell dùng cùng một preference.
 - Đổi giao diện có hiệu lực ngay, không cần khởi động lại; giữ nguyên màn hình hiện tại, nội dung đang nhập và job đang chạy.
-- Theme là thiết lập toàn ứng dụng theo Windows user, không theo Workspace. Chuyển Workspace không làm đổi lựa chọn theme.
 - Lựa chọn được lưu và phục hồi khi mở lại ứng dụng. System tự cập nhật khi giao diện Windows đổi; Light/Dark được chọn thủ công giữ nguyên khi Windows đổi.
 
 ## 2. Phạm vi và thiết kế
@@ -47,7 +46,6 @@ Tài liệu này bổ sung `SOURCE_PLAN.md` theo yêu cầu mới của người
 
 1. Lần đầu mở ở Windows sáng/tối, System cho giao diện tương ứng; không chớp nền sai theme trước màn hình chính.
 2. Đổi Light ↔ Dark qua Settings hoặc bộ chuyển nhanh: host/UI đồng bộ ngay, không mất dữ liệu đang nhập, navigation hay trạng thái job.
-3. Chọn từng preference rồi khởi động lại: giữ đúng lựa chọn; chuyển Workspace vẫn giữ theme toàn ứng dụng.
 4. Đổi giao diện Windows khi app đang mở: System phản ứng ngay, lựa chọn Light/Dark thủ công không bị ghi đè.
 5. Kiểm tra các màn hình và trạng thái ở §2 trong cả Light/Dark, bao gồm keyboard focus, dialog và chart nếu có; media giữ nguyên màu gốc.
 6. Thiết lập thiếu/sai, lỗi đọc hoặc lỗi lưu đều có fallback/phản hồi như §3; lỗi theme không ngăn app mở hoặc làm gián đoạn scheduler.

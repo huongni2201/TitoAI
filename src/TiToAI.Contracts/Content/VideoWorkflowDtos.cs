@@ -97,7 +97,6 @@ public static class SceneImageStrategy
 /// </summary>
 public sealed record ProjectWorkflowConfigDto(
     [property: JsonPropertyName("projectId")] string ProjectId,
-    [property: JsonPropertyName("workspaceId")] string WorkspaceId,
     [property: JsonPropertyName("workflowMode")] string WorkflowMode,
     [property: JsonPropertyName("goalPrompt")] string GoalPrompt,
     [property: JsonPropertyName("modelAssetId")] string? ModelAssetId,
@@ -120,7 +119,6 @@ public sealed record ProjectWorkflowConfigDto(
 public sealed record SceneWorkflowDetailDto(
     [property: JsonPropertyName("sceneId")] string SceneId,
     [property: JsonPropertyName("projectId")] string ProjectId,
-    [property: JsonPropertyName("workspaceId")] string WorkspaceId,
     [property: JsonPropertyName("sequenceOrder")] int SequenceOrder,
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("targetDurationSeconds")] int TargetDurationSeconds,
@@ -146,14 +144,12 @@ public sealed record SceneWorkflowDetailDto(
 /// Yêu cầu lấy cấu hình workflow của Dự án.
 /// </summary>
 public sealed record GetProjectWorkflowConfigRequest(
-    [property: JsonPropertyName("workspaceId")] string WorkspaceId,
     [property: JsonPropertyName("projectId")] string ProjectId);
 
 /// <summary>
 /// Yêu cầu lưu cấu hình workflow của Dự án.
 /// </summary>
 public sealed record SaveProjectWorkflowConfigRequest(
-    [property: JsonPropertyName("workspaceId")] string WorkspaceId,
     [property: JsonPropertyName("projectId")] string ProjectId,
     [property: JsonPropertyName("workflowMode")] string WorkflowMode,
     [property: JsonPropertyName("goalPrompt")] string GoalPrompt,
@@ -172,7 +168,6 @@ public sealed record SaveProjectWorkflowConfigRequest(
 /// Hỗ trợ clientRequestId để bảo đảm tính Idempotent khi bấm lặp lại.
 /// </summary>
 public sealed record StartProjectWorkflowRequest(
-    [property: JsonPropertyName("workspaceId")] string WorkspaceId,
     [property: JsonPropertyName("projectId")] string ProjectId,
     [property: JsonPropertyName("clientRequestId")] string? ClientRequestId = null);
 
@@ -186,7 +181,6 @@ public sealed record StartProjectWorkflowResponseData(
 /// Yêu cầu cập nhật dữ liệu đầu vào cho một Cảnh cụ thể (Override).
 /// </summary>
 public sealed record UpdateSceneWorkflowInputRequest(
-    [property: JsonPropertyName("workspaceId")] string WorkspaceId,
     [property: JsonPropertyName("projectId")] string ProjectId,
     [property: JsonPropertyName("sceneId")] string SceneId,
     [property: JsonPropertyName("imageStrategy")] string? ImageStrategy = null,
@@ -201,7 +195,6 @@ public sealed record UpdateSceneWorkflowInputRequest(
 /// Yêu cầu tạo lại (Re-run) một phần hoặc một cảnh cụ thể theo ma trận phụ thuộc §3.4.
 /// </summary>
 public sealed record RetrySceneWorkflowRequest(
-    [property: JsonPropertyName("workspaceId")] string WorkspaceId,
     [property: JsonPropertyName("projectId")] string ProjectId,
     [property: JsonPropertyName("sceneId")] string SceneId,
     [property: JsonPropertyName("targetStep")] string TargetStep // "Image" | "Prompt" | "Video"
@@ -255,7 +248,6 @@ public sealed record MotionPromptGenerationResultDto(
 /// Yêu cầu xem trước prompt tổng hợp gửi AI writer theo CLIP_DURATION_STORYBOARD_PLAN §3.1–3.3.
 /// </summary>
 public sealed record PreviewAiPromptRequest(
-    [property: JsonPropertyName("workspaceId")] string WorkspaceId,
     [property: JsonPropertyName("projectId")] string ProjectId,
     [property: JsonPropertyName("sceneId")] string? SceneId = null
 );
@@ -266,9 +258,6 @@ public sealed record PreviewAiPromptRequest(
 public sealed record PreviewAiPromptResponseData(
     [property: JsonPropertyName("templateId")] string TemplateId,
     [property: JsonPropertyName("templateName")] string TemplateName,
-    [property: JsonPropertyName("versionId")] string VersionId,
-    [property: JsonPropertyName("isOverride")] bool IsOverride,
-    [property: JsonPropertyName("userBrief")] string UserBrief,
     [property: JsonPropertyName("composedPrompt")] string ComposedPrompt,
     [property: JsonPropertyName("outputContractVersion")] int OutputContractVersion
 );
@@ -280,7 +269,6 @@ public sealed record PreviewAiPromptResponseData(
 public sealed record VideoContentItemDto(
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("projectId")] string ProjectId,
-    [property: JsonPropertyName("workspaceId")] string WorkspaceId,
     [property: JsonPropertyName("sceneId")] string? SceneId,
     [property: JsonPropertyName("sequenceOrder")] int SequenceOrder,
     [property: JsonPropertyName("idea")] string Idea,
@@ -300,7 +288,6 @@ public sealed record VideoContentItemDto(
 /// Yêu cầu cập nhật nội dung hàng kịch bản trong bảng.
 /// </summary>
 public sealed record UpdateVideoContentItemRequest(
-    [property: JsonPropertyName("workspaceId")] string WorkspaceId,
     [property: JsonPropertyName("projectId")] string ProjectId,
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("idea")] string? Idea = null,
@@ -314,7 +301,6 @@ public sealed record UpdateVideoContentItemRequest(
 /// Yêu cầu tạo video từ hàng kịch bản trong bảng (Action Tạo video).
 /// </summary>
 public sealed record CreateSceneVideoRequest(
-    [property: JsonPropertyName("workspaceId")] string WorkspaceId,
     [property: JsonPropertyName("projectId")] string ProjectId,
     [property: JsonPropertyName("contentItemId")] string? ContentItemId = null,
     [property: JsonPropertyName("sceneId")] string? SceneId = null

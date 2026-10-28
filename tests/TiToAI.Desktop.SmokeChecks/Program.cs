@@ -257,20 +257,7 @@ public static class Program
             "Test 7: Unknown command rejected with UNKNOWN_COMMAND",
             BridgeSmokeTests.Test_BridgeDispatcher_UnknownCommand_Rejected);
 
-        Console.WriteLine("\n[4] Workspace Query Handler Smoke Checks:");
-        await RunCheckAsync(
-            "Test 9: Workspace query handler returns empty list when DB is empty",
-            BridgeSmokeTests.Test_WorkspaceQueryHandler_ReturnsEmptyWhenDbEmpty);
-
-        await RunCheckAsync(
-            "Test 10: Workspace query handler projects workspace from real database",
-            BridgeSmokeTests.Test_WorkspaceQueryHandler_ProjectsWorkspaceFromRealDatabase);
-
-        await RunCheckAsync(
-            "Test 11: Workspace query handler unregister removes handler cleanly",
-            BridgeSmokeTests.Test_WorkspaceQueryHandler_Unregister_RemovesHandlerCleanly);
-
-        Console.WriteLine("\n[5] Desktop Runtime Paths & Isolation Smoke Checks:");
+        Console.WriteLine("\n[4] Desktop Runtime Paths & Isolation Smoke Checks:");
         RunSyncCheck(
             "Test 18: Default paths resolve to production LocalAppData and remain unopened",
             DesktopRuntimePathsSmokeTests.Test_DefaultPaths_UsesLocalAppDataAndProductionDefaults);
@@ -299,35 +286,7 @@ public static class Program
             "Test 24: Identical database and profile paths rejected with ArgumentException",
             DesktopRuntimePathsSmokeTests.Test_IdenticalPaths_RejectedWithArgumentException);
 
-        Console.WriteLine("\n[6] Task T07 Workspace & Account Bridge Smoke Checks:");
-        var tempG2Dir = Path.Combine(Path.GetTempPath(), "titoai_g2_desktop_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(tempG2Dir);
-        var tempG2DbPath = Path.Combine(tempG2Dir, "titoai_g2.db");
-        try
-        {
-            var bootstrapper = new Infrastructure.Persistence.SqliteDatabaseBootstrapper();
-            await bootstrapper.BootstrapAsync(tempG2DbPath);
-            await RunCheckAsync(
-                "Task T07: Workspace CRUD & Account Linking Bridge Handlers (9 commands)",
-                async () => await WorkspaceAndAccountBridgeSmokeTests.RunAllTestsAsync(tempG2DbPath));
-        }
-        finally
-        {
-            try
-            {
-                Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-                if (Directory.Exists(tempG2Dir))
-                {
-                    Directory.Delete(tempG2Dir, recursive: true);
-                }
-            }
-            catch
-            {
-                // Ignore cleanup error in test runner
-            }
-        }
-
-        Console.WriteLine("\n[7] Task T10 Prompt Engine Smoke Checks:");
+        Console.WriteLine("\n[6] Task T10 Prompt Engine Smoke Checks:");
         await RunCheckAsync(
             "Task T10: Prompt Templates, Immutable Versions, Overrides, Preview, Rollback & Snapshot",
             async () =>
@@ -339,12 +298,12 @@ public static class Program
                 }
             });
 
-        Console.WriteLine("\n[8] Task T13 Browser Ownership & Registry Smoke Checks:");
+        Console.WriteLine("\n[7] Task T13 Browser Ownership & Registry Smoke Checks:");
         await RunCheckAsync(
             "Task T13: Browser Profile Registry, Single Owner Lock, Tab Pool, Login Queue & Quiescing",
             async () => await BrowserSmokeTests.RunAllAsync());
 
-        Console.WriteLine("\n[9] Task R1 Desktop Browser Bridge Handlers Smoke Checks:");
+        Console.WriteLine("\n[8] Task R1 Desktop Browser Bridge Handlers Smoke Checks:");
         await RunCheckAsync(
             "Task R1: Browser Handlers (list_profiles, request_login, cancel_login, check_session, errors)",
             async () => await BrowserBridgeSmokeTests.RunAllAsync());
@@ -363,7 +322,7 @@ public static class Program
 
         Console.WriteLine("\n[11] Global AI Account Pool v1.1 Smoke Checks:");
         await RunCheckAsync(
-            "Task T13a: Global AI Pool (10 Workspaces / 1 ChatGPT, 10 Videos / 4 MuseAI, Isolation & 8 Combinations)",
+            "Task T13a: Global AI Pool (10 Projects / 1 ChatGPT, 10 Videos / 4 MuseAI, Isolation & 8 Combinations)",
             async () =>
             {
                 int exitCode = await GlobalAiPoolSmokeTests.RunAllAsync();

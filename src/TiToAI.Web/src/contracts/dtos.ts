@@ -2,18 +2,6 @@
  * DTOs cho các lệnh Gate G1 theo contracts.md v1.0.4
  */
 
-export type WorkspaceSummaryDto = {
-  workspaceId: string;
-  name: string;
-  channelHandle: string;
-  topic: string;
-  status: "Active" | "Paused";
-};
-
-export type WorkspaceListResponseData = {
-  workspaces: WorkspaceSummaryDto[];
-};
-
 export type ThemePreference = "system" | "light" | "dark";
 export type EffectiveTheme = "light" | "dark";
 

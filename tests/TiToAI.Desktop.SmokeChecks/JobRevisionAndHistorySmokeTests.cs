@@ -53,22 +53,12 @@ public static class JobRevisionAndHistorySmokeTests
 
         using (var db = new TiToAIDbContext(dbOptions))
         {
-            db.Database.Migrate();
+            db.Database.EnsureCreated();
 
-            var ws = new Workspace
-            {
-                Id = "ws_c1c3",
-                Name = "C1-C3 Smoke Workspace",
-                Status = "Active",
-                CreatedAtUtc = now,
-                UpdatedAtUtc = now
-            };
-            db.Workspaces.Add(ws);
 
             var prj = new Project
             {
                 Id = "prj_c1c3",
-                WorkspaceId = "ws_c1c3",
                 Name = "C1-C3 Test Project",
                 Status = "Active",
                 CreatedAtUtc = now,
@@ -80,7 +70,6 @@ public static class JobRevisionAndHistorySmokeTests
             {
                 Id = "scn_c1c3_1",
                 ProjectId = "prj_c1c3",
-                WorkspaceId = "ws_c1c3",
                 Name = "Scene 1",
                 SequenceOrder = 1,
                 TargetDurationSeconds = 15,
@@ -127,7 +116,6 @@ public static class JobRevisionAndHistorySmokeTests
                 var job1 = new Job
                 {
                     Id = jobId1,
-                    WorkspaceId = "ws_c1c3",
                     ProjectId = "prj_c1c3",
                     SceneId = null,
                     TaskType = JobTaskType.Script,
@@ -143,15 +131,15 @@ public static class JobRevisionAndHistorySmokeTests
                 await db.SaveChangesAsync();
             }
 
-            var status1 = await jobService.GetStatusAsync("ws_c1c3", jobId1);
+            var status1 = await jobService.GetStatusAsync(jobId1);
             Assert(status1.Job.Revision == 1, $"Revision ban đầu phải là 1, thực tế: {status1.Job.Revision}");
             Console.WriteLine("PASS");
 
             // Test 2: State changes increment Revision
             Console.Write("[RUN] Test 2: Thay đổi trạng thái (Cancel/Resume) tăng revision ... ");
-            var cancelRes = await jobService.CancelAsync("ws_c1c3", jobId1);
+            var cancelRes = await jobService.CancelAsync(jobId1);
             Assert(cancelRes.Revision == 2, $"Sau khi cancel, revision phải là 2, thực tế: {cancelRes.Revision}");
-            var statusAfterCancel = await jobService.GetStatusAsync("ws_c1c3", jobId1);
+            var statusAfterCancel = await jobService.GetStatusAsync(jobId1);
             Assert(statusAfterCancel.Job.Revision == 2, $"GetStatus sau khi cancel phải thấy revision=2, thực tế: {statusAfterCancel.Job.Revision}");
             Console.WriteLine("PASS");
 
@@ -163,7 +151,6 @@ public static class JobRevisionAndHistorySmokeTests
                 var jobRetry = new Job
                 {
                     Id = jobIdRetry,
-                    WorkspaceId = "ws_c1c3",
                     ProjectId = "prj_c1c3",
                     SceneId = null,
                     TaskType = JobTaskType.Script,
@@ -183,11 +170,11 @@ public static class JobRevisionAndHistorySmokeTests
                 await db.SaveChangesAsync();
             }
 
-            var retryRes = await jobService.RetryAsync(new JobRetryRequest("ws_c1c3", jobIdRetry, ExpectedRevision: 3));
+            var retryRes = await jobService.RetryAsync(new JobRetryRequest(jobIdRetry, ExpectedRevision: 3));
             Assert(retryRes.State == JobState.Queued, $"Trạng thái sau retry phải là Queued, thực tế: {retryRes.State}");
             Assert(retryRes.Revision == 4, $"Revision sau retry phải tăng lên 4, thực tế: {retryRes.Revision}");
 
-            var statusRetry = await jobService.GetStatusAsync("ws_c1c3", jobIdRetry);
+            var statusRetry = await jobService.GetStatusAsync(jobIdRetry);
             Assert(statusRetry.Job.State == JobState.Queued, "DB phải ở trạng thái Queued");
             Assert(statusRetry.Job.Attempts == 1, $"Attempts phải được bảo toàn là 1, thực tế: {statusRetry.Job.Attempts}");
             Assert(statusRetry.Job.ReasonCode == null, "ReasonCode phải được xóa sạch sau khi retry về Queued");
@@ -201,7 +188,6 @@ public static class JobRevisionAndHistorySmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = jobIdSideEffect,
-                    WorkspaceId = "ws_c1c3",
                     ProjectId = "prj_c1c3",
                     SceneId = null,
                     TaskType = JobTaskType.Script,
@@ -223,7 +209,7 @@ public static class JobRevisionAndHistorySmokeTests
             bool threwSideEffect = false;
             try
             {
-                await jobService.RetryAsync(new JobRetryRequest("ws_c1c3", jobIdSideEffect, ExpectedRevision: 2));
+                await jobService.RetryAsync(new JobRetryRequest(jobIdSideEffect, ExpectedRevision: 2));
             }
             catch (JobValidationException)
             {
@@ -240,7 +226,6 @@ public static class JobRevisionAndHistorySmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = jobIdCanceled,
-                    WorkspaceId = "ws_c1c3",
                     ProjectId = "prj_c1c3",
                     SceneId = null,
                     TaskType = JobTaskType.Script,
@@ -262,7 +247,7 @@ public static class JobRevisionAndHistorySmokeTests
             bool threwCanceled = false;
             try
             {
-                await jobService.RetryAsync(new JobRetryRequest("ws_c1c3", jobIdCanceled, ExpectedRevision: 2));
+                await jobService.RetryAsync(new JobRetryRequest(jobIdCanceled, ExpectedRevision: 2));
             }
             catch (JobConcurrencyConflictException)
             {
@@ -276,7 +261,7 @@ public static class JobRevisionAndHistorySmokeTests
             bool threwStale = false;
             try
             {
-                await jobService.RetryAsync(new JobRetryRequest("ws_c1c3", jobIdRetry, ExpectedRevision: 2)); // current revision is 4
+                await jobService.RetryAsync(new JobRetryRequest(jobIdRetry, ExpectedRevision: 2)); // current revision is 4
             }
             catch (JobConcurrencyConflictException)
             {
@@ -293,7 +278,6 @@ public static class JobRevisionAndHistorySmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = jobIdBudget,
-                    WorkspaceId = "ws_c1c3",
                     ProjectId = "prj_c1c3",
                     SceneId = null,
                     TaskType = JobTaskType.Script,
@@ -315,7 +299,7 @@ public static class JobRevisionAndHistorySmokeTests
             bool threwBudget = false;
             try
             {
-                await jobService.RetryAsync(new JobRetryRequest("ws_c1c3", jobIdBudget, ExpectedRevision: 4));
+                await jobService.RetryAsync(new JobRetryRequest(jobIdBudget, ExpectedRevision: 4));
             }
             catch (JobValidationException)
             {
@@ -338,7 +322,6 @@ public static class JobRevisionAndHistorySmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = jobHistSucceeded,
-                    WorkspaceId = "ws_c1c3",
                     ProjectId = "prj_c1c3",
                     SceneId = null,
                     TaskType = JobTaskType.Script,
@@ -356,7 +339,6 @@ public static class JobRevisionAndHistorySmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = jobHistFailedResolved,
-                    WorkspaceId = "ws_c1c3",
                     ProjectId = "prj_c1c3",
                     SceneId = null,
                     TaskType = JobTaskType.Script,
@@ -374,7 +356,6 @@ public static class JobRevisionAndHistorySmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = jobHistCanceledResolved,
-                    WorkspaceId = "ws_c1c3",
                     ProjectId = "prj_c1c3",
                     SceneId = null,
                     TaskType = JobTaskType.Script,
@@ -392,7 +373,6 @@ public static class JobRevisionAndHistorySmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = jobHistCanceledUnresolved,
-                    WorkspaceId = "ws_c1c3",
                     ProjectId = "prj_c1c3",
                     SceneId = null,
                     TaskType = JobTaskType.Script,
@@ -445,7 +425,6 @@ public static class JobRevisionAndHistorySmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = jobHistActiveQueued,
-                    WorkspaceId = "ws_c1c3",
                     ProjectId = "prj_c1c3",
                     SceneId = null,
                     TaskType = JobTaskType.Script,
@@ -463,7 +442,6 @@ public static class JobRevisionAndHistorySmokeTests
 
             // Gọi list_history với pageSize = 2
             var page1 = await jobService.ListHistoryAsync(new JobListHistoryRequest(
-                WorkspaceId: "ws_c1c3",
                 PageSize: 2
             ));
 
@@ -474,7 +452,6 @@ public static class JobRevisionAndHistorySmokeTests
 
             // Lấy trang 2 qua cursor
             var page2 = await jobService.ListHistoryAsync(new JobListHistoryRequest(
-                WorkspaceId: "ws_c1c3",
                 Cursor: page1.NextCursor,
                 PageSize: 2
             ));
@@ -486,7 +463,7 @@ public static class JobRevisionAndHistorySmokeTests
 
             // Test 9: ListActive preserves semantics and returns unresolved terminal jobs
             Console.Write("[RUN] Test 9: job.list_active giữ nguyên ngữ nghĩa (chỉ active + unresolved terminal) ... ");
-            var activeRes = await jobService.ListActiveAsync("ws_c1c3");
+            var activeRes = await jobService.ListActiveAsync();
             var activeIds = activeRes.Jobs.Select(j => j.Id).ToHashSet();
 
             Assert(activeIds.Contains(jobHistActiveQueued), "list_active phải chứa active queued job");

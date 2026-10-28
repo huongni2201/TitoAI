@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Data.Common;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -5,8 +7,10 @@ using TiToAI.Infrastructure.Persistence.Interceptors;
 
 namespace TiToAI.Infrastructure.Persistence;
 
-public class SqliteDatabaseBootstrapper : ISqliteDatabaseBootstrapper
+public sealed class SqliteDatabaseBootstrapper : ISqliteDatabaseBootstrapper
 {
+    private const int CurrentSchemaVersion = 3;
+    private const string SchemaResourceName = "TiToAI.Infrastructure.Persistence.Sql.final-schema.sql";
     private readonly ILogger<SqliteDatabaseBootstrapper>? _logger;
 
     public SqliteDatabaseBootstrapper(ILogger<SqliteDatabaseBootstrapper>? logger = null)
@@ -20,121 +24,79 @@ public class SqliteDatabaseBootstrapper : ISqliteDatabaseBootstrapper
     {
         var dbPath = databasePath ?? DatabasePathHelper.GetDefaultDatabasePath();
         var directory = Path.GetDirectoryName(dbPath);
-        if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
+        if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
 
         var connectionString = DatabasePathHelper.BuildConnectionString(dbPath);
-
-        // 1. Initialize SQLite file and set WAL mode (persistent in DB file header)
         string initialJournalMode;
-        using (var initConn = new SqliteConnection(connectionString))
+        bool databaseReset = false;
+        await using (var connection = new SqliteConnection(connectionString))
         {
-            await initConn.OpenAsync(cancellationToken).ConfigureAwait(false);
+            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+            initialJournalMode = await ExecuteScalarTextAsync(connection, "PRAGMA journal_mode = WAL;", cancellationToken).ConfigureAwait(false);
 
-            using var walCmd = initConn.CreateCommand();
-            walCmd.CommandText = "PRAGMA journal_mode = WAL;";
-            var result = await walCmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-            initialJournalMode = result?.ToString() ?? string.Empty;
-        }
-
-        // 2. Run EF Core Migrations
-        // Bắt buộc tắt foreign_keys khi chạy EF Core Migrations trong SQLite để cho phép
-        // DropTable, DropColumn và tái cấu trúc bảng (table rebuild) không bị chặn bởi SQLite FK check.
-        var migrationConnectionString = new SqliteConnectionStringBuilder(connectionString)
-        {
-            ForeignKeys = false
-        }.ToString();
-
-        var optionsBuilder = new DbContextOptionsBuilder<TiToAIDbContext>();
-        optionsBuilder.UseSqlite(migrationConnectionString);
-        optionsBuilder.ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning));
-
-        IReadOnlyList<string> appliedMigrations;
-        using (var dbContext = new TiToAIDbContext(optionsBuilder.Options))
-        {
-            var pending = (await dbContext.Database.GetPendingMigrationsAsync(cancellationToken).ConfigureAwait(false)).ToList();
-            if (pending.Count > 0 && await HasUserTablesAsync(connectionString, cancellationToken).ConfigureAwait(false))
+            var schemaVersion = Convert.ToInt32(await ExecuteScalarAsync(connection, "PRAGMA user_version;", cancellationToken).ConfigureAwait(false));
+            if (schemaVersion == 2)
             {
-                var backupPath = CreateMigrationBackup(dbPath, connectionString, cancellationToken);
-                _logger?.LogInformation("Created pre-migration SQLite backup at {BackupPath}", backupPath);
+                await ExecuteNonQueryAsync(connection, """
+                    BEGIN IMMEDIATE;
+                    ALTER TABLE "PromptTemplate" ADD COLUMN "name" TEXT NOT NULL DEFAULT 'Mẫu hiện tại';
+                    ALTER TABLE "PromptTemplate" ADD COLUMN "is_active" INTEGER NOT NULL DEFAULT 1;
+                    DROP INDEX "uq_prompt_template_global_purpose";
+                    CREATE UNIQUE INDEX "uq_prompt_template_active_purpose" ON "PromptTemplate" ("purpose") WHERE "is_active" = 1;
+                    PRAGMA user_version = 3;
+                    COMMIT;
+                    """, cancellationToken).ConfigureAwait(false);
+            }
+            else if (schemaVersion < CurrentSchemaVersion)
+            {
+                var tables = await ListUserTablesAsync(connection, cancellationToken).ConfigureAwait(false);
+                if (tables.Count > 0)
+                {
+                    var backupPath = CreatePreResetBackup(dbPath, connectionString, cancellationToken);
+                    _logger?.LogInformation("Created pre-reset SQLite backup at {BackupPath}", backupPath);
+                    await DropUserTablesAsync(connection, tables, cancellationToken).ConfigureAwait(false);
+                    databaseReset = true;
+                }
+
+                await ExecuteFinalSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await ExecuteNonQueryAsync(connection, $"PRAGMA user_version = {CurrentSchemaVersion};", cancellationToken).ConfigureAwait(false);
+            }
+            else if (schemaVersion > CurrentSchemaVersion)
+            {
+                throw new InvalidOperationException($"Database schema version {schemaVersion} is not supported; expected {CurrentSchemaVersion}.");
             }
 
-            await dbContext.Database.MigrateAsync(cancellationToken).ConfigureAwait(false);
-            appliedMigrations = pending.AsReadOnly();
+            await VerifyFinalSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
         }
 
-        // 3. Verify SQLite Engine Version and PRAGMAs on a fresh connection opened via TiToAIDbContext with SqlitePragmaInterceptor
         string sqliteVersion;
         string journalMode;
         bool foreignKeysEnabled;
         int busyTimeout;
         int synchronousMode;
+        var verifyOptions = new DbContextOptionsBuilder<TiToAIDbContext>()
+            .UseSqlite(connectionString)
+            .AddInterceptors(new SqlitePragmaInterceptor())
+            .Options;
 
-        var verifyOptionsBuilder = new DbContextOptionsBuilder<TiToAIDbContext>();
-        verifyOptionsBuilder.UseSqlite(connectionString);
-        verifyOptionsBuilder.AddInterceptors(new SqlitePragmaInterceptor());
-
-        await using (var verifyDbContext = new TiToAIDbContext(verifyOptionsBuilder.Options))
+        await using (var db = new TiToAIDbContext(verifyOptions))
         {
-            await verifyDbContext.Database.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-            var verifyConn = verifyDbContext.Database.GetDbConnection();
-
-            using (var verCmd = verifyConn.CreateCommand())
-            {
-                verCmd.CommandText = "SELECT sqlite_version();";
-                sqliteVersion = (await verCmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))?.ToString() ?? "unknown";
-            }
-
-            using (var jmCmd = verifyConn.CreateCommand())
-            {
-                jmCmd.CommandText = "PRAGMA journal_mode;";
-                journalMode = (await jmCmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))?.ToString() ?? "unknown";
-            }
-
-            using (var fkCmd = verifyConn.CreateCommand())
-            {
-                fkCmd.CommandText = "PRAGMA foreign_keys;";
-                var fk = await fkCmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-                foreignKeysEnabled = Convert.ToInt32(fk) == 1;
-            }
-
-            using (var btCmd = verifyConn.CreateCommand())
-            {
-                btCmd.CommandText = "PRAGMA busy_timeout;";
-                var bt = await btCmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-                busyTimeout = Convert.ToInt32(bt);
-            }
-
-            using (var synCmd = verifyConn.CreateCommand())
-            {
-                synCmd.CommandText = "PRAGMA synchronous;";
-                var syn = await synCmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-                synchronousMode = Convert.ToInt32(syn);
-            }
-
-            // Đồng bộ dữ liệu cũ: N luôn lấy từ max_tabs làm nguồn cấu hình duy nhất,
-            // đồng bộ max_concurrent_jobs theo max_tabs nếu có sự sai lệch từ phiên bản cũ
-            try
-            {
-                using var syncCmd = verifyConn.CreateCommand();
-                syncCmd.CommandText = "UPDATE ProviderAccount SET max_concurrent_jobs = max_tabs WHERE max_concurrent_jobs != max_tabs;";
-                await syncCmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-            }
-            catch
-            {
-                // Bỏ qua nếu bảng ProviderAccount chưa tồn tại trong migration đầu
-            }
-
-            await verifyDbContext.Database.CloseConnectionAsync().ConfigureAwait(false);
+            await db.Database.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+            var connection = db.Database.GetDbConnection();
+            sqliteVersion = await ExecuteScalarTextAsync(connection, "SELECT sqlite_version();", cancellationToken).ConfigureAwait(false);
+            journalMode = await ExecuteScalarTextAsync(connection, "PRAGMA journal_mode;", cancellationToken).ConfigureAwait(false);
+            foreignKeysEnabled = Convert.ToInt32(await ExecuteScalarAsync(connection, "PRAGMA foreign_keys;", cancellationToken).ConfigureAwait(false)) == 1;
+            busyTimeout = Convert.ToInt32(await ExecuteScalarAsync(connection, "PRAGMA busy_timeout;", cancellationToken).ConfigureAwait(false));
+            synchronousMode = Convert.ToInt32(await ExecuteScalarAsync(connection, "PRAGMA synchronous;", cancellationToken).ConfigureAwait(false));
+            await db.Database.CloseConnectionAsync().ConfigureAwait(false);
         }
 
         _logger?.LogInformation(
-            "SQLite bootstrap completed for {Path}: SQLite {Version}, WAL={JournalMode}, FK={FK}, BusyTimeout={Timeout}ms, Synchronous={Sync}",
-            dbPath, sqliteVersion, journalMode, foreignKeysEnabled, busyTimeout, synchronousMode);
+            "SQLite bootstrap completed for {Path}: schema={SchemaVersion}, SQLite {Version}, WAL={JournalMode}, FK={FK}, BusyTimeout={Timeout}ms, Synchronous={Sync}",
+            dbPath, CurrentSchemaVersion, sqliteVersion, journalMode, foreignKeysEnabled, busyTimeout, synchronousMode);
 
         Console.WriteLine($"[TiToAI SQLite Bootstrap] Database: {dbPath}");
+        Console.WriteLine($"[TiToAI SQLite Bootstrap] Schema Version: {CurrentSchemaVersion}");
         Console.WriteLine($"[TiToAI SQLite Bootstrap] SQLite Version: {sqliteVersion}");
         Console.WriteLine($"[TiToAI SQLite Bootstrap] Journal Mode: {journalMode}");
         Console.WriteLine($"[TiToAI SQLite Bootstrap] Foreign Keys: {(foreignKeysEnabled ? "ON" : "OFF")}");
@@ -153,29 +115,98 @@ public class SqliteDatabaseBootstrapper : ISqliteDatabaseBootstrapper
             ForeignKeysEnabled: foreignKeysEnabled,
             BusyTimeout: busyTimeout,
             SynchronousMode: synchronousMode,
-            AppliedMigrations: appliedMigrations,
+            SchemaVersion: CurrentSchemaVersion,
+            DatabaseReset: databaseReset,
             IsBootstrapSuccessful: isSuccess);
     }
 
-    private static async Task<bool> HasUserTablesAsync(string connectionString, CancellationToken cancellationToken)
+    private static async Task ExecuteFinalSchemaAsync(SqliteConnection connection, CancellationToken cancellationToken)
     {
-        await using var connection = new SqliteConnection(connectionString);
-        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-        await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%');";
-        return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false)) != 0;
+        await using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(SchemaResourceName)
+            ?? throw new InvalidOperationException($"Embedded final schema '{SchemaResourceName}' was not found.");
+        using var reader = new StreamReader(stream);
+        var sql = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+        await ExecuteNonQueryAsync(connection, sql, cancellationToken).ConfigureAwait(false);
     }
 
-    private static string CreateMigrationBackup(string databasePath, string connectionString, CancellationToken cancellationToken)
+    private static async Task<List<string>> ListUserTablesAsync(DbConnection connection, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name;";
+        var names = new List<string>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) names.Add(reader.GetString(0));
+        return names;
+    }
+
+    private static async Task DropUserTablesAsync(SqliteConnection connection, IReadOnlyList<string> tables, CancellationToken cancellationToken)
+    {
+        await ExecuteNonQueryAsync(connection, "PRAGMA foreign_keys = OFF;", cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        foreach (var table in tables)
+        {
+            var quotedName = "\"" + table.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
+            await using var command = connection.CreateCommand();
+            command.Transaction = (SqliteTransaction)transaction;
+            command.CommandText = $"DROP TABLE {quotedName};";
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        await ExecuteNonQueryAsync(connection, "PRAGMA foreign_keys = ON;", cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task VerifyFinalSchemaAsync(DbConnection connection, CancellationToken cancellationToken)
+    {
+        var tables = await ListUserTablesAsync(connection, cancellationToken).ConfigureAwait(false);
+        if (tables.Contains("Workspace", StringComparer.OrdinalIgnoreCase)
+            || tables.Contains("Account", StringComparer.OrdinalIgnoreCase)
+            || tables.Contains("__EFMigrationsHistory", StringComparer.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Final database schema must not contain legacy Workspace/Account tables or EF migration history.");
+        }
+
+        foreach (var table in tables)
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"PRAGMA table_info(\"{table.Replace("\"", "\"\"", StringComparison.Ordinal)}\");";
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                if (string.Equals(reader.GetString(1), "workspace_id", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException($"Final database table '{table}' still contains legacy workspace_id.");
+                }
+            }
+        }
+    }
+
+    private static string CreatePreResetBackup(string databasePath, string connectionString, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var suffix = DateTime.UtcNow.ToString("yyyyMMddTHHmmssfffZ") + "-" + Guid.NewGuid().ToString("N");
-        var backupPath = $"{databasePath}.pre-migration-{suffix}.bak";
+        var backupPath = $"{databasePath}.pre-reset-{suffix}.bak";
         using var source = new SqliteConnection(connectionString);
         using var destination = new SqliteConnection(DatabasePathHelper.BuildConnectionString(backupPath));
         source.Open();
         destination.Open();
         source.BackupDatabase(destination);
         return backupPath;
+    }
+
+    private static async Task<object?> ExecuteScalarAsync(DbConnection connection, string sql, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<string> ExecuteScalarTextAsync(DbConnection connection, string sql, CancellationToken cancellationToken)
+        => (await ExecuteScalarAsync(connection, sql, cancellationToken).ConfigureAwait(false))?.ToString() ?? string.Empty;
+
+    private static async Task ExecuteNonQueryAsync(DbConnection connection, string sql, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 }

@@ -3,7 +3,6 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using TiToAI.Application.Projects;
-using TiToAI.Application.Workspaces;
 using TiToAI.Contracts.Scenes;
 using TiToAI.Infrastructure.Persistence;
 using TiToAI.Infrastructure.Persistence.Entities;
@@ -36,9 +35,8 @@ public sealed class SceneService
     /// <summary>
     /// Lấy danh sách toàn bộ Cảnh trong Dự án theo thứ tự SequenceOrder tăng dần.
     /// </summary>
-    public async Task<IReadOnlyList<SceneDto>> ListByProjectAsync(string workspaceId, string projectId, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<SceneDto>> ListByProjectAsync(string projectId, CancellationToken cancellationToken = default)
     {
-        var normalizedWorkspaceId = NormalizeAndValidateGuid(workspaceId, nameof(workspaceId));
         var normalizedProjectId = NormalizeAndValidateGuid(projectId, nameof(projectId));
 
         await using var dbContext = new TiToAIDbContext(_dbOptions);
@@ -52,14 +50,9 @@ public sealed class SceneService
             throw new ProjectNotFoundException(normalizedProjectId);
         }
 
-        if (project.WorkspaceId != normalizedWorkspaceId)
-        {
-            throw new UnauthorizedWorkspaceException($"Dự án '{normalizedProjectId}' không thuộc không gian làm việc '{normalizedWorkspaceId}'.");
-        }
-
         var scenes = await dbContext.Scenes
             .AsNoTracking()
-            .Where(s => s.ProjectId == normalizedProjectId && s.WorkspaceId == normalizedWorkspaceId)
+            .Where(s => s.ProjectId == normalizedProjectId)
             .OrderBy(s => s.SequenceOrder)
             .ToListAsync(cancellationToken);
 
@@ -67,11 +60,10 @@ public sealed class SceneService
     }
 
     /// <summary>
-    /// Lấy thông tin chi tiết một Cảnh theo chuỗi sở hữu đa cấp workspaceId -> projectId -> sceneId.
+    /// Lấy thông tin chi tiết một Cảnh theo ProjectId và SceneId.
     /// </summary>
-    public async Task<SceneDto> GetAsync(string workspaceId, string projectId, string sceneId, CancellationToken cancellationToken = default)
+    public async Task<SceneDto> GetAsync(string projectId, string sceneId, CancellationToken cancellationToken = default)
     {
-        var normalizedWorkspaceId = NormalizeAndValidateGuid(workspaceId, nameof(workspaceId));
         var normalizedProjectId = NormalizeAndValidateGuid(projectId, nameof(projectId));
         var normalizedSceneId = NormalizeAndValidateGuid(sceneId, nameof(sceneId));
 
@@ -86,11 +78,6 @@ public sealed class SceneService
             throw new ProjectNotFoundException(normalizedProjectId);
         }
 
-        if (project.WorkspaceId != normalizedWorkspaceId)
-        {
-            throw new UnauthorizedWorkspaceException($"Dự án '{normalizedProjectId}' không thuộc không gian làm việc '{normalizedWorkspaceId}'.");
-        }
-
         var scene = await dbContext.Scenes
             .AsNoTracking()
             .FirstOrDefaultAsync(s => s.Id == normalizedSceneId, cancellationToken);
@@ -100,9 +87,9 @@ public sealed class SceneService
             throw new SceneNotFoundException(normalizedSceneId);
         }
 
-        if (scene.ProjectId != normalizedProjectId || scene.WorkspaceId != normalizedWorkspaceId)
+        if (scene.ProjectId != normalizedProjectId)
         {
-            throw new UnauthorizedWorkspaceException($"Cảnh '{normalizedSceneId}' không thuộc dự án '{normalizedProjectId}' hoặc không gian làm việc '{normalizedWorkspaceId}'.");
+            throw new SceneNotFoundException(normalizedSceneId);
         }
 
         return ToSceneDto(scene);
@@ -115,7 +102,6 @@ public sealed class SceneService
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var normalizedWorkspaceId = NormalizeAndValidateGuid(request.WorkspaceId, nameof(request.WorkspaceId));
         var normalizedProjectId = NormalizeAndValidateGuid(request.ProjectId, nameof(request.ProjectId));
 
         await using var dbContext = new TiToAIDbContext(_dbOptions);
@@ -129,11 +115,6 @@ public sealed class SceneService
             throw new ProjectNotFoundException(normalizedProjectId);
         }
 
-        if (project.WorkspaceId != normalizedWorkspaceId)
-        {
-            throw new UnauthorizedWorkspaceException($"Dự án '{normalizedProjectId}' không thuộc không gian làm việc '{normalizedWorkspaceId}'.");
-        }
-
         // Validate duration nếu có
         var duration = request.TargetDurationSeconds ?? 5;
         if (duration <= 0)
@@ -142,9 +123,9 @@ public sealed class SceneService
         }
 
         // Validate Asset references nếu có
-        string? audioAssetId = await ValidateAssetReferenceAsync(dbContext, request.AudioAssetId, "Audio", normalizedWorkspaceId, cancellationToken);
-        string? imageAssetId = await ValidateAssetReferenceAsync(dbContext, request.ImageAssetId, "Image", normalizedWorkspaceId, cancellationToken);
-        string? videoAssetId = await ValidateAssetReferenceAsync(dbContext, request.VideoAssetId, "Video", normalizedWorkspaceId, cancellationToken);
+        string? audioAssetId = await ValidateAssetReferenceAsync(dbContext, request.AudioAssetId, "Audio", cancellationToken);
+        string? imageAssetId = await ValidateAssetReferenceAsync(dbContext, request.ImageAssetId, "Image", cancellationToken);
+        string? videoAssetId = await ValidateAssetReferenceAsync(dbContext, request.VideoAssetId, "Video", cancellationToken);
 
         // Validate PromptText
         string? promptText = null;
@@ -159,7 +140,7 @@ public sealed class SceneService
 
         // Tính toán SequenceOrder = max + 1
         var currentMax = await dbContext.Scenes
-            .Where(s => s.ProjectId == normalizedProjectId && s.WorkspaceId == normalizedWorkspaceId)
+            .Where(s => s.ProjectId == normalizedProjectId)
             .MaxAsync(s => (int?)s.SequenceOrder, cancellationToken) ?? 0;
 
         var nextSequence = currentMax + 1;
@@ -187,7 +168,6 @@ public sealed class SceneService
         {
             Id = newId,
             ProjectId = normalizedProjectId,
-            WorkspaceId = normalizedWorkspaceId,
             SequenceOrder = nextSequence,
             Name = sceneName,
             TargetDurationSeconds = duration,
@@ -213,7 +193,6 @@ public sealed class SceneService
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var normalizedWorkspaceId = NormalizeAndValidateGuid(request.WorkspaceId, nameof(request.WorkspaceId));
         var normalizedProjectId = NormalizeAndValidateGuid(request.ProjectId, nameof(request.ProjectId));
         var normalizedSceneId = NormalizeAndValidateGuid(request.SceneId, nameof(request.SceneId));
 
@@ -246,9 +225,9 @@ public sealed class SceneService
                     throw new SceneNotFoundException(normalizedSceneId);
                 }
 
-                if (scene.ProjectId != normalizedProjectId || scene.WorkspaceId != normalizedWorkspaceId)
+                if (scene.ProjectId != normalizedProjectId)
                 {
-                    throw new UnauthorizedWorkspaceException($"Cảnh '{normalizedSceneId}' không thuộc dự án '{normalizedProjectId}' hoặc không gian làm việc '{normalizedWorkspaceId}'.");
+                    throw new SceneNotFoundException(normalizedSceneId);
                 }
 
                 if (!string.IsNullOrEmpty(request.ExpectedRevision))
@@ -311,19 +290,19 @@ public sealed class SceneService
 
                 if (request.AudioAssetId is not null)
                 {
-                    scene.AudioAssetId = await ValidateAssetReferenceAsync(dbContext, request.AudioAssetId, "Audio", normalizedWorkspaceId, cancellationToken);
+                    scene.AudioAssetId = await ValidateAssetReferenceAsync(dbContext, request.AudioAssetId, "Audio", cancellationToken);
                     isModified = true;
                 }
 
                 if (request.ImageAssetId is not null)
                 {
-                    scene.ImageAssetId = await ValidateAssetReferenceAsync(dbContext, request.ImageAssetId, "Image", normalizedWorkspaceId, cancellationToken);
+                    scene.ImageAssetId = await ValidateAssetReferenceAsync(dbContext, request.ImageAssetId, "Image", cancellationToken);
                     isModified = true;
                 }
 
                 if (request.VideoAssetId is not null)
                 {
-                    scene.VideoAssetId = await ValidateAssetReferenceAsync(dbContext, request.VideoAssetId, "Video", normalizedWorkspaceId, cancellationToken);
+                    scene.VideoAssetId = await ValidateAssetReferenceAsync(dbContext, request.VideoAssetId, "Video", cancellationToken);
                     isModified = true;
                 }
 
@@ -360,9 +339,8 @@ public sealed class SceneService
     /// <summary>
     /// Xóa một Cảnh với Strict Active Job Guard và tự động đánh số lại SequenceOrder các cảnh còn lại.
     /// </summary>
-    public async Task<SceneDeleteResponseData> DeleteAsync(string workspaceId, string projectId, string sceneId, CancellationToken cancellationToken = default)
+    public async Task<SceneDeleteResponseData> DeleteAsync(string projectId, string sceneId, CancellationToken cancellationToken = default)
     {
-        var normalizedWorkspaceId = NormalizeAndValidateGuid(workspaceId, nameof(workspaceId));
         var normalizedProjectId = NormalizeAndValidateGuid(projectId, nameof(projectId));
         var normalizedSceneId = NormalizeAndValidateGuid(sceneId, nameof(sceneId));
 
@@ -395,15 +373,14 @@ public sealed class SceneService
                     throw new SceneNotFoundException(normalizedSceneId);
                 }
 
-                if (scene.ProjectId != normalizedProjectId || scene.WorkspaceId != normalizedWorkspaceId)
+                if (scene.ProjectId != normalizedProjectId)
                 {
-                    throw new UnauthorizedWorkspaceException($"Cảnh '{normalizedSceneId}' không thuộc dự án '{normalizedProjectId}' hoặc không gian làm việc '{normalizedWorkspaceId}'.");
+                    throw new SceneNotFoundException(normalizedSceneId);
                 }
 
                 // 1. Strict Nonterminal & Unreconciled Side-Effect Guard cho Scene:
                 bool hasActiveOrUnreconciledJobs = await dbContext.Jobs.AnyAsync(j =>
                     j.SceneId == normalizedSceneId &&
-                    j.WorkspaceId == normalizedWorkspaceId &&
                     (
                         j.State == "Queued" ||
                         j.State == "Reserved" ||
@@ -415,7 +392,7 @@ public sealed class SceneService
 
                 if (hasActiveOrUnreconciledJobs)
                 {
-                    throw new WorkspaceConcurrencyConflictException(
+                    throw new SceneConcurrencyConflictException(
                         "Không thể xóa cảnh trong khi có tác vụ đang chờ, đang chạy hoặc tác vụ có tác dụng phụ (side-effect) chưa đối soát xong.");
                 }
 
@@ -425,7 +402,7 @@ public sealed class SceneService
 
                 // 3. Tự động đánh số lại SequenceOrder liên tục 1, 2, 3... cho các cảnh còn lại trong Project
                 var remainingScenes = await dbContext.Scenes
-                    .Where(s => s.ProjectId == normalizedProjectId && s.WorkspaceId == normalizedWorkspaceId)
+                    .Where(s => s.ProjectId == normalizedProjectId)
                     .OrderBy(s => s.SequenceOrder)
                     .ToListAsync(cancellationToken);
 
@@ -465,7 +442,6 @@ public sealed class SceneService
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var normalizedWorkspaceId = NormalizeAndValidateGuid(request.WorkspaceId, nameof(request.WorkspaceId));
         var normalizedProjectId = NormalizeAndValidateGuid(request.ProjectId, nameof(request.ProjectId));
 
         if (request.SceneIds is null || request.SceneIds.Count == 0)
@@ -512,11 +488,6 @@ public sealed class SceneService
                     throw new ProjectNotFoundException(normalizedProjectId);
                 }
 
-                if (project.WorkspaceId != normalizedWorkspaceId)
-                {
-                    throw new UnauthorizedWorkspaceException($"Dự án '{normalizedProjectId}' không thuộc không gian làm việc '{normalizedWorkspaceId}'.");
-                }
-
                 // Kiểm tra optimistic concurrency cho dự án
                 if (!string.IsNullOrEmpty(request.ExpectedProjectRevision))
                 {
@@ -528,7 +499,7 @@ public sealed class SceneService
                 }
 
                 var existingScenes = await dbContext.Scenes
-                    .Where(s => s.ProjectId == normalizedProjectId && s.WorkspaceId == normalizedWorkspaceId)
+                    .Where(s => s.ProjectId == normalizedProjectId)
                     .ToListAsync(cancellationToken);
 
                 // Xác thực tập hợp phải khớp chính xác 100% với danh sách hiện tại của Project
@@ -627,7 +598,6 @@ public sealed class SceneService
         TiToAIDbContext dbContext,
         string? assetId,
         string expectedAssetType,
-        string normalizedWorkspaceId,
         CancellationToken cancellationToken)
     {
         if (assetId is null)
@@ -652,11 +622,6 @@ public sealed class SceneService
             throw new SceneValidationException($"Không tìm thấy tệp tài nguyên '{normalizedAssetId}'.");
         }
 
-        if (asset.WorkspaceId != normalizedWorkspaceId)
-        {
-            throw new UnauthorizedWorkspaceException($"Tài nguyên '{normalizedAssetId}' không thuộc không gian làm việc '{normalizedWorkspaceId}'.");
-        }
-
         if (!string.Equals(asset.AssetType, expectedAssetType, StringComparison.OrdinalIgnoreCase))
         {
             throw new SceneValidationException($"Tài nguyên '{normalizedAssetId}' là loại '{asset.AssetType}', không khớp với loại yêu cầu '{expectedAssetType}'.");
@@ -668,7 +633,6 @@ public sealed class SceneService
     private static SceneDto ToSceneDto(Scene s) => new(
         SceneId: s.Id,
         ProjectId: s.ProjectId,
-        WorkspaceId: s.WorkspaceId,
         Name: s.Name,
         SceneSequence: s.SequenceOrder,
         TargetDurationSeconds: Convert.ToInt32(s.TargetDurationSeconds),

@@ -95,7 +95,6 @@ window.chrome = {
 
             const detail: any = customDetail || {
               id: jobId || "job_default",
-              workspaceId: (req.payload.workspaceId as string) || "ws_test",
               projectId: requestedJob?.projectId || "prj_test",
               sceneId: requestedJob?.sceneId || null,
               taskType: requestedJob?.taskType || "Script",
@@ -243,7 +242,7 @@ window.chrome = {
           success,
           data: responseData,
           error: errorData,
-          contractVersion: "1.0.4",
+          contractVersion: "1.1.0",
         };
 
         const event = new domWindow.MessageEvent("message", {
@@ -291,16 +290,15 @@ async function waitForCondition(
   throw new Error(`Timeout sau ${timeoutMs}ms chờ điều kiện`);
 }
 
-function emitBridgeEvent(eventName: string, payload: unknown, workspaceId: string | null = "ws_test") {
+function emitBridgeEvent(eventName: string, payload: unknown) {
   const eventEnvelope = {
     id: `evt_${Date.now()}_${Math.random().toString(36).slice(2)}`,
     type: "event",
     eventName,
-    workspaceId,
     seq: eventSeq++,
     timestampUtc: new Date().toISOString(),
     payload,
-    contractVersion: "1.0.4",
+    contractVersion: "1.1.0",
   };
   const event = new domWindow.MessageEvent("message", {
     data: JSON.stringify(eventEnvelope),
@@ -313,11 +311,9 @@ function emitBridgeEvent(eventName: string, payload: unknown, workspaceId: strin
 // --------------------------------------------------------------------------
 
 test("AC1 (R1): Succeeded event → Running progress trễ: vẫn giữ nguyên Succeeded", async () => {
-  bridgeClient.setActiveWorkspaceId("ws_test");
   mockActiveJobs = [
     {
       id: "job_r1_test",
-      workspaceId: "ws_test",
       projectId: "prj_01",
       sceneId: "scn_01",
       taskType: "Script",
@@ -331,7 +327,7 @@ test("AC1 (R1): Succeeded event → Running progress trễ: vẫn giữ nguyên 
 
   let currentResult: any;
   function Harness() {
-    currentResult = useQueueState({ workspaceId: "ws_test", autoFetch: true });
+    currentResult = useQueueState({ autoFetch: true });
     return React.createElement("div", null, currentResult.jobs.map((j: any) => `${j.id}:${j.state}`).join(","));
   }
 
@@ -350,7 +346,6 @@ test("AC1 (R1): Succeeded event → Running progress trễ: vẫn giữ nguyên 
   await act(async () => {
     emitBridgeEvent("job.state_changed", {
       jobId: "job_r1_test",
-      workspaceId: "ws_test",
       previousState: "Running",
       newState: "Succeeded",
       reasonCode: null,
@@ -366,7 +361,6 @@ test("AC1 (R1): Succeeded event → Running progress trễ: vẫn giữ nguyên 
   await act(async () => {
     emitBridgeEvent("job.progress_updated", {
       jobId: "job_r1_test",
-      workspaceId: "ws_test",
       state: "Running",
       progressPercent: 95,
       currentStep: "Hậu kỳ trễ",
@@ -383,11 +377,9 @@ test("AC1 (R1): Succeeded event → Running progress trễ: vẫn giữ nguyên 
 });
 
 test("AC2 (R1): Response refresh cũ về sau event mới: không lùi trạng thái (fetch generation & merge guard)", async () => {
-  bridgeClient.setActiveWorkspaceId("ws_test");
   mockActiveJobs = [
     {
       id: "job_r1_refresh",
-      workspaceId: "ws_test",
       projectId: "prj_01",
       sceneId: null,
       taskType: "Script",
@@ -400,7 +392,7 @@ test("AC2 (R1): Response refresh cũ về sau event mới: không lùi trạng t
 
   let currentResult: any;
   function Harness() {
-    currentResult = useQueueState({ workspaceId: "ws_test", autoFetch: true });
+    currentResult = useQueueState({ autoFetch: true });
     return React.createElement("div", null);
   }
 
@@ -429,7 +421,6 @@ test("AC2 (R1): Response refresh cũ về sau event mới: không lùi trạng t
   await act(async () => {
     emitBridgeEvent("job.state_changed", {
       jobId: "job_r1_refresh",
-      workspaceId: "ws_test",
       previousState: "Running",
       newState: "Canceled",
       reasonCode: "user_canceled",
@@ -454,13 +445,11 @@ test("AC2 (R1): Response refresh cũ về sau event mới: không lùi trạng t
 });
 
 test("AC3 (R5): Event job ảnh/video mới: hydrate đúng taskType/scene và điều hướng chính xác", async () => {
-  bridgeClient.setActiveWorkspaceId("ws_test");
   mockActiveJobs = [];
 
   // Chuẩn bị metadata chi tiết trên backend cho job mới
   mockJobDetails.set("job_video_render_99", {
     id: "job_video_render_99",
-    workspaceId: "ws_test",
     projectId: "prj_anim_01",
     sceneId: "scene_chase_05",
     taskType: "VideoRender",
@@ -483,7 +472,7 @@ test("AC3 (R5): Event job ảnh/video mới: hydrate đúng taskType/scene và �
   let currentResult: any;
 
   function Harness() {
-    currentResult = useQueueState({ workspaceId: "ws_test", autoFetch: false });
+    currentResult = useQueueState({ autoFetch: false });
     return React.createElement(
       "div",
       null,
@@ -511,7 +500,6 @@ test("AC3 (R5): Event job ảnh/video mới: hydrate đúng taskType/scene và �
   await act(async () => {
     emitBridgeEvent("job.state_changed", {
       jobId: "job_video_render_99",
-      workspaceId: "ws_test",
       projectId: "prj_anim_01",
       previousState: "Queued",
       newState: "Running",
@@ -549,14 +537,12 @@ test("AC3 (R5): Event job ảnh/video mới: hydrate đúng taskType/scene và �
 });
 
 test("AC4 (R2): Click Retry trên QueueDrawer production: đúng command/backend semantics; Failed uncertain không được resend", async () => {
-  bridgeClient.setActiveWorkspaceId("ws_test");
 
   // Job 1: Failed uncertain (sideEffectSubmitted = 1) -> KHÔNG ĐƯỢC retry tự động!
   // Job 2: Failed safe (sideEffectSubmitted = 0, attempts = 1, maxAttempts = 3) -> ĐƯỢC retry an toàn qua reconcile
   mockActiveJobs = [
     {
       id: "job_failed_uncertain",
-      workspaceId: "ws_test",
       projectId: "prj_01",
       sceneId: null,
       taskType: "Script",
@@ -569,7 +555,6 @@ test("AC4 (R2): Click Retry trên QueueDrawer production: đúng command/backend
     },
     {
       id: "job_failed_safe",
-      workspaceId: "ws_test",
       projectId: "prj_01",
       sceneId: null,
       taskType: "Script",
@@ -638,14 +623,12 @@ test("AC4 (R2): Click Retry trên QueueDrawer production: đúng command/backend
 });
 
 test("AC5 (R3): Cancel uncertain → reload → click đối soát → resolved và nhả occupancy", async () => {
-  bridgeClient.setActiveWorkspaceId("ws_test");
   executedCommandsHistory = [];
   executedCommandsHistory = [];
 
   // Tác vụ Canceled sau reload nhưng còn slot occupancy (hasUnresolvedSideEffect = true)
   const canceledUncertainJob = {
     id: "job_canceled_unresolved_01",
-    workspaceId: "ws_test",
     projectId: "prj_01",
     sceneId: null,
     taskType: "Image",
@@ -744,11 +727,9 @@ test("AC5 (R3): Cancel uncertain → reload → click đối soát → resolved 
 });
 
 test("AC6 (R4): Click Login khi providerKey khác profileId: payload gửi đúng profileId", async () => {
-  bridgeClient.setActiveWorkspaceId("ws_test");
 
   const awaitingJob = {
     id: "job_awaiting_login",
-    workspaceId: "ws_test",
     projectId: "prj_01",
     sceneId: null,
     taskType: "Script",
@@ -810,12 +791,10 @@ test("AC6 (R4): Click Login khi providerKey khác profileId: payload gửi đún
 });
 
 test("AC7 (R6): Complete → reload: tab Hoàn tất vẫn có job; active không chứa resolved terminal", async () => {
-  bridgeClient.setActiveWorkspaceId("ws_test");
 
   // Giả lập một job đang chạy và sau đó hoàn tất thành công trong phiên
   const jobDone = {
     id: "job_completed_session_1",
-    workspaceId: "ws_test",
     projectId: "prj_01",
     sceneId: null,
     taskType: "Script",
@@ -829,7 +808,7 @@ test("AC7 (R6): Complete → reload: tab Hoàn tất vẫn có job; active khôn
 
   let currentResult: any;
   function Harness() {
-    currentResult = useQueueState({ workspaceId: "ws_test", autoFetch: true });
+    currentResult = useQueueState({ autoFetch: true });
     return React.createElement("div", null);
   }
 
@@ -847,7 +826,6 @@ test("AC7 (R6): Complete → reload: tab Hoàn tất vẫn có job; active khôn
   await act(async () => {
     emitBridgeEvent("job.state_changed", {
       jobId: jobDone.id,
-      workspaceId: "ws_test",
       previousState: "Running",
       newState: "Succeeded",
       reasonCode: null,
@@ -880,12 +858,10 @@ test("AC7 (R6): Complete → reload: tab Hoàn tất vẫn có job; active khôn
 });
 
 test("AC8: Double-click và conflict: không phát sinh request trùng lặp hoặc cập nhật giả", async () => {
-  bridgeClient.setActiveWorkspaceId("ws_test");
 
   mockActiveJobs = [
     {
       id: "job_double_click_test",
-      workspaceId: "ws_test",
       projectId: "prj_01",
       sceneId: null,
       taskType: "Script",
@@ -898,7 +874,7 @@ test("AC8: Double-click và conflict: không phát sinh request trùng lặp ho�
 
   let currentResult: any;
   function Harness() {
-    currentResult = useQueueState({ workspaceId: "ws_test", autoFetch: true });
+    currentResult = useQueueState({ autoFetch: true });
     return React.createElement("div", null);
   }
 
@@ -933,7 +909,6 @@ test("AC8: Double-click và conflict: không phát sinh request trùng lặp ho�
 });
 
 test("AC9: Keyboard navigation, Escape, focus return và hai theme không regression", async () => {
-  bridgeClient.setActiveWorkspaceId("ws_test");
   mockActiveJobs = [];
 
   const triggerButton = document.createElement("button");

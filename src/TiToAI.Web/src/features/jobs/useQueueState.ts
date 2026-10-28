@@ -13,7 +13,6 @@ import { jobApi } from "./jobApi";
 export type JobItem = JobSummaryDto;
 
 export interface UseQueueStateOptions {
-  workspaceId?: string;
   autoFetch?: boolean;
   isOpen?: boolean;
 }
@@ -45,7 +44,7 @@ export interface UseQueueStateReturn {
   handleReconcile: (request: JobReconcileRequest) => Promise<boolean>;
   handleRequestLogin: (profileId: string) => Promise<boolean>;
   handleRetry: (job: JobSummaryDto | JobDetailDto) => Promise<boolean>;
-  fetchJobDetail: (workspaceId: string, jobId: string) => Promise<JobDetailDto | null>;
+  fetchJobDetail: (jobId: string) => Promise<JobDetailDto | null>;
 }
 
 export function matchesTab(state: JobState, tab: QueueTabFilter): boolean {
@@ -78,7 +77,7 @@ function createErrorDto(code: string, message: string): ErrorDto {
 }
 
 export function useQueueState(options: UseQueueStateOptions = {}): UseQueueStateReturn {
-  const { workspaceId, autoFetch = true, isOpen } = options;
+  const { autoFetch = true, isOpen } = options;
 
   const [jobs, setJobs] = useState<JobItem[]>([]);
   const [historyJobs, setHistoryJobs] = useState<JobItem[]>([]);
@@ -110,7 +109,7 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
   // T17-R6: Tải lịch sử hoàn tất từ backend qua job.list_history
   const loadHistory = useCallback(async () => {
     try {
-      const res = await jobApi.listHistory({ workspaceId, pageSize: 50 });
+      const res = await jobApi.listHistory({ pageSize: 50 });
       if (res?.items) {
         setHistoryJobs(res.items);
         for (const item of res.items) {
@@ -120,7 +119,7 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
     } catch (err) {
       console.warn("[TiToAI Queue] Failed to load history jobs:", err);
     }
-  }, [workspaceId]);
+  }, []);
 
   // T17-R1 & T17-R6: Refresh có kiểm soát generation và merge snapshot an toàn theo logical revision
   const refresh = useCallback(async () => {
@@ -130,7 +129,7 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
     setError(null);
 
     try {
-      const activeJobs = await jobApi.listActive(workspaceId);
+      const activeJobs = await jobApi.listActive();
 
       // Nếu đã có một request refresh mới hơn: discard response cũ
       if (currentGen !== fetchGenerationRef.current) {
@@ -181,10 +180,8 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
         // 2. Bổ sung các job hoàn tất từ lịch sử phiên nếu có
         for (const [historyId, historyJob] of completedHistoryRef.current.entries()) {
           if (!seenIds.has(historyId)) {
-            if (!workspaceId || historyJob.workspaceId === workspaceId) {
-              mergedJobs.push(historyJob);
-              seenIds.add(historyId);
-            }
+            mergedJobs.push(historyJob);
+            seenIds.add(historyId);
           }
         }
 
@@ -208,7 +205,7 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
         setIsLoading(false);
       }
     }
-  }, [workspaceId, activeTab, loadHistory]);
+  }, [activeTab, loadHistory]);
 
   // Tự động tải dữ liệu ban đầu hoặc khi mở drawer
   useEffect(() => {
@@ -231,9 +228,9 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
   }, [activeTab, loadHistory]);
 
   // T17-R5: Hàm hydrate chi tiết tác vụ bất đồng bộ từ backend
-  const hydrateJob = useCallback(async (wsId: string, jobId: string) => {
+  const hydrateJob = useCallback(async (jobId: string) => {
     try {
-      const detail = await jobApi.getStatus(wsId, jobId);
+      const detail = await jobApi.getStatus(jobId);
       setJobs((prevJobs) =>
         prevJobs.map((j) => {
           if (j.id !== jobId) return j;
@@ -320,7 +317,6 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
         const isTerminal = isTerminalState(payload.newState);
         const newJob: JobItem = {
           id: payload.jobId,
-          workspaceId: payload.workspaceId,
           projectId: payload.projectId ?? "",
           sceneId: null,
           // Placeholder loading khi chưa hydrate, KHÔNG gán Script hay attempts=1 giả
@@ -339,7 +335,7 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
         if (isTerminal) {
           completedHistoryRef.current.set(payload.jobId, newJob);
         } else if (ACTIVE_STATES.includes(payload.newState)) {
-          void hydrateJob(payload.workspaceId, payload.jobId);
+          void hydrateJob(payload.jobId);
         }
 
         const newList = [newJob, ...prevJobs];
@@ -391,9 +387,9 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
 
   // Chi tiết job khi người dùng chọn
   const fetchJobDetail = useCallback(
-    async (wsId: string, jobId: string): Promise<JobDetailDto | null> => {
+    async (jobId: string): Promise<JobDetailDto | null> => {
       try {
-        const detail = await jobApi.getStatus(wsId, jobId);
+        const detail = await jobApi.getStatus(jobId);
         setSelectedJobDetail(detail);
 
         setJobs((prevJobs) =>
@@ -428,7 +424,7 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
     }
     const currentJob = jobs.find((j) => j.id === selectedJobId);
     if (currentJob) {
-      void fetchJobDetail(currentJob.workspaceId, currentJob.id);
+      void fetchJobDetail(currentJob.id);
     }
   }, [selectedJobId, jobs, fetchJobDetail]);
 
@@ -441,7 +437,7 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
       actionLoadingRef.current.add(job.id);
       setIsActionLoading((prev) => ({ ...prev, [job.id]: true }));
       try {
-        const res = await jobApi.cancel(job.workspaceId, job.id);
+        const res = await jobApi.cancel(job.id);
         setJobs((prevJobs) =>
           prevJobs.map((j) => {
             if (j.id !== job.id) return j;
@@ -488,7 +484,7 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
       actionLoadingRef.current.add(job.id);
       setIsActionLoading((prev) => ({ ...prev, [job.id]: true }));
       try {
-        const res = await jobApi.resume(job.workspaceId, job.id);
+        const res = await jobApi.resume(job.id);
         setJobs((prevJobs) =>
           prevJobs.map((j) =>
             j.id === job.id ? { ...j, state: res.state, reasonCode: null, revision: (j.revision ?? 1) + 1 } : j
@@ -599,7 +595,7 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
 
       if (sideEffect === undefined || maxAttempts === undefined || currentRevision === undefined) {
         try {
-          const detail = await jobApi.getStatus(job.workspaceId, job.id);
+          const detail = await jobApi.getStatus(job.id);
           sideEffect = detail.sideEffectSubmitted;
           attempts = detail.attempts;
           maxAttempts = detail.maxAttempts;
@@ -652,7 +648,7 @@ export function useQueueState(options: UseQueueStateOptions = {}): UseQueueState
       try {
         // C2: Gọi job.retry với expectedRevision chuẩn xác
         const expectedRev = currentRevision ?? 1;
-        const res = await jobApi.retry(job.workspaceId, job.id, expectedRev);
+        const res = await jobApi.retry(job.id, expectedRev);
 
         setJobs((prevJobs) =>
           prevJobs.map((j) =>

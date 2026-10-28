@@ -91,11 +91,9 @@ public sealed partial class ProjectWorkflowService
     /// Lấy danh sách nội dung kịch bản và prompt của Dự án dạng bảng để người dùng xem và quyết định tạo video.
     /// </summary>
     public async Task<IReadOnlyList<VideoContentItemDto>> ListVideoContentItemsAsync(
-        string workspaceId,
         string projectId,
         CancellationToken cancellationToken = default)
     {
-        var normalizedWorkspaceId = NormalizeAndValidateGuid(workspaceId, nameof(workspaceId));
         var normalizedProjectId = NormalizeAndValidateGuid(projectId, nameof(projectId));
 
         await using var dbContext = new TiToAIDbContext(_dbOptions);
@@ -118,7 +116,7 @@ public sealed partial class ProjectWorkflowService
         // Đồng bộ dữ liệu mới nhất từ Scene (VideoAssetId, ImageAssetId, Name, PromptText)
         var scenes = await dbContext.Scenes
             .AsNoTracking()
-            .Where(s => s.ProjectId == normalizedProjectId && s.WorkspaceId == normalizedWorkspaceId)
+            .Where(s => s.ProjectId == normalizedProjectId)
             .OrderBy(s => s.SequenceOrder)
             .ToListAsync(cancellationToken).ConfigureAwait(false);
 
@@ -130,7 +128,6 @@ public sealed partial class ProjectWorkflowService
                 list.Add(new VideoContentItemDto(
                     Id: sc.Id,
                     ProjectId: sc.ProjectId,
-                    WorkspaceId: sc.WorkspaceId,
                     SceneId: sc.Id,
                     SequenceOrder: sc.SequenceOrder,
                     Idea: sc.Name,
@@ -176,11 +173,10 @@ public sealed partial class ProjectWorkflowService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var normalizedWorkspaceId = NormalizeAndValidateGuid(request.WorkspaceId, nameof(request.WorkspaceId));
         var normalizedProjectId = NormalizeAndValidateGuid(request.ProjectId, nameof(request.ProjectId));
 
         await using var dbContext = new TiToAIDbContext(_dbOptions);
-        var items = await ListVideoContentItemsAsync(normalizedWorkspaceId, normalizedProjectId, cancellationToken).ConfigureAwait(false);
+        var items = await ListVideoContentItemsAsync(normalizedProjectId, cancellationToken).ConfigureAwait(false);
         var existing = items.FirstOrDefault(i => i.Id == request.Id || i.SceneId == request.Id);
 
         if (existing == null)
@@ -223,7 +219,6 @@ public sealed partial class ProjectWorkflowService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var normalizedWorkspaceId = NormalizeAndValidateGuid(request.WorkspaceId, nameof(request.WorkspaceId));
         var normalizedProjectId = NormalizeAndValidateGuid(request.ProjectId, nameof(request.ProjectId));
 
         if (_jobService == null)
@@ -232,9 +227,18 @@ public sealed partial class ProjectWorkflowService
         }
 
         await using var dbContext = new TiToAIDbContext(_dbOptions);
-        var config = await GetWorkflowConfigAsync(normalizedWorkspaceId, normalizedProjectId, cancellationToken).ConfigureAwait(false);
+        var config = await GetWorkflowConfigAsync(normalizedProjectId, cancellationToken).ConfigureAwait(false);
 
-        var items = await ListVideoContentItemsAsync(normalizedWorkspaceId, normalizedProjectId, cancellationToken).ConfigureAwait(false);
+        var projectScenes = await dbContext.Scenes.AsNoTracking()
+            .Where(s => s.ProjectId == normalizedProjectId)
+            .OrderBy(s => s.SequenceOrder)
+            .ToListAsync(cancellationToken).ConfigureAwait(false);
+        if (projectScenes.Count > 1)
+        {
+            return await EnqueueProjectRenderAsync(dbContext, normalizedProjectId, config, projectScenes, cancellationToken).ConfigureAwait(false);
+        }
+
+        var items = await ListVideoContentItemsAsync(normalizedProjectId, cancellationToken).ConfigureAwait(false);
         var targetItem = !string.IsNullOrWhiteSpace(request.ContentItemId)
             ? items.FirstOrDefault(i => i.Id == request.ContentItemId)
             : (!string.IsNullOrWhiteSpace(request.SceneId)
@@ -278,11 +282,11 @@ public sealed partial class ProjectWorkflowService
             AudioAssetId: audioAssetId,
             DurationSeconds: scene != null && scene.TargetDurationSeconds > 0 ? Convert.ToInt32(scene.TargetDurationSeconds) : config.TargetDurationPerSceneSeconds,
             AudioOption: audioAssetId != null ? AudioOptions.CustomAudio : AudioOptions.None,
-            MediaRoles: new Dictionary<string, string> { ["SourceImage"] = imageAssetId ?? string.Empty }
+            MediaRoles: new Dictionary<string, string> { ["SourceImage"] = imageAssetId ?? string.Empty },
+            ImageAssetIds: string.IsNullOrWhiteSpace(imageAssetId) ? null : new[] { imageAssetId }
         );
 
         var enqueueRequest = new JobEnqueueRequest(
-            WorkspaceId: normalizedWorkspaceId,
             ProjectId: normalizedProjectId,
             SceneId: targetSceneId,
             TaskType: JobTaskType.VideoRender,
@@ -318,10 +322,9 @@ public sealed partial class ProjectWorkflowService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var normalizedWorkspaceId = NormalizeAndValidateGuid(request.WorkspaceId, nameof(request.WorkspaceId));
         var normalizedProjectId = NormalizeAndValidateGuid(request.ProjectId, nameof(request.ProjectId));
 
-        var config = await GetWorkflowConfigAsync(normalizedWorkspaceId, normalizedProjectId, cancellationToken);
+        var config = await GetWorkflowConfigAsync(normalizedProjectId, cancellationToken);
         var composer = new VideoWorkflowPromptComposer(_dbOptions);
 
         await using var dbContext = new TiToAIDbContext(_dbOptions);
@@ -338,7 +341,7 @@ public sealed partial class ProjectWorkflowService
         {
             targetScene = await dbContext.Scenes
                 .AsNoTracking()
-                .Where(s => s.ProjectId == normalizedProjectId && s.WorkspaceId == normalizedWorkspaceId)
+                .Where(s => s.ProjectId == normalizedProjectId)
                 .OrderBy(s => s.SequenceOrder)
                 .FirstOrDefaultAsync(cancellationToken);
         }
@@ -349,7 +352,6 @@ public sealed partial class ProjectWorkflowService
             {
                 Id = "preview-scene-1",
                 ProjectId = normalizedProjectId,
-                WorkspaceId = normalizedWorkspaceId,
                 SequenceOrder = 1,
                 Name = "Clip 1",
                 TargetDurationSeconds = config.TargetDurationPerSceneSeconds > 0 ? config.TargetDurationPerSceneSeconds : 15,
@@ -360,7 +362,6 @@ public sealed partial class ProjectWorkflowService
         }
 
         var composition = await composer.ComposeVideoPromptAiRequestAsync(
-            normalizedWorkspaceId,
             config,
             targetScene,
             cancellationToken);
@@ -368,11 +369,73 @@ public sealed partial class ProjectWorkflowService
         return new PreviewAiPromptResponseData(
             TemplateId: composition.TemplateId,
             TemplateName: composition.TemplateName,
-            VersionId: composition.VersionId,
-            IsOverride: composition.IsOverride,
-            UserBrief: composition.UserBrief,
             ComposedPrompt: composition.ComposedPrompt,
             OutputContractVersion: composition.OutputContractVersion
         );
+    }
+
+    /// <summary>Gửi một job render cho cả Project: ảnh đi theo thứ tự phân cảnh, thời lượng là tổng các phân cảnh.</summary>
+    private async Task<int> EnqueueProjectRenderAsync(
+        TiToAIDbContext dbContext,
+        string projectId,
+        ProjectWorkflowConfigDto config,
+        IReadOnlyList<Scene> scenes,
+        CancellationToken cancellationToken)
+    {
+        var missing = scenes.FirstOrDefault(s => string.IsNullOrWhiteSpace(s.ImageAssetId));
+        if (missing != null)
+        {
+            throw new ProjectWorkflowValidationException(
+                $"Phân cảnh {missing.SequenceOrder} chưa có ảnh. Hãy tạo ảnh cho mọi phân cảnh trước khi render.");
+        }
+
+        var hasActiveRender = await dbContext.Jobs.AsNoTracking().AnyAsync(j =>
+            j.ProjectId == projectId && j.TaskType == JobTaskType.VideoRender &&
+            (j.State == JobState.Queued || j.State == JobState.Reserved || j.State == JobState.Running || j.State == JobState.AwaitingUser),
+            cancellationToken).ConfigureAwait(false);
+        if (hasActiveRender)
+        {
+            throw new ProjectWorkflowValidationException("Dự án đã có tác vụ render đang chạy.");
+        }
+
+        var duration = scenes.Sum(s => Convert.ToInt32(s.TargetDurationSeconds));
+        var first = scenes[0];
+        var snapshot = new JobMediaSnapshotDto(
+            ModelAssetId: config.ModelAssetId,
+            ProductAssetId: config.ProductAssetId,
+            ReadyImageAssetId: config.ReadyImageAssetId,
+            SourceImageAssetId: first.ImageAssetId,
+            AudioOption: AudioOptions.None,
+            DurationSeconds: duration,
+            MediaRoles: new Dictionary<string, string> { ["SourceImage"] = first.ImageAssetId! },
+            ImageAssetIds: scenes.Select(s => s.ImageAssetId!).ToArray()
+        );
+
+        var response = await _jobService!.EnqueueAsync(new JobEnqueueRequest(
+            ProjectId: projectId,
+            SceneId: first.Id,
+            TaskType: JobTaskType.VideoRender,
+            CustomPromptText: BuildProjectRenderPrompt(scenes, duration),
+            WorkflowRunId: config.CurrentRunId,
+            WorkflowStepKey: "render.project",
+            MediaSnapshot: snapshot), cancellationToken).ConfigureAwait(false);
+        if (response == null) return 0;
+
+        await UpdateContentItemVideoStatusAsync(dbContext, projectId, first.Id, null, "Queued", DateTimeOffset.UtcNow.ToString("o"), cancellationToken).ConfigureAwait(false);
+        return 1;
+    }
+
+    private static string BuildProjectRenderPrompt(IReadOnlyList<Scene> scenes, int duration)
+    {
+        var lines = new List<string> { $"Tạo một video dọc 9:16 dài {duration} giây, ghép các phân cảnh theo đúng thứ tự sau:" };
+        var start = 0;
+        foreach (var scene in scenes)
+        {
+            var end = start + Convert.ToInt32(scene.TargetDurationSeconds);
+            var detail = string.IsNullOrWhiteSpace(scene.PromptText) ? scene.Name : scene.PromptText;
+            lines.Add($"{start}–{end} giây: {detail}");
+            start = end;
+        }
+        return string.Join('\n', lines);
     }
 }

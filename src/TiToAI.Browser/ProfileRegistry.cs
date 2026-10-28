@@ -64,16 +64,10 @@ public sealed class ProfileRegistry : IProfileRegistry
         return MapToInfo(entity);
     }
 
-    public async Task<IReadOnlyList<BrowserProfileInfo>> ListProfilesAsync(string? workspaceId = null, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<BrowserProfileInfo>> ListProfilesAsync(CancellationToken cancellationToken = default)
     {
         await using var db = _dbContextFactory();
         IQueryable<BrowserProfile> query = db.BrowserProfiles.AsNoTracking().Where(p => p.Lifecycle != "Deleted");
-
-        if (!string.IsNullOrWhiteSpace(workspaceId))
-        {
-            // Trả về Shared AI toàn app kèm các profile thuộc workspace đó
-            query = query.Where(p => p.Kind == BrowserProfileKind.SharedAI || p.WorkspaceId == workspaceId);
-        }
 
         var entities = await query.ToListAsync(cancellationToken);
         return entities.Select(MapToInfo).ToList();
@@ -82,7 +76,6 @@ public sealed class ProfileRegistry : IProfileRegistry
     public async Task<BrowserProfileInfo> EnsureProfileAsync(
         string profileId,
         string kind,
-        string? workspaceId = null,
         string? accountIdentity = null,
         CancellationToken cancellationToken = default)
     {
@@ -103,7 +96,6 @@ public sealed class ProfileRegistry : IProfileRegistry
             {
                 Id = profileId,
                 Kind = kind,
-                WorkspaceId = workspaceId,
                 AccountIdentity = accountIdentity,
                 VisibilityState = BrowserVisibilityState.Hidden,
                 SessionStatus = BrowserSessionStatus.Unverified,
@@ -119,7 +111,6 @@ public sealed class ProfileRegistry : IProfileRegistry
         {
             bool modified = false;
             if (existing.Kind != kind) { existing.Kind = kind; modified = true; }
-            if (workspaceId != null && existing.WorkspaceId != workspaceId) { existing.WorkspaceId = workspaceId; modified = true; }
             if (accountIdentity != null && existing.AccountIdentity != accountIdentity) { existing.AccountIdentity = accountIdentity; modified = true; }
 
             if (modified)
@@ -293,7 +284,6 @@ public sealed class ProfileRegistry : IProfileRegistry
         {
             ProfileId = entity.Id,
             Kind = entity.Kind,
-            WorkspaceId = entity.WorkspaceId,
             AccountIdentity = entity.AccountIdentity,
             ProviderKey = entity.ProviderKey,
             DisplayName = entity.DisplayName,

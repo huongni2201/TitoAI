@@ -39,7 +39,6 @@ export type SceneWorkflowStatus = (typeof SceneWorkflowStatus)[keyof typeof Scen
 
 export interface ProjectWorkflowConfigDto {
   projectId: string;
-  workspaceId: string;
   workflowMode: WorkflowMode;
   goalPrompt: string;
   modelAssetId: string | null;
@@ -58,7 +57,6 @@ export interface ProjectWorkflowConfigDto {
 }
 
 export interface SaveProjectWorkflowConfigRequest {
-  workspaceId: string;
   projectId: string;
   workflowMode: WorkflowMode;
   goalPrompt: string;
@@ -76,7 +74,6 @@ export interface SaveProjectWorkflowConfigRequest {
 export interface SceneWorkflowDetailDto {
   sceneId: string;
   projectId: string;
-  workspaceId: string;
   sequenceOrder: number;
   name: string;
   targetDurationSeconds: number;
@@ -106,7 +103,6 @@ export interface StartProjectWorkflowResponseData {
 }
 
 export interface UpdateSceneWorkflowInputRequest {
-  workspaceId: string;
   projectId: string;
   sceneId: string;
   imageStrategy?: string;
@@ -119,7 +115,6 @@ export interface UpdateSceneWorkflowInputRequest {
 }
 
 export interface PreviewAiPromptRequest {
-  workspaceId: string;
   projectId: string;
   sceneId?: string | null;
 }
@@ -127,9 +122,6 @@ export interface PreviewAiPromptRequest {
 export interface PreviewAiPromptResponseData {
   templateId: string;
   templateName: string;
-  versionId: string;
-  isOverride: boolean;
-  userBrief: string;
   composedPrompt: string;
   outputContractVersion: number;
 }
@@ -137,7 +129,6 @@ export interface PreviewAiPromptResponseData {
 export interface VideoContentItemDto {
   id: string;
   projectId: string;
-  workspaceId: string;
   sceneId?: string | null;
   sequenceOrder: number;
   idea: string;
@@ -153,8 +144,12 @@ export interface VideoContentItemDto {
   updatedAtUtc: string;
 }
 
+export interface StoryboardContent {
+  durationSeconds: number;
+  shots: { startSeconds: number; endSeconds: number; description: string; imagePrompt: string; imageAssetId?: string | null }[];
+}
+
 export interface UpdateVideoContentItemRequest {
-  workspaceId: string;
   projectId: string;
   itemId: string;
   idea?: string;
@@ -165,7 +160,6 @@ export interface UpdateVideoContentItemRequest {
 }
 
 export interface CreateSceneVideoRequest {
-  workspaceId: string;
   projectId: string;
   itemId: string;
 }
@@ -173,11 +167,16 @@ export interface CreateSceneVideoRequest {
 export const DEFAULT_SUPPORTED_DURATIONS = [10, 15] as const;
 
 export const videoWorkflowApi = {
-  async getConfig(workspaceId: string, projectId: string): Promise<ProjectWorkflowConfigDto> {
+  async getStoryboard(projectId: string): Promise<StoryboardContent | null> {
+    const data = await bridgeClient.invoke<{ storyboard: StoryboardContent | null }>(
+      "workflow.get_storyboard", { projectId },
+    );
+    return data?.storyboard ?? null;
+  },
+  async getConfig(projectId: string): Promise<ProjectWorkflowConfigDto> {
     const data = await bridgeClient.invoke<ProjectWorkflowConfigDto>(
       "workflow.get_config",
-      { workspaceId, projectId },
-      { workspaceId }
+      { projectId },
     );
     return data!;
   },
@@ -186,25 +185,22 @@ export const videoWorkflowApi = {
     const data = await bridgeClient.invoke<ProjectWorkflowConfigDto>(
       "workflow.save_config",
       req,
-      { workspaceId: req.workspaceId }
     );
     return data!;
   },
 
-  async startWorkflow(workspaceId: string, projectId: string): Promise<StartProjectWorkflowResponseData> {
+  async startWorkflow(projectId: string): Promise<StartProjectWorkflowResponseData> {
     const data = await bridgeClient.invoke<StartProjectWorkflowResponseData>(
       "workflow.start",
-      { workspaceId, projectId },
-      { workspaceId }
+      { projectId },
     );
     return data!;
   },
 
-  async listScenes(workspaceId: string, projectId: string): Promise<SceneWorkflowDetailDto[]> {
+  async listScenes(projectId: string): Promise<SceneWorkflowDetailDto[]> {
     const res = await bridgeClient.invoke<{ scenes: SceneWorkflowDetailDto[] }>(
       "workflow.list_scenes",
-      { workspaceId, projectId },
-      { workspaceId }
+      { projectId },
     );
     return res?.scenes || [];
   },
@@ -213,25 +209,22 @@ export const videoWorkflowApi = {
     const data = await bridgeClient.invoke<SceneWorkflowDetailDto>(
       "workflow.update_scene_input",
       req,
-      { workspaceId: req.workspaceId }
     );
     return data!;
   },
 
-  async pauseWorkflow(workspaceId: string, projectId: string): Promise<ProjectWorkflowConfigDto> {
+  async pauseWorkflow(projectId: string): Promise<ProjectWorkflowConfigDto> {
     const data = await bridgeClient.invoke<ProjectWorkflowConfigDto>(
       "workflow.pause",
-      { workspaceId, projectId },
-      { workspaceId }
+      { projectId },
     );
     return data!;
   },
 
-  async resumeWorkflow(workspaceId: string, projectId: string): Promise<ProjectWorkflowConfigDto> {
+  async resumeWorkflow(projectId: string): Promise<ProjectWorkflowConfigDto> {
     const data = await bridgeClient.invoke<ProjectWorkflowConfigDto>(
       "workflow.resume",
-      { workspaceId, projectId },
-      { workspaceId }
+      { projectId },
     );
     return data!;
   },
@@ -240,16 +233,14 @@ export const videoWorkflowApi = {
     const data = await bridgeClient.invoke<PreviewAiPromptResponseData>(
       "workflow.preview_ai_prompt",
       req,
-      { workspaceId: req.workspaceId }
     );
     return data!;
   },
 
-  async listContentItems(workspaceId: string, projectId: string): Promise<VideoContentItemDto[]> {
+  async listContentItems(projectId: string): Promise<VideoContentItemDto[]> {
     const res = await bridgeClient.invoke<{ items: VideoContentItemDto[] }>(
       "workflow.list_content_items",
-      { workspaceId, projectId },
-      { workspaceId }
+      { projectId },
     );
     return res?.items || [];
   },
@@ -258,7 +249,6 @@ export const videoWorkflowApi = {
     const data = await bridgeClient.invoke<{ item: VideoContentItemDto }>(
       "workflow.update_content_item",
       req,
-      { workspaceId: req.workspaceId }
     );
     return data?.item!;
   },
@@ -267,7 +257,6 @@ export const videoWorkflowApi = {
     const data = await bridgeClient.invoke<unknown>(
       "workflow.create_scene_video",
       req,
-      { workspaceId: req.workspaceId }
     );
     return data;
   },

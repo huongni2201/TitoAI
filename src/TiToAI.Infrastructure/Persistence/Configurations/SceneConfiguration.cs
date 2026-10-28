@@ -22,11 +22,6 @@ public class SceneConfiguration : IEntityTypeConfiguration<Scene>
             .HasColumnType("TEXT")
             .IsRequired();
 
-        builder.Property(s => s.WorkspaceId)
-            .HasColumnName("workspace_id")
-            .HasColumnType("TEXT")
-            .IsRequired();
-
         builder.Property(s => s.SequenceOrder)
             .HasColumnName("sequence_order")
             .HasColumnType("INTEGER")
@@ -76,8 +71,7 @@ public class SceneConfiguration : IEntityTypeConfiguration<Scene>
 
         builder.HasOne(s => s.Project)
             .WithMany()
-            .HasForeignKey(s => new { s.ProjectId, s.WorkspaceId })
-            .HasPrincipalKey(p => new { p.Id, p.WorkspaceId })
+            .HasForeignKey(s => s.ProjectId)
             .OnDelete(DeleteBehavior.Cascade);
 
         builder.HasOne(s => s.AudioAsset)
@@ -95,10 +89,11 @@ public class SceneConfiguration : IEntityTypeConfiguration<Scene>
             .HasForeignKey(s => s.VideoAssetId)
             .OnDelete(DeleteBehavior.SetNull);
 
-        builder.HasAlternateKey(s => new { s.Id, s.WorkspaceId })
-            .HasName("uq_scene_id_workspace");
+        builder.HasAlternateKey(s => new { s.Id, s.ProjectId })
+            .HasName("uq_scene_id_project");
 
-        builder.HasAlternateKey(s => new { s.Id, s.ProjectId, s.WorkspaceId })
-            .HasName("uq_scene_id_project_workspace");
+        builder.HasIndex(s => new { s.ProjectId, s.SequenceOrder })
+            .IsUnique()
+            .HasDatabaseName("uq_scene_project_sequence");
     }
 }

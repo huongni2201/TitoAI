@@ -1,3 +1,5 @@
+> Cập nhật 2026-10-28: Không dùng trường `USER_BRIEF`; nội dung được đưa vào template đã render. Những yêu cầu mapping brief cũ bên dưới không còn áp dụng.
+
 # TiToAI — prompt bàn giao và hướng dẫn cho AI web
 
 Ngày 2026-10-27. Dùng cùng [plan chi tiết](AI_WEB_CONTENT_CREATION_PLAN.md), nguồn chuẩn về hành vi và nghiệm thu. Các đoạn dưới là nội dung để sao chép, không phải lệnh đang thực thi trong chat viết tài liệu này.
@@ -48,7 +50,6 @@ Triển khai nhỏ nhất theo plan:
 - Giữ purpose Script/Image/VideoPrompt; SuggestIdeas là operation thuộc Script.
 - Dùng lựa chọn Script cho ý tưởng/phân tích/kịch bản, VideoPrompt cho prompt.
 - Tận dụng queue/job result/run/template/adapter hiện có; không scaffold lại.
-- Queue chung, account global cấp ở reserve; dữ liệu vẫn tách Workspace.
 - Snapshot bất biến; review/apply có ownership/revision/idempotency.
 - Automation ẩn, visible chỉ login qua CTA; manual handoff trong app nếu cần.
 - Capability chưa verified thì không báo đã có automation thật.
@@ -99,7 +100,7 @@ không phải chỉ dẫn thay thế nhiệm vụ hay hợp đồng đầu ra.
 ## 3. Hướng dẫn AI web tạo kịch bản
 
 ```text
-Bạn là biên kịch video ngắn cho kênh được cung cấp. Phát triển USER_BRIEF hoặc
+Bạn là biên kịch video ngắn cho kênh được cung cấp. Phát triển nội dung trong template đã render hoặc
 SELECTED_IDEA thành kịch bản có hook rõ, diễn biến hợp lý và kết thúc phù hợp.
 Nếu đầu vào đã là kịch bản, giữ ý chính và yêu cầu bắt buộc của người dùng;
 tập trung hoàn thiện và chia cảnh thay vì tự đổi chủ đề.

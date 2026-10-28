@@ -58,32 +58,16 @@ public static class BrowserSessionCheckpointSmokeTests
         return (connection, () => new TiToAIDbContext(options));
     }
 
-    private static async Task<(string WorkspaceId, string ProjectId)> EnsureWorkspaceAndProjectAsync(
+    private static async Task<string> EnsureProjectAsync(
         TiToAIDbContext db,
-        string wsId = "ws1",
-        string prjId = "proj1")
+        string projectId = "proj1")
     {
         var nowIso = DateTime.UtcNow.ToString("o");
-        if (!await db.Workspaces.AnyAsync(w => w.Id == wsId))
-        {
-            db.Workspaces.Add(new Workspace
-            {
-                Id = wsId,
-                Name = "Workspace Smoke Test",
-                ChannelHandle = "@smoke_channel",
-                Topic = "AI Video Generation",
-                Status = "Active",
-                CreatedAtUtc = nowIso,
-                UpdatedAtUtc = nowIso
-            });
-        }
-
-        if (!await db.Projects.AnyAsync(p => p.Id == prjId))
+        if (!await db.Projects.AnyAsync(p => p.Id == projectId))
         {
             db.Projects.Add(new Project
             {
-                Id = prjId,
-                WorkspaceId = wsId,
+                Id = projectId,
                 Name = "Project Smoke Test",
                 CreatedAtUtc = nowIso,
                 UpdatedAtUtc = nowIso
@@ -91,7 +75,7 @@ public static class BrowserSessionCheckpointSmokeTests
         }
 
         await db.SaveChangesAsync();
-        return (wsId, prjId);
+        return projectId;
     }
 
     private static async Task EnsureProviderAccountAsync(
@@ -140,10 +124,10 @@ public static class BrowserSessionCheckpointSmokeTests
             await registry.UpdateProfileStateAsync("profile_a", sessionStatus: BrowserSessionStatus.Connected, operationalState: BrowserOperationalState.Running);
             await registry.UpdateProfileStateAsync("profile_b", sessionStatus: BrowserSessionStatus.Connected, operationalState: BrowserOperationalState.Running);
 
-            // Cài đặt dữ liệu DB: Workspace, Project, ProviderAccounts, Jobs và ExecutionBindings
+            // Seed DB: Project, ProviderAccounts, Jobs và ExecutionBindings
             await using (var db = factory())
             {
-                var (wsId, prjId) = await EnsureWorkspaceAndProjectAsync(db, "ws1", "proj1");
+                var prjId = await EnsureProjectAsync(db, "proj1");
                 await EnsureProviderAccountAsync(db, "acc_a", "profile_a", "chatgpt-web");
                 await EnsureProviderAccountAsync(db, "acc_b", "profile_b", "gemini-web");
 
@@ -153,7 +137,6 @@ public static class BrowserSessionCheckpointSmokeTests
                     new Job
                     {
                         Id = "job_a1",
-                        WorkspaceId = wsId,
                         ProjectId = prjId,
                         TaskType = JobTaskType.Script,
                         State = JobState.Running,
@@ -164,7 +147,6 @@ public static class BrowserSessionCheckpointSmokeTests
                     new Job
                     {
                         Id = "job_a2",
-                        WorkspaceId = wsId,
                         ProjectId = prjId,
                         TaskType = JobTaskType.Script,
                         State = JobState.Reserved,
@@ -175,7 +157,6 @@ public static class BrowserSessionCheckpointSmokeTests
                     new Job
                     {
                         Id = "job_b1",
-                        WorkspaceId = wsId,
                         ProjectId = prjId,
                         TaskType = JobTaskType.Script,
                         State = JobState.Running,
@@ -303,12 +284,11 @@ public static class BrowserSessionCheckpointSmokeTests
             // Tình huống C: Kiểm tra qua database SQLite
             await using (var db = factory())
             {
-                var (wsId, prjId) = await EnsureWorkspaceAndProjectAsync(db, "ws1", "proj1");
+                var prjId = await EnsureProjectAsync(db, "proj1");
                 var nowIso = DateTime.UtcNow.ToString("o");
                 db.Jobs.Add(new Job
                 {
                     Id = "job_db_inflight",
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     TaskType = JobTaskType.Script,
                     State = JobState.Running,
@@ -378,7 +358,7 @@ public static class BrowserSessionCheckpointSmokeTests
 
             await using (var db = factory())
             {
-                var (wsId, prjId) = await EnsureWorkspaceAndProjectAsync(db, "ws1", "proj1");
+                var prjId = await EnsureProjectAsync(db, "proj1");
                 await EnsureProviderAccountAsync(db, "acc_auth_ok", "profile_auth_ok", "chatgpt-web");
 
                 var nowIso = DateTime.UtcNow.ToString("o");
@@ -386,7 +366,6 @@ public static class BrowserSessionCheckpointSmokeTests
                     new Job
                     {
                         Id = "job_pre_submit",
-                        WorkspaceId = wsId,
                         ProjectId = prjId,
                         TaskType = "Script",
                         State = JobState.AwaitingUser,
@@ -398,7 +377,6 @@ public static class BrowserSessionCheckpointSmokeTests
                     new Job
                     {
                         Id = "job_post_submit",
-                        WorkspaceId = wsId,
                         ProjectId = prjId,
                         TaskType = JobTaskType.Script,
                         State = JobState.AwaitingUser,
@@ -504,14 +482,13 @@ public static class BrowserSessionCheckpointSmokeTests
 
             await using (var db = factory())
             {
-                var (wsId, prjId) = await EnsureWorkspaceAndProjectAsync(db, "ws1", "proj1");
+                var prjId = await EnsureProjectAsync(db, "proj1");
                 await EnsureProviderAccountAsync(db, "acc_w", "profile_wrong_acc", "chatgpt-web");
 
                 var nowIso = DateTime.UtcNow.ToString("o");
                 db.Jobs.Add(new Job
                 {
                     Id = "job_w1",
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     TaskType = "Script",
                     State = JobState.AwaitingUser,
@@ -598,14 +575,13 @@ public static class BrowserSessionCheckpointSmokeTests
 
             await using (var db = factory())
             {
-                var (wsId, prjId) = await EnsureWorkspaceAndProjectAsync(db, "ws1", "proj1");
+                var prjId = await EnsureProjectAsync(db, "proj1");
                 await EnsureProviderAccountAsync(db, "acc_x", "profile_x_close", "chatgpt-web");
 
                 var nowIso = DateTime.UtcNow.ToString("o");
                 db.Jobs.Add(new Job
                 {
                     Id = "job_x1",
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     TaskType = "Script",
                     State = JobState.AwaitingUser,
@@ -747,7 +723,7 @@ public static class BrowserSessionCheckpointSmokeTests
                 // Cài đặt dữ liệu DB
                 await using (var db = factory())
                 {
-                    var (wsId, prjId) = await EnsureWorkspaceAndProjectAsync(db, "ws_prod", "proj_prod");
+                    var prjId = await EnsureProjectAsync(db, "proj_prod");
                     await EnsureProviderAccountAsync(db, "acc_a", profileA, "chatgpt-web");
                     await EnsureProviderAccountAsync(db, "acc_b", profileB, "gemini-web");
 
@@ -756,8 +732,7 @@ public static class BrowserSessionCheckpointSmokeTests
                         new Job
                         {
                             Id = "job_prod_a1",
-                            WorkspaceId = wsId,
-                            ProjectId = prjId,
+                        ProjectId = prjId,
                             TaskType = JobTaskType.Script,
                             State = JobState.Running,
                             ProviderKey = "chatgpt-web",
@@ -768,8 +743,7 @@ public static class BrowserSessionCheckpointSmokeTests
                         new Job
                         {
                             Id = "job_prod_a2",
-                            WorkspaceId = wsId,
-                            ProjectId = prjId,
+                        ProjectId = prjId,
                             TaskType = JobTaskType.Script,
                             State = JobState.Running,
                             ProviderKey = "chatgpt-web",
@@ -780,8 +754,7 @@ public static class BrowserSessionCheckpointSmokeTests
                         new Job
                         {
                             Id = "job_prod_b1",
-                            WorkspaceId = wsId,
-                            ProjectId = prjId,
+                        ProjectId = prjId,
                             TaskType = JobTaskType.Script,
                             State = JobState.Running,
                             ProviderKey = "gemini-web",

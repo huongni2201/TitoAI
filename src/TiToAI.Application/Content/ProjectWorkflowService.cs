@@ -34,7 +34,6 @@ public sealed class SceneConcurrencyConflictException : Exception
 /// </summary>
 public sealed record WorkflowContinuationIntent(
     string IntentId,
-    string WorkspaceId,
     string ProjectId,
     string? SceneId,
     string TaskType,
@@ -50,7 +49,6 @@ public sealed record WorkflowContinuationIntent(
 /// </summary>
 public sealed record WorkflowRunRecord(
     string RunId,
-    string WorkspaceId,
     string ProjectId,
     string WorkflowMode,
     string GoalPrompt,
@@ -104,9 +102,12 @@ public sealed partial class ProjectWorkflowService
     private static string GetConfigKey(string projectId) => $"project.workflow.config.{projectId}";
     private static string GetSceneKey(string sceneId) => $"scene.workflow.{sceneId}";
 
-    private static async Task ValidateAssetBelongsToWorkspaceAsync(
+    public Task<StoryboardContent?> GetStoryboardAsync(string projectId, CancellationToken cancellationToken = default) =>
+        new StoryboardContentService(_dbOptions).GetAsync(projectId, cancellationToken);
+
+    private static async Task ValidateAssetBelongsToProjectAsync(
         TiToAIDbContext dbContext,
-        string workspaceId,
+        string projectId,
         string? assetId,
         string assetName,
         CancellationToken cancellationToken)
@@ -122,9 +123,9 @@ public sealed partial class ProjectWorkflowService
             throw new ProjectWorkflowValidationException($"Không tìm thấy tệp {assetName} '{assetId}'.");
         }
 
-        if (asset.WorkspaceId != workspaceId)
+        if (asset.ProjectId is not null && asset.ProjectId != projectId)
         {
-            throw new UnauthorizedAccessException($"Tệp {assetName} '{assetId}' không thuộc Không gian làm việc '{workspaceId}'.");
+            throw new UnauthorizedAccessException($"Tệp {assetName} '{assetId}' thuộc Project '{asset.ProjectId}', không dùng được trong Project '{projectId}'.");
         }
     }
 

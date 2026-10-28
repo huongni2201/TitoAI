@@ -36,11 +36,10 @@ public sealed partial class ProjectWorkflowService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var normalizedWorkspaceId = NormalizeAndValidateGuid(request.WorkspaceId, nameof(request.WorkspaceId));
         var normalizedProjectId = NormalizeAndValidateGuid(request.ProjectId, nameof(request.ProjectId));
 
         await using var dbContext = new TiToAIDbContext(_dbOptions);
-        var config = await GetWorkflowConfigAsync(normalizedWorkspaceId, normalizedProjectId, cancellationToken);
+        var config = await GetWorkflowConfigAsync(normalizedProjectId, cancellationToken);
 
         // Idempotency guard: nếu có ClientRequestId và đang có một Run active với cùng RequestId, trả về kết quả đó ngay (PV-R1)
         if (!string.IsNullOrWhiteSpace(request.ClientRequestId))
@@ -54,7 +53,7 @@ public sealed partial class ProjectWorkflowService
                     var existingRun = JsonSerializer.Deserialize<WorkflowRunRecord>(activeRunSettingCheck.Value, JsonOptions);
                     if (existingRun != null && existingRun.ClientRequestId == request.ClientRequestId)
                     {
-                        var sceneCount = await dbContext.Scenes.CountAsync(s => s.ProjectId == normalizedProjectId && s.WorkspaceId == normalizedWorkspaceId, cancellationToken);
+                        var sceneCount = await dbContext.Scenes.CountAsync(s => s.ProjectId == normalizedProjectId, cancellationToken);
                         return new StartProjectWorkflowResponseData(
                             RunId: existingRun.RunId,
                             RunState: existingRun.RunState,
@@ -137,7 +136,7 @@ public sealed partial class ProjectWorkflowService
 
         // 2. Lấy danh sách các cảnh hiện có của dự án
         var existingScenes = await dbContext.Scenes
-            .Where(s => s.ProjectId == normalizedProjectId && s.WorkspaceId == normalizedWorkspaceId)
+            .Where(s => s.ProjectId == normalizedProjectId)
             .OrderBy(s => s.SequenceOrder)
             .ToListAsync(cancellationToken);
 
@@ -171,7 +170,7 @@ public sealed partial class ProjectWorkflowService
             }
             else if (_jobService != null)
             {
-                enqueuedJobCount = await EnqueueScriptPlanningJobAsync(normalizedWorkspaceId, normalizedProjectId, runConfig, cancellationToken);
+                enqueuedJobCount = await EnqueueScriptPlanningJobAsync(dbContext, normalizedProjectId, runConfig, cancellationToken);
             }
             else
             {
@@ -197,7 +196,7 @@ public sealed partial class ProjectWorkflowService
             }
             else if (_jobService != null)
             {
-                enqueuedJobCount = await EnqueueJobsForExistingScenesAsync(dbContext, normalizedWorkspaceId, normalizedProjectId, runConfig, existingScenes, cancellationToken);
+                enqueuedJobCount = await EnqueueJobsForExistingScenesAsync(dbContext, normalizedProjectId, runConfig, existingScenes, cancellationToken, stageWithRun: true);
             }
         }
 
@@ -225,7 +224,6 @@ public sealed partial class ProjectWorkflowService
 
         var activeRun = new WorkflowRunRecord(
             RunId: runId,
-            WorkspaceId: normalizedWorkspaceId,
             ProjectId: normalizedProjectId,
             WorkflowMode: runConfig.WorkflowMode,
             GoalPrompt: runConfig.GoalPrompt,
@@ -263,7 +261,7 @@ public sealed partial class ProjectWorkflowService
         }
 
         await dbContext.SaveChangesAsync(cancellationToken);
-        _jobService?.NotifyWorkflowRunReady(normalizedWorkspaceId);
+        _jobService?.NotifyWorkflowRunReady();
 
         return new StartProjectWorkflowResponseData(
             RunId: runId,
@@ -277,11 +275,10 @@ public sealed partial class ProjectWorkflowService
     /// Tạm dừng quy trình đang chạy (Pause Run).
     /// </summary>
     public async Task<ProjectWorkflowConfigDto> PauseWorkflowAsync(
-        string workspaceId,
         string projectId,
         CancellationToken cancellationToken = default)
     {
-        var config = await GetWorkflowConfigAsync(workspaceId, projectId, cancellationToken);
+        var config = await GetWorkflowConfigAsync(projectId, cancellationToken);
         var updated = config with
         {
             RunState = WorkflowRunState.Paused,
@@ -305,14 +302,12 @@ public sealed partial class ProjectWorkflowService
     /// Tiếp tục quy trình sau khi tạm dừng (Resume Run).
     /// </summary>
     public async Task<ProjectWorkflowConfigDto> ResumeWorkflowAsync(
-        string workspaceId,
         string projectId,
         CancellationToken cancellationToken = default)
     {
-        var normalizedWorkspaceId = NormalizeAndValidateGuid(workspaceId, nameof(workspaceId));
         var normalizedProjectId = NormalizeAndValidateGuid(projectId, nameof(projectId));
 
-        var config = await GetWorkflowConfigAsync(normalizedWorkspaceId, normalizedProjectId, cancellationToken).ConfigureAwait(false);
+        var config = await GetWorkflowConfigAsync(normalizedProjectId, cancellationToken).ConfigureAwait(false);
         var nowIso = DateTimeOffset.UtcNow.ToString("o");
         var updated = config with
         {
@@ -335,7 +330,7 @@ public sealed partial class ProjectWorkflowService
         if (_jobService != null)
         {
             var scenes = await dbContext.Scenes
-                .Where(s => s.ProjectId == normalizedProjectId && s.WorkspaceId == normalizedWorkspaceId)
+                .Where(s => s.ProjectId == normalizedProjectId)
                 .OrderBy(s => s.SequenceOrder)
                 .ToListAsync(cancellationToken).ConfigureAwait(false);
 
@@ -350,13 +345,13 @@ public sealed partial class ProjectWorkflowService
             var eligibleScenes = scenes.Where(s => !activeSet.Contains(s.Id)).ToList();
             if (eligibleScenes.Count > 0)
             {
-                await EnqueueJobsForExistingScenesAsync(dbContext, normalizedWorkspaceId, normalizedProjectId, updated, eligibleScenes, cancellationToken).ConfigureAwait(false);
+                await EnqueueJobsForExistingScenesAsync(dbContext, normalizedProjectId, updated, eligibleScenes, cancellationToken).ConfigureAwait(false);
             }
 
             await RunWorkflowContinuationSweepAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        _jobService?.NotifyWorkflowRunReady(normalizedWorkspaceId);
+        _jobService?.NotifyWorkflowRunReady();
         return updated;
     }
 
@@ -365,14 +360,12 @@ public sealed partial class ProjectWorkflowService
     /// Đổi RunState = Idle và hủy bỏ các tác vụ đang chờ/đang thực thi theo chuẩn T16.
     /// </summary>
     public async Task<ProjectWorkflowConfigDto> CancelWorkflowAsync(
-        string workspaceId,
         string projectId,
         CancellationToken cancellationToken = default)
     {
-        var normalizedWorkspaceId = NormalizeAndValidateGuid(workspaceId, nameof(workspaceId));
         var normalizedProjectId = NormalizeAndValidateGuid(projectId, nameof(projectId));
 
-        var config = await GetWorkflowConfigAsync(normalizedWorkspaceId, normalizedProjectId, cancellationToken).ConfigureAwait(false);
+        var config = await GetWorkflowConfigAsync(normalizedProjectId, cancellationToken).ConfigureAwait(false);
         var nowIso = DateTimeOffset.UtcNow.ToString("o");
         var updated = config with
         {
@@ -434,7 +427,7 @@ public sealed partial class ProjectWorkflowService
             {
                 try
                 {
-                    await _jobService.CancelAsync(normalizedWorkspaceId, jId, cancellationToken).ConfigureAwait(false);
+                    await _jobService.CancelAsync(jId, cancellationToken).ConfigureAwait(false);
                 }
                 catch { }
             }
@@ -448,7 +441,7 @@ public sealed partial class ProjectWorkflowService
     /// Tổng hợp prompt đầy đủ từ template Script đã render qua VideoWorkflowPromptComposer.
     /// </summary>
     private async Task<int> EnqueueScriptPlanningJobAsync(
-        string workspaceId,
+        TiToAIDbContext dbContext,
         string projectId,
         ProjectWorkflowConfigDto config,
         CancellationToken cancellationToken)
@@ -456,10 +449,9 @@ public sealed partial class ProjectWorkflowService
         if (_jobService == null) return 0;
 
         var composer = new VideoWorkflowPromptComposer(_dbOptions);
-        var composition = await composer.ComposeScriptPlanningAiRequestAsync(workspaceId, config, cancellationToken).ConfigureAwait(false);
+        var composition = await composer.ComposeScriptPlanningAiRequestAsync(config, cancellationToken).ConfigureAwait(false);
 
         var enqueueRequest = new JobEnqueueRequest(
-            WorkspaceId: workspaceId,
             ProjectId: projectId,
             SceneId: null, // Bắt buộc null cho Script theo DB constraint CK_Job_TaskType_Scene
             TaskType: JobTaskType.Script,
@@ -469,7 +461,7 @@ public sealed partial class ProjectWorkflowService
             MediaSnapshot: BuildMediaSnapshot(config)
         );
 
-        var response = await _jobService.EnqueueAsync(enqueueRequest, cancellationToken).ConfigureAwait(false);
+        var response = await _jobService.StageWorkflowJobAsync(enqueueRequest, dbContext, cancellationToken).ConfigureAwait(false);
         return response != null ? 1 : 0;
     }
 }

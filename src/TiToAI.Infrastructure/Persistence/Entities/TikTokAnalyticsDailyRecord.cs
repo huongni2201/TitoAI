@@ -8,8 +8,7 @@ public sealed class TikTokAnalyticsDailyRecord
 {
     public string Id { get; set; } = string.Empty;
     public string SnapshotId { get; set; } = string.Empty;
-    public string WorkspaceId { get; set; } = string.Empty;
-    public string? AccountId { get; set; }
+    public string AccountId { get; set; } = string.Empty;
     public string DataType { get; set; } = string.Empty;
     public DateTime PeriodDateUtc { get; set; }
     public long? VideoViews { get; set; }

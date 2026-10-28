@@ -14,12 +14,14 @@ using TiToAI.Application.Jobs;
 using TiToAI.Application.Projects;
 using TiToAI.Application.Prompts;
 using TiToAI.Application.Providers;
+using TiToAI.Application.Publishing;
 using TiToAI.Application.Scenes;
 using TiToAI.Application.Settings;
 using TiToAI.Application.Workflows;
 using TiToAI.Browser;
 using TiToAI.Browser.Abstractions;
 using TiToAI.Browser.Models;
+using TiToAI.Browser.Publishing;
 using TiToAI.Contracts.Browser;
 using TiToAI.Contracts.Jobs;
 using TiToAI.Desktop.Bridge;
@@ -36,7 +38,6 @@ public partial class MainWindow : Window
 {
     private readonly SemaphoreSlim _startupLock = new(1, 1);
     private CancellationTokenSource? _startupCts;
-    private AccountHandlers? _accountHandlers;
     private ProviderAccountHandlers? _providerAccountHandlers;
     private PromptHandlers? _promptHandlers;
     private ProjectHandlers? _projectHandlers;
@@ -45,6 +46,7 @@ public partial class MainWindow : Window
     private ProviderHandlers? _providerHandlers;
     private WorkflowHandlers? _workflowHandlers;
     private AnalyticsHandlers? _analyticsHandlers;
+    private PublishingHandlers? _publishingHandlers;
     private BrowserHandlers? _browserHandlers;
     private SettingsHandlers? _settingsHandlers;
     private AssetHandlers? _assetHandlers;
@@ -246,8 +248,6 @@ public partial class MainWindow : Window
                 canReplaceHeadlessContext: profileId =>
                     tabPool.GetActiveJobCount(profileId) == 0 &&
                     sessionCheckpointCoordinator?.HasUncertainOrActiveJobs(profileId) != true);
-            var accountLinkService = new AccountLinkService(dbOptions, sessionProbe);
-
             _profileRegistry = profileRegistry;
             _loginCoordinator = loginCoordinator;
 
@@ -260,14 +260,14 @@ public partial class MainWindow : Window
                 () => new TiToAIDbContext(dbOptions));
             _sessionCheckpointCoordinator = sessionCheckpointCoordinator;
 
-            var browserGatekeeper = new HostBrowserGatekeeper(profileRegistry, loginCoordinator, tabPool, processController, sessionCheckpointCoordinator);
+            var browserGatekeeper = new HostBrowserGatekeeper(profileRegistry, loginCoordinator, tabPool, processController, sessionCheckpointCoordinator, new JobActivityLog(dbOptions));
             _browserGatekeeper = browserGatekeeper;
 
             _profileStateChangedHandler = async payload =>
             {
                 if (BridgeRouter != null)
                 {
-                    await BridgeRouter.PostEventAsync("browser.profile_state_changed", null, payload).ConfigureAwait(false);
+                    await BridgeRouter.PostEventAsync("browser.profile_state_changed", payload).ConfigureAwait(false);
                 }
 
                 // Khi profile hoàn tất login hoặc unpause về Hidden/Stopped/Idle: đánh thức scheduler tiếp tục dispatch
@@ -279,9 +279,6 @@ public partial class MainWindow : Window
                 }
             };
             profileRegistry.ProfileStateChanged += _profileStateChangedHandler;
-
-            _accountHandlers = new AccountHandlers(accountLinkService);
-            _accountHandlers.Register(DispatcherInstance);
 
             var providerAccountService = new ProviderAccountService(dbOptions, sessionProbe, async (pid, ct) =>
             {
@@ -323,9 +320,9 @@ public partial class MainWindow : Window
             _documentHandlers.Register(DispatcherInstance);
 
             var providerRegistry = new ProviderRegistry();
-            providerRegistry.RegisterAdapter(new ChatGptWebAdapter());
-            providerRegistry.RegisterAdapter(new GeminiWebAdapter());
-            providerRegistry.RegisterAdapter(new MuseAiVideoAdapter());
+            providerRegistry.RegisterAdapter(new ChatGptWebAdapter(new ChatGptPlaywrightAutomation(processController, profileRegistry, dbOptions, rootRegistry, assetService)));
+            providerRegistry.RegisterAdapter(new GeminiWebAdapter(new GeminiPlaywrightAutomation(processController, profileRegistry, dbOptions, rootRegistry, assetService)));
+            providerRegistry.RegisterAdapter(new MuseAiVideoAdapter(new MuseAiPlaywrightAutomation(processController, profileRegistry, dbOptions, rootRegistry, assetService)));
             var providerHandlers = new ProviderHandlers(providerRegistry, providerAccountService);
             _providerHandlers = providerHandlers;
             _providerHandlers.Register(DispatcherInstance);
@@ -345,6 +342,11 @@ public partial class MainWindow : Window
                 analyticsService);
             _analyticsHandlers = new AnalyticsHandlers(analyticsService, tiktokCrawler);
             _analyticsHandlers.Register(DispatcherInstance);
+
+            var publishingService = new TikTokPublishingService(dbOptions, rootRegistry, profileRegistry,
+                new TikTokVideoUploader(processController, sessionProbe));
+            _publishingHandlers = new PublishingHandlers(publishingService);
+            _publishingHandlers.Register(DispatcherInstance);
 
             var snapshotFactory = new JobSnapshotFactory(settingsService, dbOptions: dbOptions);
             var reservation = new JobReservation(dbOptions);
@@ -366,7 +368,7 @@ public partial class MainWindow : Window
             {
                 if (BridgeRouter != null)
                 {
-                    _ = BridgeRouter.PostEventAsync("job.state_changed", payload.WorkspaceId, payload);
+                    _ = BridgeRouter.PostEventAsync("job.state_changed", payload);
                 }
 
                 // Khi một tác vụ thuộc workflow thành công: Tự động áp dụng kết quả vào Scene và kích hoạt bước tiếp theo (§3.3)
@@ -381,7 +383,7 @@ public partial class MainWindow : Window
             {
                 if (BridgeRouter != null)
                 {
-                    _ = BridgeRouter.PostEventAsync("job.progress_updated", payload.WorkspaceId, payload);
+                    _ = BridgeRouter.PostEventAsync("job.progress_updated", payload);
                 }
             };
             scheduler.OnJobProgressUpdated += _jobProgressUpdatedHandler;
@@ -392,13 +394,13 @@ public partial class MainWindow : Window
             {
                 if (BridgeRouter != null)
                 {
-                    await BridgeRouter.PostEventAsync(envelope.EventName, envelope.WorkspaceId, envelope.Payload).ConfigureAwait(false);
+                    await BridgeRouter.PostEventAsync(envelope.EventName, envelope.Payload).ConfigureAwait(false);
                 }
             });
             _jobHandlers.Register(DispatcherInstance);
 
             // 4. Khởi tạo WebView2 Host Manager và điều hướng UI
-            await HostManager.InitializeAsync(WebViewControl, this);
+            await HostManager.InitializeAsync(WebViewControl, this, assetService);
 
             // Kiểm tra trạng thái sau await host initialization
             if (_isClosed || ct.IsCancellationRequested)
@@ -496,11 +498,6 @@ public partial class MainWindow : Window
         _sessionCheckpointCoordinator = null;
         _profileRegistry = null;
 
-        if (_accountHandlers != null)
-        {
-            _accountHandlers.Unregister(DispatcherInstance);
-            _accountHandlers = null;
-        }
         if (_providerAccountHandlers != null)
         {
             _providerAccountHandlers.Unregister(DispatcherInstance);
@@ -552,6 +549,11 @@ public partial class MainWindow : Window
             _analyticsHandlers.Unregister(DispatcherInstance);
             _analyticsHandlers = null;
         }
+        if (_publishingHandlers != null)
+        {
+            _publishingHandlers.Unregister(DispatcherInstance);
+            _publishingHandlers = null;
+        }
 
         if (_browserGatekeeper != null)
         {
@@ -595,11 +597,6 @@ public partial class MainWindow : Window
 
     private async Task CleanupG2HandlersAsync()
     {
-        if (_accountHandlers != null)
-        {
-            _accountHandlers.Unregister(DispatcherInstance);
-            _accountHandlers = null;
-        }
         if (_providerAccountHandlers != null)
         {
             _providerAccountHandlers.Unregister(DispatcherInstance);
@@ -655,6 +652,11 @@ public partial class MainWindow : Window
         {
             _analyticsHandlers.Unregister(DispatcherInstance);
             _analyticsHandlers = null;
+        }
+        if (_publishingHandlers != null)
+        {
+            _publishingHandlers.Unregister(DispatcherInstance);
+            _publishingHandlers = null;
         }
 
         if (_browserGatekeeper != null)

@@ -94,7 +94,6 @@ public sealed class JobSnapshotFactory
             // Custom prompt trực tiếp
             var customSnapshot = new PromptRenderSnapshotDto(
                 TemplateId: "custom",
-                VersionId: "custom-v1",
                 RenderedText: request.CustomPromptText,
                 Variables: request.PromptVariables ?? new Dictionary<string, string>(),
                 CapturedAtUtc: DateTimeOffset.UtcNow.ToString("o")
@@ -109,7 +108,6 @@ public sealed class JobSnapshotFactory
                 snapshotDto = await _promptTemplateService.CreateSnapshotAsync(
                     templateId: request.PromptTemplateId,
                     purpose: request.TaskType,
-                    workspaceId: request.WorkspaceId,
                     variables: request.PromptVariables,
                     cancellationToken: cancellationToken).ConfigureAwait(false);
             }
@@ -120,7 +118,6 @@ public sealed class JobSnapshotFactory
                 snapshotDto = await templateService.CreateSnapshotAsync(
                     templateId: request.PromptTemplateId,
                     purpose: request.TaskType,
-                    workspaceId: request.WorkspaceId,
                     variables: request.PromptVariables,
                     cancellationToken: cancellationToken).ConfigureAwait(false);
             }
@@ -147,6 +144,7 @@ public sealed class JobSnapshotFactory
             if (!string.IsNullOrWhiteSpace(request.MediaSnapshot.ReadyImageAssetId)) assetIds.Add(request.MediaSnapshot.ReadyImageAssetId);
             if (!string.IsNullOrWhiteSpace(request.MediaSnapshot.SourceImageAssetId)) assetIds.Add(request.MediaSnapshot.SourceImageAssetId);
             if (!string.IsNullOrWhiteSpace(request.MediaSnapshot.AudioAssetId)) assetIds.Add(request.MediaSnapshot.AudioAssetId);
+            if (request.MediaSnapshot.ImageAssetIds is { } imageIds) assetIds.AddRange(imageIds);
 
             if (assetIds.Count > 0)
             {
@@ -161,9 +159,9 @@ public sealed class JobSnapshotFactory
                     {
                         throw new JobValidationException($"Không tìm thấy tệp tài nguyên '{aId}' được yêu cầu trong MediaSnapshot.", nameof(request.MediaSnapshot));
                     }
-                    if (assetEntity.WorkspaceId != request.WorkspaceId)
+                    if (assetEntity.ProjectId is not null && assetEntity.ProjectId != request.ProjectId)
                     {
-                        throw new UnauthorizedAccessException($"Tài nguyên '{aId}' không thuộc Không gian làm việc '{request.WorkspaceId}'.");
+                        throw new UnauthorizedAccessException($"Tài nguyên '{aId}' thuộc Project '{assetEntity.ProjectId}', không dùng được trong Project '{request.ProjectId}'.");
                     }
                 }
 

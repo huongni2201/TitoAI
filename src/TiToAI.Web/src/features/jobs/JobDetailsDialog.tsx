@@ -95,18 +95,10 @@ export function JobDetailsDialog({
       return;
     }
 
-    // Nếu đã có đủ dữ liệu JobDetailDto
-    if ("providerKey" in job && job.providerKey) {
-      setDetailData(job as JobDetailDto);
-      return;
-    }
-
     let isMounted = true;
     setIsLoadingDetail(true);
     setLoadError(null);
-
-    jobApi
-      .getStatus(job.workspaceId, job.id)
+    const refresh = () => jobApi.getStatus(job.id)
       .then((detail) => {
         if (isMounted) {
           setDetailData(detail);
@@ -124,9 +116,12 @@ export function JobDetailsDialog({
           setIsLoadingDetail(false);
         }
       });
+    void refresh();
+    const timer = window.setInterval(() => { void refresh(); }, 2000);
 
     return () => {
       isMounted = false;
+      window.clearInterval(timer);
     };
   }, [open, job]);
 
@@ -143,7 +138,6 @@ export function JobDetailsDialog({
   // Hợp nhất dữ liệu hiển thị (ưu tiên detailData mới nhất)
   const currentJob: JobDetailDto = {
     id: job.id,
-    workspaceId: job.workspaceId,
     projectId: job.projectId,
     sceneId: job.sceneId,
     taskType: job.taskType,
@@ -160,6 +154,7 @@ export function JobDetailsDialog({
     revision: detailData?.revision ?? job.revision ?? 1,
     createdAtUtc: detailData?.createdAtUtc ?? job.createdAtUtc,
     updatedAtUtc: detailData?.updatedAtUtc ?? ("updatedAtUtc" in job ? (job as JobDetailDto).updatedAtUtc : job.createdAtUtc),
+    activity: detailData?.activity ?? ("activity" in job ? (job as JobDetailDto).activity : []),
   };
 
   const taskTypeInfo = getTaskTypeInfo(currentJob.taskType);
@@ -253,6 +248,20 @@ export function JobDetailsDialog({
               </Alert>
             )}
 
+            <section className="rounded-lg border border-border bg-card p-4 text-xs" aria-label="Nhật ký hoạt động">
+              <h4 className="font-semibold text-foreground mb-3">Nhật ký hoạt động</h4>
+              {currentJob.activity?.length ? (
+                <ol className="space-y-2">
+                  {currentJob.activity.map((entry, index) => (
+                    <li key={`${entry.atUtc}-${index}`} className="flex gap-2">
+                      <time className="shrink-0 text-muted-foreground">{formatFullDateTime(entry.atUtc)}</time>
+                      <span>{entry.message}</span>
+                    </li>
+                  ))}
+                </ol>
+              ) : <p className="text-muted-foreground">Chưa có nhật ký cho tác vụ này.</p>}
+            </section>
+
             {/* Nhóm 1: Định danh & Ngữ cảnh dự án */}
             <div className="rounded-lg border border-border bg-card p-4 text-xs">
               <h4 className="font-semibold text-foreground mb-3 flex items-center gap-1.5">
@@ -275,29 +284,6 @@ export function JobDetailsDialog({
                       title="Sao chép ID"
                     >
                       {copiedKey === "jobId" ? (
-                        <Check className="h-3 w-3 text-emerald-500" />
-                      ) : (
-                        <Copy className="h-3 w-3 text-muted-foreground" />
-                      )}
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="space-y-1">
-                  <span className="text-muted-foreground">Workspace ID</span>
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-mono text-foreground select-all break-all">
-                      {currentJob.workspaceId}
-                    </span>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6 shrink-0 cursor-pointer"
-                      onClick={() => copyToClipboard(currentJob.workspaceId, "workspaceId")}
-                      title="Sao chép Workspace ID"
-                    >
-                      {copiedKey === "workspaceId" ? (
                         <Check className="h-3 w-3 text-emerald-500" />
                       ) : (
                         <Copy className="h-3 w-3 text-muted-foreground" />

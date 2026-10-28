@@ -44,17 +44,13 @@ import {
 import { cn } from "@/lib/utils";
 
 export interface ProjectListPageProps {
-  workspaceId: string;
-  onSelectProject: (projectId: string, workspaceId: string) => void;
-  onDefaultWorkspaceResolved?: (workspaceId: string) => void;
+  onSelectProject: (projectId: string) => void;
 }
 
 type StatusFilter = "all" | "Draft" | "InProgress" | "Completed";
 
 export function ProjectListPage({
-  workspaceId,
   onSelectProject,
-  onDefaultWorkspaceResolved,
 }: ProjectListPageProps) {
   const [projects, setProjects] = useState<ProjectSummaryDto[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -90,9 +86,7 @@ export function ProjectListPage({
       const list = await projectApi.listAll();
       if (controller.signal.aborted) return;
       setProjects(list);
-      if (!workspaceId && list.length > 0) {
-        onDefaultWorkspaceResolved?.(list[0].workspaceId);
-      }
+
     } catch (err: unknown) {
       if (controller.signal.aborted) return;
       const errorDto = err as ErrorDto;
@@ -103,7 +97,7 @@ export function ProjectListPage({
         setIsLoading(false);
       }
     }
-  }, [onDefaultWorkspaceResolved, workspaceId]);
+  }, []);
 
   useEffect(() => {
     fetchProjects();
@@ -135,7 +129,7 @@ export function ProjectListPage({
     setDeleteError(null);
 
     try {
-      await projectApi.deleteProject(deletingProject.workspaceId, deletingProject.projectId);
+      await projectApi.deleteProject(deletingProject.projectId);
       setProjects((prev) => prev.filter((p) => p.projectId !== deletingProject.projectId));
       setDeletingProject(null);
     } catch (err: unknown) {
@@ -403,7 +397,7 @@ export function ProjectListPage({
                   <Button
                     type="button"
                     size="sm"
-                    onClick={() => onSelectProject(prj.projectId, prj.workspaceId)}
+                    onClick={() => onSelectProject(prj.projectId)}
                   >
                     Mở dự án →
                   </Button>
@@ -418,7 +412,6 @@ export function ProjectListPage({
       <ProjectForm
         isOpen={isFormOpen}
         mode={formMode}
-        workspaceId={workspaceId}
         project={editingProject}
         onClose={() => setIsFormOpen(false)}
         onSuccess={() => {

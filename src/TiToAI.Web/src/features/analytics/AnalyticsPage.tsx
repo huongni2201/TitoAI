@@ -51,7 +51,7 @@ const metricOptions: Record<AnalyticsDataType, AnalyticsMetricType[]> = {
   viewers: ["total_viewers", "new_viewers", "returning_viewers"],
 };
 
-export function AnalyticsPage() {
+export function AnalyticsPage({ active }: { active: boolean }) {
   const [periodDays, setPeriodDays] = useState<AnalyticsPeriod>(30);
   const [selectedDataset, setSelectedDataset] = useState<AnalyticsDataType>("overview");
   const [selectedMetric, setSelectedMetric] = useState<AnalyticsMetricType>("views");
@@ -75,6 +75,14 @@ export function AnalyticsPage() {
   const [selectedAccount, setSelectedAccount] = useState<TikTokAnalyticsAccount | null>(null);
   const accountId = selectedAccount?.accountId ?? null;
 
+  const handleSelectAccount = (account: TikTokAnalyticsAccount) => {
+    setSummary(null);
+    setTimeseries([]);
+    setTopVideos([]);
+    setError(null);
+    setSelectedAccount(account);
+  };
+
   const loadAccounts = useCallback(async () => {
     setAccountsLoading(true);
     setAccountsError(null);
@@ -88,8 +96,12 @@ export function AnalyticsPage() {
   }, []);
 
   useEffect(() => {
+    if (!active) {
+      setSelectedAccount(null);
+      return;
+    }
     void loadAccounts();
-  }, [loadAccounts]);
+  }, [active, loadAccounts]);
 
   // Load Main Summary Data
   const loadSummaryData = useCallback(async () => {
@@ -246,7 +258,7 @@ export function AnalyticsPage() {
                   key={account.accountId}
                   type="button"
                   variant="outline"
-                  onClick={() => setSelectedAccount(account)}
+                  onClick={() => handleSelectAccount(account)}
                   className="h-auto min-h-16 justify-start gap-3 whitespace-normal px-4 py-3 text-left"
                   data-testid={`analytics-select-account-${account.accountId}`}
                 >
@@ -283,6 +295,13 @@ export function AnalyticsPage() {
             <span className="px-2 py-0.5 text-[11px] font-semibold bg-primary/10 text-primary rounded-full">
               P1
             </span>
+          </div>
+          <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+            <span>Đang xem:</span>
+            <strong className="font-semibold text-foreground">{selectedAccount.accountIdentity}</strong>
+            <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => setSelectedAccount(null)}>
+              Đổi tài khoản
+            </Button>
           </div>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs text-muted-foreground">
             {summary?.lastCapturedAtUtc && (
@@ -351,7 +370,7 @@ export function AnalyticsPage() {
             variant="outline"
             size="sm"
             onClick={handleExportCsv}
-            disabled={exporting || isWorkspaceEmpty}
+            disabled={exporting || isAccountEmpty}
             className="text-xs gap-1.5 h-9"
             data-testid="export-csv-btn"
           >
@@ -392,7 +411,7 @@ export function AnalyticsPage() {
         </div>
       )}
 
-      {/* 2. Empty State: Workspace has no data at all */}
+      {/* 2. Empty State: selected TikTok account has no data */}
       <div className="flex items-center gap-1 rounded-lg border border-border/60 bg-muted/40 p-1 w-fit" role="tablist" aria-label="Nhóm dữ liệu phân tích">
         {datasetOptions.map((dataset) => (
           <Button
@@ -411,10 +430,10 @@ export function AnalyticsPage() {
         ))}
       </div>
 
-      {isWorkspaceEmpty ? (
+      {isAccountEmpty ? (
         <div
           className="flex flex-col items-center justify-center p-12 text-center border-2 border-dashed border-border/80 rounded-2xl bg-card/40 my-8 space-y-4 shadow-xs"
-          data-testid="workspace-empty-state"
+          data-testid="analytics-account-empty-state"
         >
           <div className="w-16 h-16 rounded-2xl bg-primary/10 text-primary flex items-center justify-center">
             <FileSpreadsheet className="w-8 h-8" />
@@ -497,7 +516,7 @@ export function AnalyticsPage() {
       <AnalyticsImportDialog
         open={importDialogOpen}
         onOpenChange={setImportDialogOpen}
-        workspaceId={workspaceId}
+        accountId={selectedAccount.accountId}
         onSuccess={handleRefreshAll}
       />
 
@@ -505,7 +524,7 @@ export function AnalyticsPage() {
       <TikTokSyncDialog
         open={syncDialogOpen}
         onOpenChange={setSyncDialogOpen}
-        workspaceId={workspaceId}
+        accountId={selectedAccount.accountId}
         onSyncSuccess={handleRefreshAll}
       />
     </div>

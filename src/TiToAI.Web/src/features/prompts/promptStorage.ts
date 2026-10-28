@@ -1,5 +1,5 @@
 /**
- * TiToAI — Quản lý lưu trữ nhiều Prompt và Lựa chọn Prompt Active theo Workspace / Purpose
+ * TiToAI — Lưu trữ prompt toàn ứng dụng và lựa chọn prompt active theo mục đích.
  */
 
 import type { PromptPurpose } from "./promptApi.ts";
@@ -35,7 +35,7 @@ export const DEFAULT_PRESET_PROMPTS: Record<PromptPurpose, CustomPromptItem[]> =
       name: "Kịch bản TikTok chuẩn (Hook + Thân + CTA)",
       purpose: "Script",
       templateText:
-        "Bạn là biên kịch video ngắn cho kênh được cung cấp. Phát triển USER_BRIEF hoặc SELECTED_IDEA thành kịch bản có hook rõ, diễn biến hợp lý và kết thúc phù hợp.\n\n" +
+        "Bạn là biên kịch video ngắn cho kênh được cung cấp. Phát triển nội dung được cung cấp hoặc SELECTED_IDEA thành kịch bản có hook rõ, diễn biến hợp lý và kết thúc phù hợp.\n\n" +
         "Tự đề xuất bối cảnh, nhân vật, phong cách và thời lượng còn thiếu, ghi rõ các giả định đáng kể. Không yêu cầu người dùng điền biến kỹ thuật. Giữ nhân vật, trang phục, đạo cụ và bối cảnh nhất quán giữa các cảnh. Chia cảnh sao cho hành động có thể tạo thành video, tránh nhồi quá nhiều diễn biến trong một cảnh.\n\n" +
         "Mỗi cảnh có tên, mô tả hình ảnh/hành động, thời lượng mục tiêu và imagePrompt theo OUTPUT_CONTRACT.\n\n" +
         "Trả kèm một bài đăng TikTok cho toàn video: caption có hook, nội dung và CTA tự nhiên, cùng hashtags liên quan {chu_de}. Viết tiếng Việt, riêng prompt tạo ảnh bằng tiếng Anh nếu hợp đồng yêu cầu. Tuân thủ OUTPUT_CONTRACT của ứng dụng.",
@@ -121,21 +121,19 @@ export const DEFAULT_PRESET_PROMPTS: Record<PromptPurpose, CustomPromptItem[]> =
   ],
 };
 
-function getStorageScope(workspaceId?: string | null): string {
-  return workspaceId ? `ws_${workspaceId}` : "global";
-}
+const STORAGE_SCOPE = "global";
 
 /**
  * Lấy tập hợp các ID prompt/preset đã bị người dùng xóa.
  * Ngăn chặn việc preset tự động tái sinh sau khi người dùng đã bấm xóa.
  */
-export function getDeletedPromptIds(workspaceId?: string | null): Set<string> {
+export function getDeletedPromptIds(): Set<string> {
   if (typeof window === "undefined" || !window.localStorage) {
     return new Set<string>();
   }
   try {
     const raw = window.localStorage.getItem(
-      `${DELETED_PROMPTS_PREFIX}${getStorageScope(workspaceId)}`
+      `${DELETED_PROMPTS_PREFIX}${STORAGE_SCOPE}`
     );
     if (!raw) return new Set<string>();
     const parsed = JSON.parse(raw);
@@ -146,15 +144,15 @@ export function getDeletedPromptIds(workspaceId?: string | null): Set<string> {
 }
 
 /**
- * Ghi nhận ID prompt đã xóa vào blacklist vĩnh viễn của workspace.
+ * Ghi nhận ID prompt đã xóa để preset không tự xuất hiện lại.
  */
-export function recordDeletedPromptId(promptId: string, workspaceId?: string | null): void {
+export function recordDeletedPromptId(promptId: string): void {
   if (typeof window === "undefined" || !window.localStorage) return;
   try {
-    const current = getDeletedPromptIds(workspaceId);
+    const current = getDeletedPromptIds();
     current.add(promptId);
     window.localStorage.setItem(
-      `${DELETED_PROMPTS_PREFIX}${getStorageScope(workspaceId)}`,
+      `${DELETED_PROMPTS_PREFIX}${STORAGE_SCOPE}`,
       JSON.stringify(Array.from(current))
     );
   } catch (err) {
@@ -163,18 +161,18 @@ export function recordDeletedPromptId(promptId: string, workspaceId?: string | n
 }
 
 /**
- * Lấy danh sách custom prompts đã lưu theo workspace (đã loại bỏ các prompt đã xóa)
+ * Lấy danh sách custom prompts toàn ứng dụng, bỏ qua các prompt đã xóa.
  */
-export function getStoredPrompts(workspaceId?: string | null): CustomPromptItem[] {
+export function getStoredPrompts(): CustomPromptItem[] {
   if (typeof window === "undefined" || !window.localStorage) {
     return [];
   }
   try {
-    const raw = window.localStorage.getItem(`${STORAGE_KEY_PREFIX}${getStorageScope(workspaceId)}`);
+    const raw = window.localStorage.getItem(`${STORAGE_KEY_PREFIX}${STORAGE_SCOPE}`);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     const list: CustomPromptItem[] = Array.isArray(parsed) ? parsed : [];
-    const deleted = getDeletedPromptIds(workspaceId);
+    const deleted = getDeletedPromptIds();
     return list.filter((p) => !deleted.has(p.id));
   } catch (err) {
     console.warn("Lỗi khi đọc danh sách prompts từ localStorage:", err);
@@ -183,13 +181,13 @@ export function getStoredPrompts(workspaceId?: string | null): CustomPromptItem[
 }
 
 /**
- * Lưu danh sách custom prompts theo workspace
+ * Lưu danh sách custom prompts toàn ứng dụng.
  */
-export function saveStoredPrompts(prompts: CustomPromptItem[], workspaceId?: string | null): void {
+export function saveStoredPrompts(prompts: CustomPromptItem[]): void {
   if (typeof window === "undefined" || !window.localStorage) return;
   try {
     window.localStorage.setItem(
-      `${STORAGE_KEY_PREFIX}${getStorageScope(workspaceId)}`,
+      `${STORAGE_KEY_PREFIX}${STORAGE_SCOPE}`,
       JSON.stringify(prompts)
     );
   } catch (err) {
@@ -200,34 +198,34 @@ export function saveStoredPrompts(prompts: CustomPromptItem[], workspaceId?: str
 /**
  * Xóa hoàn toàn một prompt khỏi storage và blacklist vĩnh viễn không để preset tái sinh.
  */
-export function deleteStoredPrompt(promptId: string, workspaceId?: string | null): void {
-  recordDeletedPromptId(promptId, workspaceId);
-  const current = getStoredPrompts(workspaceId);
+export function deleteStoredPrompt(promptId: string): void {
+  recordDeletedPromptId(promptId);
+  const current = getStoredPrompts();
   const next = current.filter((p) => p.id !== promptId);
-  saveStoredPrompts(next, workspaceId);
+  saveStoredPrompts(next);
 
   // Nếu prompt đang active bị xóa, xóa luôn active pointer
   for (const purpose of ["Script", "Image", "VideoPrompt"] as PromptPurpose[]) {
-    const active = getActivePromptId(purpose, workspaceId);
+    const active = getActivePromptId(purpose);
     if (active === promptId) {
-      setActivePromptId(purpose, null, workspaceId);
+      setActivePromptId(purpose, null);
     }
   }
 }
 
 /**
- * Lấy ID prompt đang được chọn làm active cho purpose và workspace
+ * Lấy ID prompt đang được chọn làm active cho mục đích.
  */
-export function getActivePromptId(purpose: PromptPurpose, workspaceId?: string | null): string | null {
+export function getActivePromptId(purpose: PromptPurpose): string | null {
   if (typeof window === "undefined" || !window.localStorage) return null;
   try {
     const id = window.localStorage.getItem(
-      `${ACTIVE_PROMPT_PREFIX}${getStorageScope(workspaceId)}_${purpose}`
+      `${ACTIVE_PROMPT_PREFIX}${STORAGE_SCOPE}_${purpose}`
     );
     if (!id) return null;
-    const deleted = getDeletedPromptIds(workspaceId);
+    const deleted = getDeletedPromptIds();
     if (deleted.has(id)) {
-      setActivePromptId(purpose, null, workspaceId);
+      setActivePromptId(purpose, null);
       return null;
     }
     return id;
@@ -241,12 +239,11 @@ export function getActivePromptId(purpose: PromptPurpose, workspaceId?: string |
  */
 export function setActivePromptId(
   purpose: PromptPurpose,
-  promptId: string | null,
-  workspaceId?: string | null
+  promptId: string | null
 ): void {
   if (typeof window === "undefined" || !window.localStorage) return;
   try {
-    const key = `${ACTIVE_PROMPT_PREFIX}${getStorageScope(workspaceId)}_${purpose}`;
+    const key = `${ACTIVE_PROMPT_PREFIX}${STORAGE_SCOPE}_${purpose}`;
     if (promptId) {
       window.localStorage.setItem(key, promptId);
     } else {

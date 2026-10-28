@@ -17,7 +17,7 @@ namespace TiToAI.Desktop.SmokeChecks;
 /// Bộ kiểm thử khói (Smoke Tests) cho Track R1:
 /// Desktop Browser Handlers & Bridge Integration.
 /// Kiểm thử toàn diện qua BridgeDispatcher:
-/// - browser.list_profiles (workspaceId = null và workspaceId cụ thể)
+/// - browser.list_profiles (phạm vi toàn ứng dụng)
 /// - browser.request_login (VisibleActive slot đầu tiên, VisibleWaiting queue)
 /// - browser.cancel_login (giải phóng slot hiển thị, cập nhật trạng thái Hidden)
 /// - browser.check_session (trạng thái thực Unverified / Connected, không trả fake PASS)
@@ -51,27 +51,10 @@ public static class BrowserBridgeSmokeTests
         return (connection, () => new TiToAIDbContext(options));
     }
 
-    private static async Task SeedWorkspaceAsync(Func<TiToAIDbContext> factory, string id, string name)
-    {
-        await using var db = factory();
-        string nowUtc = DateTime.UtcNow.ToString("o");
-        db.Workspaces.Add(new Workspace
-        {
-            Id = id,
-            Name = name,
-            ChannelHandle = $"@{id}",
-            Topic = "Smoke Testing Channel",
-            Status = "Active",
-            CreatedAtUtc = nowUtc,
-            UpdatedAtUtc = nowUtc
-        });
-        await db.SaveChangesAsync();
-    }
-
     /// <summary>
-    /// Test 1: browser.list_profiles với workspaceId = null và workspaceId cụ thể; kiểm tra mapping DTO.
+    /// Test 1: browser.list_profiles trả về profile toàn ứng dụng.
     /// </summary>
-    public static async Task Test_ListProfiles_WorkspaceNull_And_SpecificWorkspace()
+    public static async Task Test_ListProfiles_GlobalScope()
     {
         var (connection, factory) = await CreateInMemoryDbContextFactoryAsync();
         await using (connection)
@@ -89,23 +72,15 @@ public static class BrowserBridgeSmokeTests
                 var dispatcher = new BridgeDispatcher();
                 handlers.Register(dispatcher);
 
-                // Khởi tạo các Workspace hợp lệ để thỏa mãn ràng buộc khóa ngoại (Foreign Key)
-                await SeedWorkspaceAsync(factory, "ws-alpha", "Workspace Alpha");
-                await SeedWorkspaceAsync(factory, "ws-beta", "Workspace Beta");
+                await registry.EnsureProfileAsync("shared_ai", BrowserProfileKind.SharedAI, accountIdentity: null);
+                await registry.EnsureProfileAsync("museai_alpha", BrowserProfileKind.MuseAI, accountIdentity: "alpha@tito.local");
+                await registry.EnsureProfileAsync("museai_beta", BrowserProfileKind.MuseAI, accountIdentity: "beta@tito.local");
 
-                // Khởi tạo các profile thử nghiệm:
-                // 1 SharedAI (workspaceId = null)
-                // 1 MuseAI thuộc workspace "ws-alpha"
-                // 1 MuseAI thuộc workspace "ws-beta"
-                await registry.EnsureProfileAsync("shared_ai", BrowserProfileKind.SharedAI, workspaceId: null, accountIdentity: null);
-                await registry.EnsureProfileAsync("museai_alpha", BrowserProfileKind.MuseAI, workspaceId: "ws-alpha", accountIdentity: "alpha@tito.local");
-                await registry.EnsureProfileAsync("museai_beta", BrowserProfileKind.MuseAI, workspaceId: "ws-beta", accountIdentity: "beta@tito.local");
-
-                // Scenario A: workspaceId = null -> trả về tất cả 3 profile
-                var reqAll = CreateRequest("browser.list_profiles", new BrowserListProfilesRequest(null));
+                // Browser profiles là tài nguyên cấp ứng dụng.
+                var reqAll = CreateRequest("browser.list_profiles", new BrowserListProfilesRequest());
                 var resAll = await dispatcher.DispatchAsync(reqAll, CancellationToken.None);
 
-                Assert(resAll.Success, "browser.list_profiles với workspaceId = null phải thành công");
+                Assert(resAll.Success, "browser.list_profiles phải thành công");
                 var dataAll = DeserializeData<BrowserListProfilesResponseData>(resAll);
                 Assert(dataAll.Profiles.Count == 3, $"Kỳ vọng 3 profile nhưng nhận được {dataAll.Profiles.Count}");
 
@@ -113,24 +88,23 @@ public static class BrowserBridgeSmokeTests
                 var sharedProfile = dataAll.Profiles.FirstOrDefault(p => p.ProfileId == "shared_ai");
                 Assert(sharedProfile != null, "Profile shared_ai phải có trong kết quả trả về");
                 Assert(sharedProfile!.Kind == BrowserProfileKind.SharedAI, "Kind phải là SharedAI");
-                Assert(sharedProfile.WorkspaceId == null, "WorkspaceId của SharedAI phải là null");
                 Assert(sharedProfile.VisibilityState == BrowserVisibilityState.Hidden, "VisibilityState mặc định phải là Hidden");
                 Assert(sharedProfile.SessionStatus == BrowserSessionStatus.Unverified, "SessionStatus mặc định phải là Unverified");
                 Assert(sharedProfile.OperationalState == BrowserOperationalState.Stopped, "OperationalState mặc định phải là Stopped");
                 Assert(sharedProfile.ActiveTabs != null, "ActiveTabs không được null");
 
-                // Scenario B: workspaceId = "ws-alpha" -> chỉ trả về SharedAI + profile của ws-alpha
-                var reqAlpha = CreateRequest("browser.list_profiles", new BrowserListProfilesRequest("ws-alpha"));
+                // Danh sách luôn hiển thị toàn bộ profile đã đăng ký.
+                var reqAlpha = CreateRequest("browser.list_profiles", new BrowserListProfilesRequest());
                 var resAlpha = await dispatcher.DispatchAsync(reqAlpha, CancellationToken.None);
 
-                Assert(resAlpha.Success, "browser.list_profiles với workspaceId = ws-alpha phải thành công");
+                Assert(resAlpha.Success, "browser.list_profiles phải thành công");
                 var dataAlpha = DeserializeData<BrowserListProfilesResponseData>(resAlpha);
-                Assert(dataAlpha.Profiles.Count == 2, $"Kỳ vọng 2 profile (SharedAI + ws-alpha) nhưng nhận được {dataAlpha.Profiles.Count}");
+                Assert(dataAlpha.Profiles.Count == 3, $"Kỳ vọng 3 profile toàn ứng dụng nhưng nhận được {dataAlpha.Profiles.Count}");
                 Assert(dataAlpha.Profiles.Any(p => p.ProfileId == "shared_ai"), "Kết quả phải chứa shared_ai");
                 Assert(dataAlpha.Profiles.Any(p => p.ProfileId == "museai_alpha"), "Kết quả phải chứa museai_alpha");
-                Assert(!dataAlpha.Profiles.Any(p => p.ProfileId == "museai_beta"), "Kết quả không được chứa museai_beta");
+                Assert(dataAlpha.Profiles.Any(p => p.ProfileId == "museai_beta"), "Kết quả phải chứa mọi provider profile toàn ứng dụng.");
 
-                // Scenario C: Request không kèm payload (Payload null) -> coi như workspaceId = null và trả về cả 3 profile
+                // Payload null vẫn trả về toàn bộ profile.
                 var reqNullPayload = CreateRequestWithRawJson("browser.list_profiles", "null");
                 var resNullPayload = await dispatcher.DispatchAsync(reqNullPayload, CancellationToken.None);
                 Assert(resNullPayload.Success, "browser.list_profiles với payload null phải thành công");
@@ -168,10 +142,9 @@ public static class BrowserBridgeSmokeTests
                 var dispatcher = new BridgeDispatcher();
                 handlers.Register(dispatcher);
 
-                await SeedWorkspaceAsync(factory, "ws-1", "Workspace One");
 
                 await registry.EnsureProfileAsync("prof_first", BrowserProfileKind.SharedAI);
-                await registry.EnsureProfileAsync("prof_second", BrowserProfileKind.MuseAI, workspaceId: "ws-1");
+                await registry.EnsureProfileAsync("prof_second", BrowserProfileKind.MuseAI);
 
                 // Profile đầu tiên yêu cầu login: nhận ngay VisibleActive
                 var reqFirst = CreateRequest("browser.request_login", new BrowserRequestLoginRequest("prof_first"));
@@ -233,10 +206,9 @@ public static class BrowserBridgeSmokeTests
                 var dispatcher = new BridgeDispatcher();
                 handlers.Register(dispatcher);
 
-                await SeedWorkspaceAsync(factory, "ws-1", "Workspace One");
 
                 await registry.EnsureProfileAsync("prof_active", BrowserProfileKind.SharedAI);
-                await registry.EnsureProfileAsync("prof_active2", BrowserProfileKind.MuseAI, workspaceId: "ws-1");
+                await registry.EnsureProfileAsync("prof_active2", BrowserProfileKind.MuseAI);
 
                 // Mở cửa sổ login đồng thời cho cả prof_active và prof_active2
                 await dispatcher.DispatchAsync(CreateRequest("browser.request_login", new BrowserRequestLoginRequest("prof_active")), CancellationToken.None);
@@ -302,10 +274,9 @@ public static class BrowserBridgeSmokeTests
                 var dispatcher = new BridgeDispatcher();
                 handlers.Register(dispatcher);
 
-                await SeedWorkspaceAsync(factory, "ws-1", "Workspace One");
 
                 await registry.EnsureProfileAsync("prof_unverified", BrowserProfileKind.SharedAI);
-                await registry.EnsureProfileAsync("prof_connected", BrowserProfileKind.MuseAI, workspaceId: "ws-1", accountIdentity: "user@tito.local");
+                await registry.EnsureProfileAsync("prof_connected", BrowserProfileKind.MuseAI, accountIdentity: "user@tito.local");
                 await registry.UpdateProfileStateAsync("prof_connected", sessionStatus: BrowserSessionStatus.Connected);
 
                 // Kiểm tra profile chưa xác minh
@@ -511,7 +482,7 @@ public static class BrowserBridgeSmokeTests
                 handlers.Unregister(dispatcher);
 
                 // Dispatch lệnh đã hủy: do lệnh vẫn nằm trong allow-list nhưng không còn handler -> INTERNAL_ERROR
-                var req = CreateRequest("browser.list_profiles", new BrowserListProfilesRequest(null));
+                var req = CreateRequest("browser.list_profiles", new BrowserListProfilesRequest());
                 var res = await dispatcher.DispatchAsync(req, CancellationToken.None);
 
                 Assert(!res.Success, "Lệnh sau khi Unregister không được thành công");
@@ -623,7 +594,7 @@ public static class BrowserBridgeSmokeTests
             }
         }
 
-        await RunAsync("Test 1: List profiles (workspaceId = null & specific workspace, DTO mapping)", Test_ListProfiles_WorkspaceNull_And_SpecificWorkspace);
+        await RunAsync("Test 1: List global browser profiles", Test_ListProfiles_GlobalScope);
         await RunAsync("Test 2: Request login (Concurrent VisibleActive for independent profiles, no app queue)", Test_RequestLogin_ConcurrentLogins_IndependentVisibleActive);
         await RunAsync("Test 3: Cancel login (Closes specific profile, independent profile remains active)", Test_CancelLogin_ReleasesSpecificProfileSlot_OtherProfileRemainsActive);
         await RunAsync("Test 4: Check session (Real Unverified / Connected status, no fake PASS)", Test_CheckSession_RealStatus_UnverifiedAndConnected_NoFakePass);

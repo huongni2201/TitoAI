@@ -39,7 +39,7 @@ public static class JobRecoverySmokeTests
 
         using (var db = new TiToAIDbContext(dbOptions))
         {
-            db.Database.Migrate();
+            db.Database.EnsureCreated();
 
             var now = DateTimeOffset.UtcNow.ToString("o");
             if (!db.BrowserProfiles.Any(p => p.Id == "prof_t16"))
@@ -78,24 +78,11 @@ public static class JobRecoverySmokeTests
                 });
             }
 
-            if (!db.Workspaces.Any(w => w.Id == "ws_t16"))
-            {
-                db.Workspaces.Add(new Workspace
-                {
-                    Id = "ws_t16",
-                    Name = "T16 Workspace",
-                    Status = "Active",
-                    CreatedAtUtc = now,
-                    UpdatedAtUtc = now
-                });
-            }
-
             if (!db.Projects.Any(p => p.Id == "prj_t16"))
             {
                 db.Projects.Add(new Project
                 {
                     Id = "prj_t16",
-                    WorkspaceId = "ws_t16",
                     Name = "T16 Project",
                     Status = "Active",
                     CreatedAtUtc = now,
@@ -156,7 +143,6 @@ public static class JobRecoverySmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = jobId,
-                    WorkspaceId = "ws_t16",
                     ProjectId = "prj_t16",
                     TaskType = JobTaskType.Script,
                     State = JobState.Queued,
@@ -243,7 +229,6 @@ public static class JobRecoverySmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = jobId,
-                    WorkspaceId = "ws_t16",
                     ProjectId = "prj_t16",
                     TaskType = JobTaskType.Script,
                     State = JobState.Queued,
@@ -323,7 +308,6 @@ public static class JobRecoverySmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = jobId,
-                    WorkspaceId = "ws_t16",
                     ProjectId = "prj_t16",
                     TaskType = JobTaskType.Script,
                     State = JobState.Queued,
@@ -344,7 +328,7 @@ public static class JobRecoverySmokeTests
             await reservation.TryReserveJobAsync(jobId, "worker-1", TimeSpan.FromSeconds(30));
 
             // Người dùng bấm Hủy
-            var cancelRes = await jobService.CancelAsync("ws_t16", jobId);
+            var cancelRes = await jobService.CancelAsync(jobId);
             if (cancelRes.State != JobState.Canceled || cancelRes.CancelRequested)
             {
                 throw new InvalidOperationException($"Hủy trước submit phải có State=Canceled và CancelRequested=false. Thực tế: {cancelRes.State}, CancelRequested={cancelRes.CancelRequested}");
@@ -391,7 +375,6 @@ public static class JobRecoverySmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = jobId,
-                    WorkspaceId = "ws_t16",
                     ProjectId = "prj_t16",
                     TaskType = JobTaskType.Script,
                     State = JobState.Queued,
@@ -415,7 +398,7 @@ public static class JobRecoverySmokeTests
             await reservation.CommitSideEffectAsync(jobId, fencingToken);
 
             // Người dùng yêu cầu Hủy sau khi submit
-            var cancelRes = await jobService.CancelAsync("ws_t16", jobId);
+            var cancelRes = await jobService.CancelAsync(jobId);
             if (!cancelRes.CancelRequested)
             {
                 throw new InvalidOperationException("Cancel sau submit phải đánh dấu CancelRequested = true.");
@@ -428,7 +411,6 @@ public static class JobRecoverySmokeTests
                 db.Assets.Add(new Asset
                 {
                     Id = assetId,
-                    WorkspaceId = "ws_t16",
                     ProjectId = "prj_t16",
                     AssetType = "Document",
                     StorageRootId = "root-default-docs",
@@ -532,7 +514,6 @@ public static class JobRecoverySmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = jobId,
-                    WorkspaceId = "ws_t16",
                     ProjectId = "prj_t16",
                     TaskType = JobTaskType.Script,
                     State = JobState.Queued,
@@ -614,7 +595,7 @@ public static class JobRecoverySmokeTests
             var jobService = new JobService(dbOptions, snapshotFactory, newScheduler, clock: () => simulatedTime);
 
             // 3. Gọi Command Production (JobService.ResumeAsync): KHÔNG sửa DbContext trực tiếp!
-            var resumeResult = await jobService.ResumeAsync("ws_t16", jobId);
+            var resumeResult = await jobService.ResumeAsync(jobId);
             if (resumeResult.State != JobState.Queued)
             {
                 throw new InvalidOperationException($"Kỳ vọng ResumeAsync đưa Job về Queued để finalize từ checkpoint, thực tế: {resumeResult.State}");
@@ -781,7 +762,6 @@ public static class JobRecoverySmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = jobId,
-                    WorkspaceId = "ws_t16",
                     ProjectId = "prj_t16",
                     TaskType = JobTaskType.Script,
                     State = JobState.Queued,

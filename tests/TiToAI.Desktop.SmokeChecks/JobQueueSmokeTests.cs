@@ -13,10 +13,8 @@ using TiToAI.Application.Projects;
 using TiToAI.Application.Prompts;
 using TiToAI.Application.Scenes;
 using TiToAI.Application.Settings;
-using TiToAI.Application.Workspaces;
 using TiToAI.Contracts.Bridge;
 using TiToAI.Contracts.Jobs;
-using TiToAI.Contracts.Workspaces;
 using TiToAI.Browser;
 using TiToAI.Browser.Abstractions;
 using TiToAI.Browser.Models;
@@ -57,10 +55,10 @@ public static class JobQueueSmokeTests
                       .ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning));
         var dbOptions = optionsBuilder.Options;
 
-        // Chạy migration tạo schema
+        // Khởi tạo schema cuối từ model SQLite.
         using (var db = new TiToAIDbContext(dbOptions))
         {
-            db.Database.Migrate();
+            db.Database.EnsureCreated();
 
             var now = DateTimeOffset.UtcNow.ToString("o");
             if (!db.BrowserProfiles.Any(p => p.Id == "shared_ai"))
@@ -143,34 +141,20 @@ public static class JobQueueSmokeTests
         }
     }
 
-    private static async Task<(string WorkspaceId, string ProjectId, string SceneId)> SeedBasicEntitiesAsync(
-        DbContextOptions<TiToAIDbContext> dbOptions,
-        string wsStatus = "Active")
+    private static async Task<(string ProjectId, string SceneId)> SeedBasicEntitiesAsync(
+        DbContextOptions<TiToAIDbContext> dbOptions)
     {
         await using var db = new TiToAIDbContext(dbOptions);
 
-        var wsId = Guid.NewGuid().ToString();
         var prjId = Guid.NewGuid().ToString();
         var scnId = Guid.NewGuid().ToString();
         var now = DateTimeOffset.UtcNow.ToString("o");
 
-        var ws = new Workspace
-        {
-            Id = wsId,
-            Name = "Workspace Test",
-            ChannelHandle = "@test_channel",
-            Topic = "AI Video Content",
-            Status = wsStatus,
-            CreatedAtUtc = now,
-            UpdatedAtUtc = now
-        };
 
         var prj = new Project
         {
             Id = prjId,
-            WorkspaceId = wsId,
             Name = "Dự án Test",
-            Description = "Mô tả dự án",
             Status = "Draft",
             CreatedAtUtc = now,
             UpdatedAtUtc = now
@@ -180,7 +164,6 @@ public static class JobQueueSmokeTests
         {
             Id = scnId,
             ProjectId = prjId,
-            WorkspaceId = wsId,
             SequenceOrder = 1,
             Name = "Phân cảnh 1",
             PromptText = "Gợi ý hình ảnh cảnh 1",
@@ -189,12 +172,11 @@ public static class JobQueueSmokeTests
             UpdatedAtUtc = now
         };
 
-        db.Workspaces.Add(ws);
         db.Projects.Add(prj);
         db.Scenes.Add(scn);
         await db.SaveChangesAsync();
 
-        return (wsId, prjId, scnId);
+        return (prjId, scnId);
     }
 
     public static async Task<int> RunAllAsync()
@@ -240,8 +222,8 @@ public static class JobQueueSmokeTests
             Test_TC_T15_02_FencingToken_StaleWorkerDenied_OnHeartbeatAndCommit);
 
         await RunCaseAsync(
-            "TC-T15-03: Workspace Pause & Profile Login Interaction (Skip & Wakeup)",
-            Test_TC_T15_03_WorkspacePauseAndBrowserLogin_DispatchSkipped_WakeupTriggered);
+            "TC-T15-03: Global queue waits for browser login (Skip & Wakeup)",
+            Test_TC_T15_03_GlobalQueueAndBrowserLogin_DispatchSkipped_WakeupTriggered);
 
         await RunCaseAsync(
             "TC-T15-04: In-Memory Channel Loss Resiliency (Fallback Polling Recovery)",
@@ -256,8 +238,8 @@ public static class JobQueueSmokeTests
             Test_TC_T15_06_SnapshotImmutability_SettingsChangeDoesNotAffectQueuedJob);
 
         await RunCaseAsync(
-            "TC-T15-07: Fair Round-Robin Scheduling (Load Balancing across 3 Workspaces)",
-            Test_TC_T15_07_FairScheduling_RoundRobinAcrossThreeWorkspaces);
+            "TC-T15-07: FIFO scheduling across 3 Projects",
+            Test_TC_T15_07_FairSchedulingAcrossThreeProjects);
 
         await RunCaseAsync(
             "TC-T15-08: Browser Tab Quota (1 Job/Tab Hard Limit Enforcement)",
@@ -297,8 +279,8 @@ public static class JobQueueSmokeTests
             Test_Regression_R5_HostBrowserGatekeeper_IntegratesWithRegistryAndLoginCoordinator);
 
         await RunCaseAsync(
-            "REGRESSION-R6: Job Event Scoping (Progress & State Events Scoped to Job WorkspaceId)",
-            Test_Regression_R6_JobProgressUpdatedAndStateChanged_ScopedToWorkspace);
+            "REGRESSION-R6: Job Event Scoping (Progress & State Events Scoped to Job ProjectId)",
+            Test_Regression_R6_JobProgressUpdatedAndStateChanged_ScopedToProject);
 
         await RunCaseAsync(
             "REGRESSION-R7: Scheduler Shutdown Drain (Worker Cancellation & Graceful Await on Dispose)",
@@ -336,7 +318,7 @@ public static class JobQueueSmokeTests
         var (dbOptions, tempDir, _, _) = CreateTestContext();
         try
         {
-            var (wsId, prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
+            var (prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
 
             var jobId = Guid.NewGuid().ToString();
             var now = DateTimeOffset.UtcNow.ToString("o");
@@ -346,7 +328,6 @@ public static class JobQueueSmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = jobId,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     SceneId = scnId,
                     TaskType = JobTaskType.Image,
@@ -433,7 +414,7 @@ public static class JobQueueSmokeTests
         var (dbOptions, tempDir, _, _) = CreateTestContext();
         try
         {
-            var (wsId, prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
+            var (prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
             var jobId = Guid.NewGuid().ToString();
 
             var t0 = DateTimeOffset.UtcNow;
@@ -448,7 +429,6 @@ public static class JobQueueSmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = jobId,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     SceneId = null,
                     TaskType = JobTaskType.Script,
@@ -538,16 +518,15 @@ public static class JobQueueSmokeTests
     }
 
     /// <summary>
-    /// TC-T15-03: Tương tác giữa Workspace Pause và Browser Profile Login.
-    /// Tự động bỏ qua phân phối; kích hoạt Wakeup ngay khi unpause hoặc hoàn tất login.
+    /// TC-T15-03: Global queue waits while the selected browser profile is completing a manual login.
     /// </summary>
-    public static async Task Test_TC_T15_03_WorkspacePauseAndBrowserLogin_DispatchSkipped_WakeupTriggered()
+    public static async Task Test_TC_T15_03_GlobalQueueAndBrowserLogin_DispatchSkipped_WakeupTriggered()
     {
         var (dbOptions, tempDir, _, _) = CreateTestContext();
         try
         {
-            var (wsA, prjA, scnA) = await SeedBasicEntitiesAsync(dbOptions, wsStatus: "Paused");
-            var (wsB, prjB, scnB) = await SeedBasicEntitiesAsync(dbOptions, wsStatus: "Active");
+            var (prjA, scnA) = await SeedBasicEntitiesAsync(dbOptions);
+            var (prjB, scnB) = await SeedBasicEntitiesAsync(dbOptions);
 
             var now = DateTimeOffset.UtcNow.ToString("o");
             var jobAId = Guid.NewGuid().ToString();
@@ -558,7 +537,6 @@ public static class JobQueueSmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = jobAId,
-                    WorkspaceId = wsA,
                     ProjectId = prjA,
                     SceneId = scnA,
                     TaskType = JobTaskType.Image,
@@ -572,7 +550,6 @@ public static class JobQueueSmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = jobBId,
-                    WorkspaceId = wsB,
                     ProjectId = prjB,
                     SceneId = null,
                     TaskType = JobTaskType.Script,
@@ -592,7 +569,7 @@ public static class JobQueueSmokeTests
             var executor = new DeterministicFakeJobExecutor();
             var scheduler = new JobScheduler(dbOptions, reservation, executor, gatekeeper);
 
-            // Lượt 1: WS_A bị Paused -> bỏ qua; WS_B cần profile shared_ai đang busy login -> bỏ qua
+            // Both queued jobs wait while the shared profile is held for login.
             var dispatched = await scheduler.DispatchPendingJobsAsync();
             if (dispatched != 0)
             {
@@ -602,26 +579,17 @@ public static class JobQueueSmokeTests
             // Giải phóng trạng thái login của profile
             gatekeeper.SetProfileBusyWithLogin("shared_ai", false);
 
-            // Lượt 2: Profile đã sẵn sàng -> WS_B được dispatch
-            dispatched = await scheduler.DispatchPendingJobsAsync();
-            if (dispatched != 1)
+            // Profile is ready, so FIFO dispatch starts the first Project job.
+            var firstProjectJobDispatched = await scheduler.DispatchNextSingleJobAsync();
+            if (!firstProjectJobDispatched)
             {
-                throw new InvalidOperationException($"Kỳ vọng 1 job của WS_B được dispatch nhưng có {dispatched}.");
+                throw new InvalidOperationException("Kỳ vọng một Project job được dispatch sau login.");
             }
 
-            // Unpause WS_A
-            await using (var db = new TiToAIDbContext(dbOptions))
+            var secondProjectJobDispatched = await scheduler.DispatchNextSingleJobAsync();
+            if (!secondProjectJobDispatched)
             {
-                var ws = await db.Workspaces.FirstAsync(w => w.Id == wsA);
-                ws.Status = "Active";
-                await db.SaveChangesAsync();
-            }
-
-            // Lượt 3: WS_A đã Active -> job của WS_A được dispatch
-            dispatched = await scheduler.DispatchPendingJobsAsync();
-            if (dispatched != 1)
-            {
-                throw new InvalidOperationException($"Kỳ vọng 1 job của WS_A được dispatch sau unpause nhưng có {dispatched}.");
+                throw new InvalidOperationException("Kỳ vọng Project job kế tiếp được dispatch sau login.");
             }
         }
         finally
@@ -638,7 +606,7 @@ public static class JobQueueSmokeTests
         var (dbOptions, tempDir, _, _) = CreateTestContext();
         try
         {
-            var (wsId, prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
+            var (prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
 
             var reservation = new JobReservation(dbOptions);
             var executor = new DeterministicFakeJobExecutor();
@@ -660,7 +628,6 @@ public static class JobQueueSmokeTests
                     new Job
                     {
                         Id = job1Id,
-                        WorkspaceId = wsId,
                         ProjectId = prjId,
                         SceneId = null,
                         TaskType = JobTaskType.Script,
@@ -673,7 +640,6 @@ public static class JobQueueSmokeTests
                     new Job
                     {
                         Id = job2Id,
-                        WorkspaceId = wsId,
                         ProjectId = prjId,
                         SceneId = scnId,
                         TaskType = JobTaskType.Image,
@@ -715,7 +681,7 @@ public static class JobQueueSmokeTests
         var (dbOptions, tempDir, _, _) = CreateTestContext();
         try
         {
-            var (wsId, prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
+            var (prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
 
             var pastIso = DateTimeOffset.UtcNow.AddMinutes(-5).ToString("o");
             var nowIso = DateTimeOffset.UtcNow.ToString("o");
@@ -730,7 +696,6 @@ public static class JobQueueSmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = j1Id,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     SceneId = scnId,
                     TaskType = JobTaskType.Image,
@@ -749,7 +714,6 @@ public static class JobQueueSmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = j2Id,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     SceneId = null,
                     TaskType = JobTaskType.Script,
@@ -768,7 +732,6 @@ public static class JobQueueSmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = j3Id,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     SceneId = scnId,
                     TaskType = JobTaskType.VideoPrompt,
@@ -836,7 +799,7 @@ public static class JobQueueSmokeTests
         var (dbOptions, tempDir, registry, settingsService) = CreateTestContext();
         try
         {
-            var (wsId, prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
+            var (prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
 
             // 1. Cấu hình ban đầu trong Settings: ImageProvider = "chatgpt-web"
             await using (var db = new TiToAIDbContext(dbOptions))
@@ -867,7 +830,6 @@ public static class JobQueueSmokeTests
 
             // 2. Enqueue Job_Alpha
             var enqueueResult = await jobService.EnqueueAsync(new JobEnqueueRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 SceneId: scnId,
                 TaskType: JobTaskType.Image,
@@ -918,36 +880,34 @@ public static class JobQueueSmokeTests
     }
 
     /// <summary>
-    /// TC-T15-07: Phân phối công bằng (Round-Robin Fairness) giữa 3 Workspaces.
+    /// TC-T15-07: Phân phối công bằng (Fairness giữa 3 Projects.
     /// </summary>
-    public static async Task Test_TC_T15_07_FairScheduling_RoundRobinAcrossThreeWorkspaces()
+    public static async Task Test_TC_T15_07_FairSchedulingAcrossThreeProjects()
     {
         var (dbOptions, tempDir, _, _) = CreateTestContext();
         try
         {
-            var (ws1, prj1, scn1) = await SeedBasicEntitiesAsync(dbOptions);
-            var (ws2, prj2, scn2) = await SeedBasicEntitiesAsync(dbOptions);
-            var (ws3, prj3, scn3) = await SeedBasicEntitiesAsync(dbOptions);
+            var (prj1, scn1) = await SeedBasicEntitiesAsync(dbOptions);
+            var (prj2, scn2) = await SeedBasicEntitiesAsync(dbOptions);
+            var (prj3, scn3) = await SeedBasicEntitiesAsync(dbOptions);
 
-            // Sắp xếp workspace IDs theo thứ tự ổn định của DB (OrderBy Id)
-            var sortedWs = new[] { ws1, ws2, ws3 }.OrderBy(x => x).ToList();
-            var wsHeavy = sortedWs[0];  // 10 jobs
-            var wsMedium = sortedWs[1]; // 2 jobs
-            var wsLight = sortedWs[2];  // 1 job
+            // Sắp xếp Project IDs theo thứ tự ổn định của DB (OrderBy Id).
+            var sortedProjects = new[] { prj1, prj2, prj3 }.OrderBy(x => x).ToList();
+            var projectHeavy = sortedProjects[0];
+            var projectMedium = sortedProjects[1];
+            var projectLight = sortedProjects[2];
 
-            // Lấy Project tương ứng
-            string GetPrj(string wId) => wId == ws1 ? prj1 : (wId == ws2 ? prj2 : prj3);
+            string GetPrj(string projectId) => projectId;
 
             var baseTime = DateTimeOffset.UtcNow;
 
             await using (var db = new TiToAIDbContext(dbOptions))
             {
-                // wsHeavy có 2 jobs: Lượt 1 (cũ nhất), Lượt 4
+                // Project-heavy has jobs in both the first and fourth positions.
                 db.Jobs.Add(new Job
                 {
                     Id = Guid.NewGuid().ToString(),
-                    WorkspaceId = wsHeavy,
-                    ProjectId = GetPrj(wsHeavy),
+                    ProjectId = GetPrj(projectHeavy),
                     SceneId = null,
                     TaskType = JobTaskType.Script,
                     State = JobState.Queued,
@@ -957,12 +917,11 @@ public static class JobQueueSmokeTests
                     UpdatedAtUtc = baseTime.AddSeconds(1).ToString("o")
                 });
 
-                // wsMedium có 1 job: Lượt 2
+                // Project-medium has the second queued job.
                 db.Jobs.Add(new Job
                 {
                     Id = Guid.NewGuid().ToString(),
-                    WorkspaceId = wsMedium,
-                    ProjectId = GetPrj(wsMedium),
+                    ProjectId = GetPrj(projectMedium),
                     SceneId = null,
                     TaskType = JobTaskType.Script,
                     State = JobState.Queued,
@@ -972,12 +931,11 @@ public static class JobQueueSmokeTests
                     UpdatedAtUtc = baseTime.AddSeconds(2).ToString("o")
                 });
 
-                // wsLight có 1 job: Lượt 3
+                // Project-light has the third queued job.
                 db.Jobs.Add(new Job
                 {
                     Id = Guid.NewGuid().ToString(),
-                    WorkspaceId = wsLight,
-                    ProjectId = GetPrj(wsLight),
+                    ProjectId = GetPrj(projectLight),
                     SceneId = null,
                     TaskType = JobTaskType.Script,
                     State = JobState.Queued,
@@ -987,12 +945,11 @@ public static class JobQueueSmokeTests
                     UpdatedAtUtc = baseTime.AddSeconds(3).ToString("o")
                 });
 
-                // Job thứ hai của wsHeavy: Lượt 4
+                // Second job for the first Project follows the earlier queued items.
                 db.Jobs.Add(new Job
                 {
                     Id = Guid.NewGuid().ToString(),
-                    WorkspaceId = wsHeavy,
-                    ProjectId = GetPrj(wsHeavy),
+                    ProjectId = GetPrj(projectHeavy),
                     SceneId = null,
                     TaskType = JobTaskType.Script,
                     State = JobState.Queued,
@@ -1009,7 +966,7 @@ public static class JobQueueSmokeTests
             var executor = new DeterministicFakeJobExecutor();
             var scheduler = new JobScheduler(dbOptions, reservation, executor);
 
-            var dispatchedWorkspaces = new List<string>();
+            var dispatchedProjects = new List<string>();
             scheduler.OnJobStateChanged += payload =>
             {
                 if (payload.NewState == JobState.Reserved)
@@ -1018,9 +975,9 @@ public static class JobQueueSmokeTests
                     var j = db.Jobs.AsNoTracking().FirstOrDefault(x => x.Id == payload.JobId);
                     if (j != null)
                     {
-                        lock (dispatchedWorkspaces)
+                        lock (dispatchedProjects)
                         {
-                            dispatchedWorkspaces.Add(j.WorkspaceId);
+                            dispatchedProjects.Add(j.ProjectId);
                         }
                     }
                 }
@@ -1039,25 +996,25 @@ public static class JobQueueSmokeTests
 
             var expectedSequence = new[]
             {
-                wsHeavy,  // Lượt 1 (cũ nhất)
-                wsMedium, // Lượt 2
-                wsLight,  // Lượt 3
-                wsHeavy   // Lượt 4
+                projectHeavy,
+                projectMedium,
+                projectLight,
+                projectHeavy
             };
 
-            lock (dispatchedWorkspaces)
+            lock (dispatchedProjects)
             {
-                if (dispatchedWorkspaces.Count != 4)
+                if (dispatchedProjects.Count != 4)
                 {
-                    throw new InvalidOperationException($"Kỳ vọng 4 jobs dispatched nhưng nhận được {dispatchedWorkspaces.Count}.");
+                    throw new InvalidOperationException($"Kỳ vọng 4 jobs dispatched nhưng nhận được {dispatchedProjects.Count}.");
                 }
 
                 for (int i = 0; i < 4; i++)
                 {
-                    if (dispatchedWorkspaces[i] != expectedSequence[i])
+                    if (dispatchedProjects[i] != expectedSequence[i])
                     {
                         throw new InvalidOperationException(
-                            $"Sai thứ tự FIFO độc lập tại lượt {i + 1}: Kỳ vọng '{expectedSequence[i]}' nhưng thực tế là '{dispatchedWorkspaces[i]}'.");
+                            $"Sai thứ tự FIFO tại lượt {i + 1}: Kỳ vọng '{expectedSequence[i]}' nhưng thực tế là '{dispatchedProjects[i]}'.");
                     }
                 }
             }
@@ -1076,7 +1033,7 @@ public static class JobQueueSmokeTests
         var (dbOptions, tempDir, _, _) = CreateTestContext();
         try
         {
-            var (wsId, prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
+            var (prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
             var now = DateTimeOffset.UtcNow.ToString("o");
 
             var gatekeeper = new DefaultBrowserGatekeeper();
@@ -1092,7 +1049,6 @@ public static class JobQueueSmokeTests
                     new Job
                     {
                         Id = jobScript2Id,
-                        WorkspaceId = wsId,
                         ProjectId = prjId,
                         SceneId = null,
                         TaskType = JobTaskType.Script,
@@ -1105,7 +1061,6 @@ public static class JobQueueSmokeTests
                     new Job
                     {
                         Id = jobImage1Id,
-                        WorkspaceId = wsId,
                         ProjectId = prjId,
                         SceneId = scnId,
                         TaskType = JobTaskType.Image,
@@ -1170,26 +1125,25 @@ public static class JobQueueSmokeTests
     }
 
     /// <summary>
-    /// TC-T15-09: Tương tác nghiêm ngặt giữa Job Queue và Thao tác Xóa Entity (Strict Delete Guards).
+    /// TC-T15-09: Job Queue guards prevent deleting Projects with active or unreconciled jobs.
     /// </summary>
     public static async Task Test_TC_T15_09_StrictDeleteGuard_NonTerminalAndUnreconciledJobsBlockDeletion()
     {
         var (dbOptions, tempDir, _, _) = CreateTestContext();
         try
         {
-            var (wsId, prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
-            var workspaceService = new WorkspaceService(dbOptions, tempDir);
+            var (prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
+            var projectService = new ProjectService(dbOptions);
 
             var jobId = Guid.NewGuid().ToString();
             var now = DateTimeOffset.UtcNow.ToString("o");
 
-            // Thử nghiệm 1: Job đang Running -> Chặn xóa Workspace
+            // Thử nghiệm 1: Job đang Running -> Chặn xóa Project.
             await using (var db = new TiToAIDbContext(dbOptions))
             {
                 db.Jobs.Add(new Job
                 {
                     Id = jobId,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     SceneId = null,
                     TaskType = JobTaskType.Script,
@@ -1206,16 +1160,16 @@ public static class JobQueueSmokeTests
             bool wsDeleteBlocked = false;
             try
             {
-                await workspaceService.DeleteAsync(wsId);
+                await projectService.DeleteAsync(prjId);
             }
-            catch (WorkspaceConcurrencyConflictException)
+            catch (ProjectConcurrencyConflictException)
             {
                 wsDeleteBlocked = true;
             }
 
             if (!wsDeleteBlocked)
             {
-                throw new InvalidOperationException("WorkspaceService.DeleteAsync không bị chặn khi có job Running.");
+                throw new InvalidOperationException("ProjectService.DeleteAsync không bị chặn khi có job Running.");
             }
 
             // Thử nghiệm 2: Job AwaitingUser và side_effect_submitted = 1 chưa reconcile
@@ -1231,16 +1185,16 @@ public static class JobQueueSmokeTests
             wsDeleteBlocked = false;
             try
             {
-                await workspaceService.DeleteAsync(wsId);
+                await projectService.DeleteAsync(prjId);
             }
-            catch (WorkspaceConcurrencyConflictException)
+            catch (ProjectConcurrencyConflictException)
             {
                 wsDeleteBlocked = true;
             }
 
             if (!wsDeleteBlocked)
             {
-                throw new InvalidOperationException("WorkspaceService.DeleteAsync không bị chặn khi job chưa đối soát.");
+                throw new InvalidOperationException("ProjectService.DeleteAsync không bị chặn khi job chưa đối soát.");
             }
 
             // Thử nghiệm 3: Job đã Succeeded và đã có result_reference
@@ -1252,10 +1206,10 @@ public static class JobQueueSmokeTests
                 await db.SaveChangesAsync();
             }
 
-            var deleteResult = await workspaceService.DeleteAsync(wsId);
-            if (!deleteResult.Deleted)
+            var deleteResult = await projectService.DeleteAsync(prjId);
+            if (!deleteResult.Success)
             {
-                throw new InvalidOperationException("WorkspaceService.DeleteAsync không thành công sau khi job đã hoàn tất.");
+                throw new InvalidOperationException("ProjectService.DeleteAsync không thành công sau khi job đã hoàn tất.");
             }
         }
         finally
@@ -1272,7 +1226,7 @@ public static class JobQueueSmokeTests
         var (dbOptions, tempDir, _, settingsService) = CreateTestContext();
         try
         {
-            var (wsId, prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
+            var (prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
 
             await using (var db = new TiToAIDbContext(dbOptions))
             {
@@ -1306,7 +1260,6 @@ public static class JobQueueSmokeTests
             var jobServiceA = new JobService(dbOptions, snapshotFactory, schedulerA);
 
             var resA = await jobServiceA.EnqueueAsync(new JobEnqueueRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 SceneId: null,
                 TaskType: JobTaskType.Script,
@@ -1335,7 +1288,6 @@ public static class JobQueueSmokeTests
             var jobServiceB = new JobService(dbOptions, snapshotFactory, schedulerB);
 
             var resB = await jobServiceB.EnqueueAsync(new JobEnqueueRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 SceneId: null,
                 TaskType: JobTaskType.Script,
@@ -1357,7 +1309,6 @@ public static class JobQueueSmokeTests
 
             // Kịch bản C: Người dùng gọi reconcile với action = "retry"
             var reconcileResult = await jobServiceB.ReconcileAsync(new JobReconcileRequest(
-                WorkspaceId: wsId,
                 JobId: resB.JobId,
                 Action: "retry",
                 ConfirmedNotReceived: true
@@ -1382,7 +1333,7 @@ public static class JobQueueSmokeTests
         var (dbOptions, tempDir, _, settingsService) = CreateTestContext();
         try
         {
-            var (wsId, prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
+            var (prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
 
             await using (var db = new TiToAIDbContext(dbOptions))
             {
@@ -1419,7 +1370,7 @@ public static class JobQueueSmokeTests
                 if (dispatcher.IsCommandAllowed(retiredCommand))
                     throw new InvalidOperationException("Không được mở lại RPC handoff.");
                 var retiredRequest = new RequestEnvelope(Guid.NewGuid(), "request", retiredCommand,
-                    JsonSerializer.SerializeToElement(new { workspaceId = wsId, jobId = "legacy-job" }),
+                    JsonSerializer.SerializeToElement(new { jobId = "legacy-job" }),
                     DateTimeOffset.UtcNow, "1.0.4");
                 var retiredResponse = await dispatcher.DispatchAsync(retiredRequest, CancellationToken.None);
                 if (retiredResponse.Success || retiredResponse.Error?.Code != "UNKNOWN_COMMAND")
@@ -1428,7 +1379,6 @@ public static class JobQueueSmokeTests
 
             // 1. job.enqueue
             var enqueuePayload = JsonSerializer.SerializeToElement(new JobEnqueueRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 SceneId: null,
                 TaskType: JobTaskType.Script,
@@ -1454,7 +1404,7 @@ public static class JobQueueSmokeTests
             var jobId = enqueueData!.JobId;
 
             // 2. job.get_status
-            var getStatusPayload = JsonSerializer.SerializeToElement(new JobGetStatusRequest(wsId, jobId), JsonOptions);
+            var getStatusPayload = JsonSerializer.SerializeToElement(new JobGetStatusRequest(jobId), JsonOptions);
             var statusReq = new RequestEnvelope(Guid.NewGuid(), "request", "job.get_status", getStatusPayload, DateTimeOffset.UtcNow, "1.0.4");
             var statusRes = await dispatcher.DispatchAsync(statusReq, CancellationToken.None);
             if (!statusRes.Success)
@@ -1463,7 +1413,7 @@ public static class JobQueueSmokeTests
             }
 
             // 3. job.list_active
-            var listPayload = JsonSerializer.SerializeToElement(new JobListActiveRequest(wsId), JsonOptions);
+            var listPayload = JsonSerializer.SerializeToElement(new JobListActiveRequest(), JsonOptions);
             var listReq = new RequestEnvelope(Guid.NewGuid(), "request", "job.list_active", listPayload, DateTimeOffset.UtcNow, "1.0.4");
             var listRes = await dispatcher.DispatchAsync(listReq, CancellationToken.None);
             if (!listRes.Success)
@@ -1472,7 +1422,7 @@ public static class JobQueueSmokeTests
             }
 
             // 4. job.cancel
-            var cancelPayload = JsonSerializer.SerializeToElement(new JobCancelRequest(wsId, jobId), JsonOptions);
+            var cancelPayload = JsonSerializer.SerializeToElement(new JobCancelRequest(jobId), JsonOptions);
             var cancelReq = new RequestEnvelope(Guid.NewGuid(), "request", "job.cancel", cancelPayload, DateTimeOffset.UtcNow, "1.0.4");
             var cancelRes = await dispatcher.DispatchAsync(cancelReq, CancellationToken.None);
             if (!cancelRes.Success)
@@ -1501,7 +1451,7 @@ public static class JobQueueSmokeTests
         var (dbOptions, tempDir, _, settingsService) = CreateTestContext();
         try
         {
-            var (wsId, prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
+            var (prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
 
             var snapshotFactory = new JobSnapshotFactory(settingsService, dbOptions: dbOptions);
             var reservation = new JobReservation(dbOptions);
@@ -1510,7 +1460,6 @@ public static class JobQueueSmokeTests
             var jobService = new JobService(dbOptions, snapshotFactory, scheduler);
 
             var enqueueRes = await jobService.EnqueueAsync(new JobEnqueueRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 SceneId: null,
                 TaskType: JobTaskType.Script,
@@ -1562,7 +1511,7 @@ public static class JobQueueSmokeTests
         var (dbOptions, tempDir, _, settingsService) = CreateTestContext();
         try
         {
-            var (wsId, prjId, _) = await SeedBasicEntitiesAsync(dbOptions);
+            var (prjId, _) = await SeedBasicEntitiesAsync(dbOptions);
             var nowIso = DateTimeOffset.UtcNow.ToString("o");
 
             // Tạo Job cấp Project (SceneId = null) đang ở trạng thái Running
@@ -1572,7 +1521,6 @@ public static class JobQueueSmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = projectLevelJobId,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     SceneId = null,
                     TaskType = JobTaskType.Script,
@@ -1594,13 +1542,13 @@ public static class JobQueueSmokeTests
 
             var projectService = new ProjectService(dbOptions);
 
-            // Thử xóa Project: BẮT BUỘC phải ném WorkspaceConcurrencyConflictException
+            // Thử xóa Project: BẮT BUỘC phải ném ProjectConcurrencyConflictException
             bool conflictThrown = false;
             try
             {
-                await projectService.DeleteAsync(wsId, prjId, CancellationToken.None);
+                await projectService.DeleteAsync(prjId, CancellationToken.None);
             }
-            catch (WorkspaceConcurrencyConflictException)
+            catch (ProjectConcurrencyConflictException)
             {
                 conflictThrown = true;
             }
@@ -1637,7 +1585,7 @@ public static class JobQueueSmokeTests
         var (dbOptions, tempDir, _, settingsService) = CreateTestContext();
         try
         {
-            var (wsId, prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
+            var (prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
             var nowIso = DateTimeOffset.UtcNow.ToString("o");
 
             // 1. Kiểm tra Gatekeeper: Release sai owner không được xóa lease của owner đúng
@@ -1672,7 +1620,6 @@ public static class JobQueueSmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = jobId,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     SceneId = null,
                     TaskType = JobTaskType.Script,
@@ -1735,7 +1682,7 @@ public static class JobQueueSmokeTests
         var (dbOptions, tempDir, _, _) = CreateTestContext();
         try
         {
-            var (wsId, prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
+            var (prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
             var now = DateTimeOffset.UtcNow;
             var expiredIso = now.AddSeconds(-60).ToString("o");
 
@@ -1748,7 +1695,6 @@ public static class JobQueueSmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = deadJobId,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     SceneId = null,
                     TaskType = JobTaskType.Script,
@@ -1803,7 +1749,6 @@ public static class JobQueueSmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = racingJobId,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     SceneId = null,
                     TaskType = JobTaskType.Script,
@@ -1850,7 +1795,6 @@ public static class JobQueueSmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = submittedJobId,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     SceneId = null,
                     TaskType = JobTaskType.Script,
@@ -1942,30 +1886,14 @@ public static class JobQueueSmokeTests
     }
 
     /// <summary>
-    /// R6: Kiểm chứng Event progress và state mang đúng WorkspaceId;
-    /// bridge client không phân phối event của Workspace A cho Workspace B.
+    /// R6: Global job events carry the ProjectId.
     /// </summary>
-    public static async Task Test_Regression_R6_JobProgressUpdatedAndStateChanged_ScopedToWorkspace()
+    public static async Task Test_Regression_R6_JobProgressUpdatedAndStateChanged_ScopedToProject()
     {
         var (dbOptions, tempDir, _, settingsService) = CreateTestContext();
         try
         {
-            var (wsA, prjA, scnA) = await SeedBasicEntitiesAsync(dbOptions);
-            var wsB = Guid.NewGuid().ToString();
-            await using (var db = new TiToAIDbContext(dbOptions))
-            {
-                db.Workspaces.Add(new Workspace
-                {
-                    Id = wsB,
-                    Name = "Workspace B",
-                    ChannelHandle = "@ws_b",
-                    Topic = "Tech",
-                    Status = "Active",
-                    CreatedAtUtc = DateTimeOffset.UtcNow.ToString("o"),
-                    UpdatedAtUtc = DateTimeOffset.UtcNow.ToString("o")
-                });
-                await db.SaveChangesAsync();
-            }
+            var (prjA, _) = await SeedBasicEntitiesAsync(dbOptions);
 
             var snapshotFactory = new JobSnapshotFactory(settingsService, dbOptions: dbOptions);
             var reservation = new JobReservation(dbOptions);
@@ -1980,7 +1908,6 @@ public static class JobQueueSmokeTests
 
             var jobService = new JobService(dbOptions, snapshotFactory, scheduler);
             var enqueueRes = await jobService.EnqueueAsync(new JobEnqueueRequest(
-                WorkspaceId: wsA,
                 ProjectId: prjA,
                 SceneId: null,
                 TaskType: JobTaskType.Script,
@@ -2001,21 +1928,21 @@ public static class JobQueueSmokeTests
                 throw new InvalidOperationException("Không nhận được progress event nào");
             }
 
-            // Kiểm tra: MỌI progress event phải mang đúng WorkspaceId của wsA
+            // Every event identifies the owning Project.
             foreach (var prog in capturedProgressEvents)
             {
-                if (prog.WorkspaceId != wsA)
+                if (prog.ProjectId != prjA)
                 {
-                    throw new InvalidOperationException($"LỖI R6: Progress event mang sai WorkspaceId: '{prog.WorkspaceId}' (kỳ vọng '{wsA}')");
+                    throw new InvalidOperationException($"LỖI R6: Progress event phải thuộc Project '{prjA}'.");
                 }
             }
 
-            // Kiểm tra: MỌI state changed event phải mang đúng WorkspaceId của wsA
+            // State events follow the same Project-only contract.
             foreach (var st in capturedStateEvents)
             {
-                if (st.WorkspaceId != wsA)
+                if (st.ProjectId != prjA)
                 {
-                    throw new InvalidOperationException($"LỖI R6: StateChanged event mang sai WorkspaceId: '{st.WorkspaceId}' (kỳ vọng '{wsA}')");
+                    throw new InvalidOperationException($"LỖI R6: State event phải thuộc Project '{prjA}'.");
                 }
             }
         }
@@ -2033,7 +1960,7 @@ public static class JobQueueSmokeTests
         var (dbOptions, tempDir, _, settingsService) = CreateTestContext();
         try
         {
-            var (wsId, prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
+            var (prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
 
             var blockingExecutor = new RegressionBlockingExecutor();
             var reservation = new JobReservation(dbOptions);
@@ -2047,7 +1974,6 @@ public static class JobQueueSmokeTests
             var jobService = new JobService(dbOptions, snapshotFactory, scheduler);
 
             var enqueueRes = await jobService.EnqueueAsync(new JobEnqueueRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 SceneId: null,
                 TaskType: JobTaskType.Script,
@@ -2092,7 +2018,7 @@ public static class JobQueueSmokeTests
         var (dbOptions, tempDir, rootRegistry, settingsService) = CreateTestContext();
         try
         {
-            var (wsId, prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
+            var (prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
             await rootRegistry.EnsureDefaultRootsAsync();
 
             // 1. Tạo Prompt Template trong DB
@@ -2105,7 +2031,6 @@ public static class JobQueueSmokeTests
                 {
                     Id = tplId,
                     Purpose = "Script",
-                    WorkspaceId = null, // Global
                     TemplateText = "Hãy viết kịch bản về chủ đề {topic} cho kênh TikTok.",
                     VariableDefinitionsJson = "[{\"name\":\"topic\",\"required\":true}]",
                     CreatedAtUtc = nowIso,
@@ -2125,7 +2050,6 @@ public static class JobQueueSmokeTests
 
             // 3. Enqueue job bằng PromptTemplateId
             var enqueueRes = await jobService.EnqueueAsync(new JobEnqueueRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 SceneId: null,
                 TaskType: JobTaskType.Script,

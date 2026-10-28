@@ -1,5 +1,4 @@
 import React, { useCallback, useRef, useEffect, useState } from "react";
-import type { WorkspaceSummaryDto } from "../../contracts/dtos";
 import type { BrowserProfileDto } from "./browserManagerApi";
 import { browserManagerApi } from "./browserManagerApi";
 import { LoginStatusBanner } from "./LoginStatusBanner";
@@ -11,14 +10,7 @@ import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { Globe, RefreshCw, AlertCircle, Bot, Video, Smartphone } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-interface BrowserManagerPageProps {
-  workspaces?: WorkspaceSummaryDto[];
-  currentWorkspaceId?: string | null;
-}
-
-export const BrowserManagerPage: React.FC<BrowserManagerPageProps> = ({
-  workspaces = [],
-}) => {
+export const BrowserManagerPage: React.FC = () => {
   const [profiles, setProfiles] = useState<BrowserProfileDto[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -45,7 +37,7 @@ export const BrowserManagerPage: React.FC<BrowserManagerPageProps> = ({
     }
   }, []);
 
-  // Tải danh sách khi mount hoặc khi scope / currentWorkspaceId thay đổi
+  // Tải profiles cấp ứng dụng khi mở trang.
   useEffect(() => {
     void fetchProfiles();
     return () => {
@@ -83,12 +75,6 @@ export const BrowserManagerPage: React.FC<BrowserManagerPageProps> = ({
   const sharedAiProfiles = profiles.filter((p) => p.kind === "SharedAI");
   const museAiProfiles = profiles.filter((p) => p.kind === "MuseAI");
   const tikTokProfiles = profiles.filter((p) => p.kind === "TikTok");
-
-  const getWorkspaceName = (wsId: string | null): string | null => {
-    if (!wsId) return null;
-    const found = workspaces.find((w) => w.workspaceId === wsId);
-    return found ? found.name : wsId;
-  };
 
   return (
     <div className="flex flex-col gap-6 p-6 max-w-6xl mx-auto w-full" aria-label="Tài khoản và phiên đăng nhập">
@@ -192,7 +178,6 @@ export const BrowserManagerPage: React.FC<BrowserManagerPageProps> = ({
                   <ProfileCard
                     key={p.profileId}
                     profile={p}
-                    workspaceName={getWorkspaceName(p.workspaceId)}
                     onActionComplete={fetchProfiles}
                   />
                 ))}
@@ -228,7 +213,6 @@ export const BrowserManagerPage: React.FC<BrowserManagerPageProps> = ({
                   <ProfileCard
                     key={p.profileId}
                     profile={p}
-                    workspaceName={getWorkspaceName(p.workspaceId)}
                     onActionComplete={fetchProfiles}
                   />
                 ))}
@@ -246,7 +230,7 @@ export const BrowserManagerPage: React.FC<BrowserManagerPageProps> = ({
                     Hồ sơ Trình duyệt TikTok
                   </h3>
                   <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">
-                    Quản lý phiên đăng nhập TikTok. Bạn có thể chọn Workspace và liên kết kênh trong Cài đặt → Tài khoản.
+                    Quản lý phiên đăng nhập TikTok trong Cài đặt → Tài khoản.
                   </p>
                 </div>
               </div>
@@ -264,7 +248,6 @@ export const BrowserManagerPage: React.FC<BrowserManagerPageProps> = ({
                   <ProfileCard
                     key={p.profileId}
                     profile={p}
-                    workspaceName={getWorkspaceName(p.workspaceId)}
                     onActionComplete={fetchProfiles}
                   />
                 ))}

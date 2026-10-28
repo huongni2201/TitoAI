@@ -54,7 +54,6 @@ public static class JobReasonCode
 
 public sealed record JobSummaryDto(
     string Id,
-    string WorkspaceId,
     string ProjectId,
     string? SceneId,
     string TaskType,
@@ -75,7 +74,6 @@ public sealed record JobSummaryDto(
 
 public sealed record JobDetailDto(
     string Id,
-    string WorkspaceId,
     string ProjectId,
     string? SceneId,
     string TaskType,
@@ -93,8 +91,11 @@ public sealed record JobDetailDto(
     string UpdatedAtUtc,
     string? ProfileId = null,
     bool? HasUnresolvedSideEffect = null,
-    long Revision = 1
+    long Revision = 1,
+    IReadOnlyList<JobActivityEntryDto>? Activity = null
 );
+
+public sealed record JobActivityEntryDto(string AtUtc, string Step, string Message);
 
 /// <summary>
 /// Bản chụp bất biến của các tệp media và cấu hình tùy chọn được đóng băng tại thời điểm Enqueue theo PV-R6.
@@ -113,11 +114,11 @@ public sealed record JobMediaSnapshotDto(
     string AudioOption = "None",
     int DurationSeconds = 15,
     string? InputRevision = null,
-    IReadOnlyDictionary<string, string>? MediaRoles = null
+    IReadOnlyDictionary<string, string>? MediaRoles = null,
+    IReadOnlyList<string>? ImageAssetIds = null
 );
 
 public sealed record JobEnqueueRequest(
-    string WorkspaceId,
     string ProjectId,
     string? SceneId,
     string TaskType,
@@ -132,7 +133,6 @@ public sealed record JobEnqueueRequest(
 public sealed record JobEnqueueResponseData(
     string JobId,
     string State,
-    string WorkspaceId,
     string TaskType,
     string ProviderKey,
     string StorageRootId,
@@ -140,14 +140,13 @@ public sealed record JobEnqueueResponseData(
     long Revision = 1
 );
 
-public sealed record JobGetStatusRequest(string WorkspaceId, string JobId);
+public sealed record JobGetStatusRequest(string JobId);
 public sealed record JobGetStatusResponseData(JobDetailDto Job);
 
-public sealed record JobListActiveRequest(string? WorkspaceId = null);
+public sealed record JobListActiveRequest;
 public sealed record JobListActiveResponseData(IReadOnlyList<JobSummaryDto> Jobs);
 
 public sealed record JobListHistoryRequest(
-    string? WorkspaceId = null,
     string? ProjectId = null,
     string? Cursor = null,
     int? PageSize = null
@@ -157,7 +156,7 @@ public sealed record JobListHistoryResponseData(
     string? NextCursor
 );
 
-public sealed record JobCancelRequest(string WorkspaceId, string JobId);
+public sealed record JobCancelRequest(string JobId);
 public sealed record JobCancelResponseData(
     string JobId,
     string State,
@@ -167,7 +166,7 @@ public sealed record JobCancelResponseData(
     long Revision = 0
 );
 
-public sealed record JobResumeRequest(string WorkspaceId, string JobId);
+public sealed record JobResumeRequest(string JobId);
 public sealed record JobResumeResponseData(
     string JobId,
     string State,
@@ -176,7 +175,6 @@ public sealed record JobResumeResponseData(
 );
 
 public sealed record JobRetryRequest(
-    string WorkspaceId,
     string JobId,
     long ExpectedRevision
 );
@@ -188,7 +186,6 @@ public sealed record JobRetryResponseData(
 );
 
 public sealed record JobReconcileRequest(
-    string WorkspaceId,
     string JobId,
     string Action,
     bool? ConfirmedNotReceived = null,
@@ -206,7 +203,6 @@ public sealed record JobReconcileResponseData(
 
 public sealed record JobProgressUpdatedPayload(
     string JobId,
-    string WorkspaceId,
     string ProjectId,
     string? SceneId,
     string State,
@@ -217,7 +213,6 @@ public sealed record JobProgressUpdatedPayload(
 
 public sealed record JobStateChangedPayload(
     string JobId,
-    string WorkspaceId,
     string? ProjectId,
     string PreviousState,
     string NewState,

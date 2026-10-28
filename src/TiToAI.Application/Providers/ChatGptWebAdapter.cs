@@ -4,16 +4,30 @@ using TiToAI.Contracts.Providers;
 
 namespace TiToAI.Application.Providers;
 
-/// <summary>Năng lực ChatGPT Web; chặn thực thi khi automation chưa sẵn sàng.</summary>
+/// <summary>ChatGPT Web script, image and prompt trial; not live verification.</summary>
 public sealed class ChatGptWebAdapter : IProviderAdapter
 {
+    private readonly ChatGptPlaywrightAutomation? _automation;
+
+    public ChatGptWebAdapter(ChatGptPlaywrightAutomation? automation = null) => _automation = automation;
+
     public string ProviderKey => ProviderKeys.ChatGPTWeb;
 
     public IReadOnlyList<ProviderTaskCapabilityDto> GetCapabilities() =>
-        ProviderCapabilities.GetDefaultCapabilities(ProviderKey);
+        ProviderCapabilities.GetDefaultCapabilities(ProviderKey)
+            .Select(capability => ChatGptTrialMode.Enabled && _automation is not null &&
+                capability.TaskType is JobTaskType.Script or JobTaskType.Image or JobTaskType.VideoPrompt
+                ? capability with
+                {
+                    VerificationStatus = ProviderVerificationStatus.Trial,
+                    AutomationSupported = true,
+                    EvidenceId = "user-enabled-playwright-trial"
+                }
+                : capability).ToArray();
 
     public Task<ProviderTaskCapabilityDto?> GetCapabilityForTaskAsync(string taskType, CancellationToken ct = default) =>
-        Task.FromResult(ProviderCapabilities.GetDefaultCapability(ProviderKey, taskType));
+        Task.FromResult(GetCapabilities().FirstOrDefault(c =>
+            string.Equals(c.TaskType, taskType, StringComparison.OrdinalIgnoreCase)));
 
     public Task<JobExecutionResult> ExecuteAsync(
         JobExecutionContext context,
@@ -31,6 +45,9 @@ public sealed class ChatGptWebAdapter : IProviderAdapter
                 ReasonCode: "CAPABILITY_UNSUPPORTED",
                 ErrorMessage: $"ChatGPT Web không hỗ trợ tác vụ '{context.TaskType}'."));
         }
+
+        if (_automation is not null && context.TaskType is JobTaskType.Script or JobTaskType.Image or JobTaskType.VideoPrompt)
+            return _automation.ExecuteTextAsync(context, onPreSideEffectCommitAsync, onProgressAsync, ct);
 
         return Task.FromResult(new JobExecutionResult(
             Success: false,

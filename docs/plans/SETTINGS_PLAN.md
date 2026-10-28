@@ -1,6 +1,5 @@
 # TiToAI — bổ sung plan Cài đặt
 
-> **Kiến trúc sản phẩm mới 2026-10-27:** [VIDEO_FIRST_ARCHITECTURE_PLAN.md](VIDEO_FIRST_ARCHITECTURE_PLAN.md) bỏ Workspace làm scope lưu trữ và ownership. Settings tiếp tục quản lý provider accounts/storage toàn app; TikTok identities là tài khoản đăng cấp app, không gắn với Workspace.
 >
 > **Yêu cầu mới nhất 2026-10-27:** [Luồng tạo video chỉ chạy tự động](AUTOMATIC_VIDEO_WORKFLOW_PLAN.md). Trong phạm vi này, Settings không cung cấp Manual Mode; capability chưa xác minh/không hỗ trợ thì báo automation chưa sẵn sàng, không hướng dẫn nhập kết quả handoff. Quản lý tài khoản và đăng nhập vẫn giữ nguyên.
 
@@ -12,10 +11,9 @@ Tài liệu này bổ sung `SOURCE_PLAN.md` §1, §3–5, §7–8, §10–12 và
 
 ## 1. Trang Cài đặt
 
-- Mục Cài đặt trên sidebar mở trang trong app shell, với bốn tab con nằm ngang: **Tài khoản, Lưu trữ, AI & Prompt, Giao diện**. Quản lý mọi tài khoản tại tab Tài khoản; không có form connect riêng trong Workspace hoặc trang browser độc lập trên sidebar.
 - Giữ draft/context công việc khi mở Settings. Đổi tab giữ nháp; rời trang khi chưa lưu có lựa chọn ở lại hoặc bỏ thay đổi. Keyboard tabs/focus, scroll và hai theme theo [plan 1.2 §3](QUEUE_EXECUTION_SETTINGS_PLAN.md#3-trang-cài-đặt).
 - Roots, provider và budget thuộc cùng một draft; Lưu xác thực rồi commit atomically với expectedRevision. Conflict/lỗi giữ draft và saved state cũ; Hủy về cấu hình đã lưu. Theme áp/lưu ngay độc lập.
-- Thiết lập toàn app theo Windows user; đổi Workspace không đổi settings hoặc danh sách tài khoản thực thi. Thiếu/lỗi đọc có retry, không tự ghi default để dispatch.
+- Thiết lập toàn app theo Windows user; settings và danh sách tài khoản thực thi áp dụng toàn app. Thiếu/lỗi đọc có retry, không tự ghi default để dispatch.
 
 ## 2. Chọn nơi lưu tài liệu, ảnh và video
 
@@ -27,7 +25,7 @@ Ba trường chọn thư mục độc lập, mỗi trường hiển thị đư�
 | Ảnh AI | Ảnh AI tạo ra và ảnh tham chiếu được nhập vào library | `%LOCALAPPDATA%/TiToAI/images` |
 | Video AI | Video AI trả về hoặc được nhập thủ công vào library | `%LOCALAPPDATA%/TiToAI/videos` |
 
-- Có thể chọn các ổ/thư mục khác nhau cho từng loại hoặc dùng cùng một root. App phân tách bên dưới theo `<workspace-id>/projects/<project-id>/<documents|images|videos>/...` để tránh trùng tên và lẫn kênh. Tên file an toàn và ID duy nhất ngăn ghi đè ngoài ý muốn.
+- Có thể chọn các ổ/thư mục khác nhau cho từng loại hoặc dùng cùng một root. App phân tách bên dưới theo `<project-id>/<assets|videos|documents>/...` để tránh trùng tên và lẫn kênh. Tên file an toàn và ID duy nhất ngăn ghi đè ngoài ý muốn.
 - Đây là nơi lưu bản file thật. Nội dung editor/template tiếp tục lưu version trong DB; chọn thư mục không tự xuất file ở mọi lần gõ. Audio gốc giữ layout nội bộ của plan nguồn.
 - DB, browser profiles, logs và secrets ở `%LOCALAPPDATA%/TiToAI`; trang này không chuyển DB hoặc session browser.
 - Host chuẩn hóa đường dẫn và kiểm tra có thể tạo/ghi file; báo rõ đường dẫn sai, thiếu quyền hoặc ổ không sẵn sàng. Thư mục chưa tồn tại được tạo khi lưu hợp lệ; không lưu lựa chọn mới không dùng được.
@@ -44,7 +42,6 @@ Ba trường chọn thư mục độc lập, mỗi trường hiển thị đư�
 
 ## 4. Provider và tài khoản trong luồng thực thi độc lập
 
-[Plan 1.2 §1–3](QUEUE_EXECUTION_SETTINGS_PLAN.md) là nguồn chuẩn duy nhất cho account/queue/navigation. UI có một danh sách tài khoản; lọc theo provider/trạng thái khi cần, không phân “dùng chung/riêng” hoặc gán account AI cho Workspace.
 
 | Tác vụ | Provider theo cấu hình | Account thực thi |
 |---|---|---|
@@ -55,17 +52,14 @@ Ba trường chọn thư mục độc lập, mỗi trường hiển thị đư�
 
 Lần đầu provider Chưa chọn; đủ 8 tổ hợp cho ba tác vụ. Lưu/restart giữ lựa chọn; thiếu/sai provider chặn enqueue tác vụ đó; không fallback provider ngầm.
 
-Mọi nguồn đưa job vào một queue SQLite chung; FIFO giữa các job đủ điều kiện, skip job đang chờ mà không chặn phần còn lại. Tài khoản/profile chỉ là tài nguyên executor. Workspace/project/scene giữ provenance, quyền dữ liệu và địa chỉ trả kết quả, không là khóa chọn account.
+Mọi nguồn đưa job vào một queue SQLite chung; FIFO giữa các job đủ điều kiện, skip job đang chờ mà không chặn phần còn lại. Tài khoản/profile chỉ là tài nguyên executor. Project/scene giữ provenance và địa chỉ trả kết quả, không là khóa chọn account.
 
 Một account một profile/session/identity được xác minh; capacity theo account/task/capability và budget toàn app. Mặc định budget browser 4/job 8; ChatGPT/Gemini maxTabs 3, mỗi task 1, MuseAI 1 job/account khi capability cho phép. Một luồng logic có thể chạy nhiều job theo giới hạn. Binding đã reserve giữ cho retry/reconcile; uncertain/Closing không nhả slot mù.
 
-Settings revision/budgets save cùng roots/provider; giảm cap không kill job. Account enable/capacity sửa qua account lifecycle thật trong Cài đặt, không lặp config theo Workspace. Migration giữ lịch sử/binding/session hợp lệ, không copy cookie hoặc clone account theo kênh; fixture theo plan 1.2 A11.
 
 ## 5. Lưu cấu hình và contract
 
 - Dùng `app_settings` cho `storage.documentsRootId`, `storage.imagesRootId`, `storage.videosRootId` và mapping `storage.roots` từ root ID sang đường dẫn do host quản lý. Đường dẫn tuyệt đối chỉ nằm tại mapping; asset/job giữ root ID và relative path, không phụ thuộc root hiện tại.
-- Lựa chọn tác vụ ở `ai.providers.image`, `ai.providers.script`, `ai.providers.videoPrompt`; giá trị là `provider_key` ổn định từ registry, không là nhãn UI hoặc selector website. `provider_configs` giữ cấu hình adapter/version; không tạo nguồn cấu hình thứ hai cho cùng lựa chọn. MVP dùng mặc định toàn app này cho ba tác vụ, chưa có Workspace override cho routing AI; T02 quy định rõ cách liên kết với scope provider config của plan nguồn.
-- Budget toàn app ở `scheduler.maxOpenBrowsers` và `scheduler.maxConcurrentJobs`; DTO fields maxOpenBrowsers/maxConcurrentJobs. Capacity account lưu tại ProviderAccount của v1.1, không lặp vào từng Workspace/Settings key. Snapshot input/config bất biến, ExecutionBinding account/profile riêng tại reserve; giới hạn capacity thay đổi chỉ ảnh hưởng reservation mới.
 - T02 chốt schema/DTO đọc, chọn thư mục, xác thực và lưu cấu hình; capability/session status; snapshot job; metadata `document`/`storage_root_id`; cách import dữ liệu cũ dùng root mặc định. Dùng bridge/API đã chọn, có validation và mã lỗi. Persistence/assets owners thống nhất mapping root, metadata và backup trước triển khai.
 - Lần đầu thiếu nơi lưu thì dùng root mặc định sau khi kiểm tra; thiếu provider thì Chưa chọn. Provider key sai/bị vô hiệu hóa yêu cầu chọn lại. Lỗi đọc settings đã có phải báo và cho thử lại; không ghi đè bằng mặc định hoặc dispatch job bằng provider/root suy đoán.
 
@@ -76,13 +70,12 @@ Settings revision/budgets save cùng roots/provider; giảm cap không kill job.
 - Phần bổ sung browser được theo dõi bằng T02a (review contract/schema) và T13a (profile isolation/migration); không dùng DONE của T13/T14 baseline để đóng phần mới. Settings revision/expectedRevision và fieldErrors giữ invariant v1.1; queue/navigation theo plan 1.2.
 
 1. Bấm Cài đặt mở trang bốn tab ngang, active state/keyboard đúng; đổi tab giữ nháp, quay lại giữ form công việc. Lưu/Hủy/rời trang và theme theo §1; mọi connect/account flow ở tab Tài khoản.
-2. Chọn ba thư mục khác nhau, lưu và restart: tài liệu xuất, ảnh và video thực sự ghi đúng root và Workspace/project; cũng kiểm tra dùng chung root.
+2. Chọn ba thư mục khác nhau, lưu và restart: tài liệu xuất, ảnh và video thực sự ghi đúng root và Project; cũng kiểm tra dùng chung root.
 3. Thiếu quyền, đường dẫn thoát root/junction, mất ổ và hết dung lượng cho lỗi hữu ích; cấu hình cũ còn hiệu lực khi lưu Settings lỗi, không false success hoặc gửi lại AI vì lỗi ghi đĩa.
 4. Đổi root khi có asset cũ và job queued/running/awaiting_user: dữ liệu cũ mở đúng nơi, job cũ ghi root cũ, job mới dùng root mới; không tự di chuyển/xóa/ghi đè file.
 5. Dùng Gemini Web cho ảnh và ChatGPT Web cho prompt, rồi đảo lại; dispatch đúng provider và giữ lựa chọn sau restart. Fake xác định chỉ chứng minh routing; account thật/manual mode ghi evidence riêng theo T19/T20/T30.
 6. Thiếu/sai provider, chưa đăng nhập, mất session hoặc không hỗ trợ automation: hướng dẫn/handoff đúng provider, không ngầm chọn dịch vụ khác. Đổi cấu hình không thay snapshot hoặc resend job cũ.
 7. Backup/restore nhiều root ngoài LocalAppData và root cũ: manifest đủ, restore đúng đích đã chọn, metadata/library nhất quán; mất root nguồn được báo backup chưa đầy đủ.
-8. Kiểm 8 tổ hợp provider và ma trận A01–A13 của plan 1.2: queue chung, không account–Workspace affinity; cap/budget/slots/retry/uncertain, close/reopen, kết quả đúng scope. Một profile login không pause profile khác.
 9. Nâng cấp từ shared_ai giữ legacy/checkpoint và snapshot; yêu cầu login lại từng provider, không copy cookie, không resend job uncertain. Hai form Settings save cùng revision chỉ một commit; form stale giữ draft và báo conflict.
 
 MVP chỉ hoàn tất khi trang, lưu bền vững, routing provider, lưu file thật và backup/restore đạt các tiêu chí trên. Ghi kiểm tra đã chạy và NOT_RUN; tài liệu này chưa phải bằng chứng triển khai.

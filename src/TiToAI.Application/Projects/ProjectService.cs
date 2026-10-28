@@ -2,7 +2,6 @@ using System.Data;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
-using TiToAI.Application.Workspaces;
 using TiToAI.Contracts.Projects;
 using TiToAI.Infrastructure.Persistence;
 using TiToAI.Infrastructure.Persistence.Entities;
@@ -30,8 +29,7 @@ public sealed class ProjectService
     }
 
     /// <summary>
-    /// Lists projects across legacy workspace scopes for the project-first UI.
-    /// WorkspaceId remains migration metadata on each row until the schema migration is complete.
+    /// Lists all project aggregates for the project-first UI.
     /// </summary>
     public async Task<IReadOnlyList<ProjectSummaryDto>> ListAllAsync(CancellationToken cancellationToken = default)
     {
@@ -42,9 +40,8 @@ public sealed class ProjectService
             .OrderByDescending(p => p.UpdatedAtUtc)
             .Select(p => new ProjectSummaryDto(
                 p.Id,
-                p.WorkspaceId,
                 p.Name,
-                p.Description,
+                p.Brief,
                 p.Status,
                 dbContext.Scenes.Count(s => s.ProjectId == p.Id),
                 dbContext.Scenes.Any(s => s.ProjectId == p.Id && s.VideoAssetId != null),
@@ -54,48 +51,10 @@ public sealed class ProjectService
     }
 
     /// <summary>
-    /// Lấy danh sách Dự án theo Không gian làm việc kèm số lượng Cảnh (sceneCount) được tính toán chính xác.
+    /// Lấy thông tin chi tiết một Dự án theo Project ID.
     /// </summary>
-    public async Task<IReadOnlyList<ProjectSummaryDto>> ListByWorkspaceAsync(string workspaceId, CancellationToken cancellationToken = default)
+    public async Task<ProjectDetailDto> GetAsync(string projectId, CancellationToken cancellationToken = default)
     {
-        var normalizedWorkspaceId = NormalizeAndValidateGuid(workspaceId, nameof(workspaceId));
-
-        await using var dbContext = new TiToAIDbContext(_dbOptions);
-
-        var workspaceExists = await dbContext.Workspaces
-            .AsNoTracking()
-            .AnyAsync(w => w.Id == normalizedWorkspaceId, cancellationToken);
-
-        if (!workspaceExists)
-        {
-            throw new WorkspaceNotFoundException(normalizedWorkspaceId);
-        }
-
-        var list = await dbContext.Projects
-            .AsNoTracking()
-            .Where(p => p.WorkspaceId == normalizedWorkspaceId)
-            .OrderByDescending(p => p.CreatedAtUtc)
-            .Select(p => new ProjectSummaryDto(
-                p.Id,
-                p.WorkspaceId,
-                p.Name,
-                p.Description,
-                p.Status,
-                dbContext.Scenes.Count(s => s.ProjectId == p.Id && s.WorkspaceId == normalizedWorkspaceId),
-                dbContext.Scenes.Any(s => s.ProjectId == p.Id && s.WorkspaceId == normalizedWorkspaceId && s.VideoAssetId != null),
-                p.CreatedAtUtc,
-                p.UpdatedAtUtc))
-            .ToListAsync(cancellationToken);
-
-        return list;
-    }
-
-    /// <summary>
-    /// Lấy thông tin chi tiết một Dự án theo Workspace và Project ID.
-    /// </summary>
-    public async Task<ProjectDetailDto> GetAsync(string workspaceId, string projectId, CancellationToken cancellationToken = default)
-    {
-        var normalizedWorkspaceId = NormalizeAndValidateGuid(workspaceId, nameof(workspaceId));
         var normalizedProjectId = NormalizeAndValidateGuid(projectId, nameof(projectId));
 
         await using var dbContext = new TiToAIDbContext(_dbOptions);
@@ -109,16 +68,10 @@ public sealed class ProjectService
             throw new ProjectNotFoundException(normalizedProjectId);
         }
 
-        if (project.WorkspaceId != normalizedWorkspaceId)
-        {
-            throw new UnauthorizedWorkspaceException($"Dự án '{normalizedProjectId}' không thuộc không gian làm việc '{normalizedWorkspaceId}'.");
-        }
-
         return new ProjectDetailDto(
             project.Id,
-            project.WorkspaceId,
             project.Name,
-            project.Description,
+            project.Brief,
             project.Status,
             project.CreatedAtUtc,
             project.UpdatedAtUtc);
@@ -135,29 +88,14 @@ public sealed class ProjectService
 
         await using var dbContext = new TiToAIDbContext(_dbOptions);
 
-        var normalizedWorkspaceId = await ResolveLegacyWorkspaceIdAsync(
-            dbContext,
-            request.WorkspaceId,
-            cancellationToken);
-
-        var workspaceExists = await dbContext.Workspaces
-            .AsNoTracking()
-            .AnyAsync(w => w.Id == normalizedWorkspaceId, cancellationToken);
-
-        if (!workspaceExists)
-        {
-            throw new WorkspaceNotFoundException(normalizedWorkspaceId);
-        }
-
         var newId = Guid.NewGuid().ToString("D").ToLowerInvariant();
         var nowUtc = DateTime.UtcNow.ToString("o");
 
         var project = new Project
         {
             Id = newId,
-            WorkspaceId = normalizedWorkspaceId,
             Name = name,
-            Description = description,
+            Brief = description ?? string.Empty,
             Status = "Draft",
             CreatedAtUtc = nowUtc,
             UpdatedAtUtc = nowUtc
@@ -176,7 +114,6 @@ public sealed class ProjectService
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var normalizedWorkspaceId = NormalizeAndValidateGuid(request.WorkspaceId, nameof(request.WorkspaceId));
         var normalizedProjectId = NormalizeAndValidateGuid(request.ProjectId, nameof(request.ProjectId));
 
         await using var dbContext = new TiToAIDbContext(_dbOptions);
@@ -187,11 +124,6 @@ public sealed class ProjectService
         if (project is null)
         {
             throw new ProjectNotFoundException(normalizedProjectId);
-        }
-
-        if (project.WorkspaceId != normalizedWorkspaceId)
-        {
-            throw new UnauthorizedWorkspaceException($"Dự án '{normalizedProjectId}' không thuộc không gian làm việc '{normalizedWorkspaceId}'.");
         }
 
         bool isModified = false;
@@ -218,7 +150,7 @@ public sealed class ProjectService
             {
                 throw new ProjectValidationException("Mô tả dự án không được vượt quá 500 ký tự.");
             }
-            project.Description = string.IsNullOrWhiteSpace(trimmedDesc) ? null : trimmedDesc;
+            project.Brief = string.IsNullOrWhiteSpace(trimmedDesc) ? string.Empty : trimmedDesc;
             isModified = true;
         }
 
@@ -241,9 +173,8 @@ public sealed class ProjectService
 
         return new ProjectDetailDto(
             project.Id,
-            project.WorkspaceId,
             project.Name,
-            project.Description,
+            project.Brief,
             project.Status,
             project.CreatedAtUtc,
             project.UpdatedAtUtc);
@@ -252,9 +183,8 @@ public sealed class ProjectService
     /// <summary>
     /// Xóa Dự án với Strict Active Job Guard và Safe Asset Detach trong cùng một write transaction serialize.
     /// </summary>
-    public async Task<ProjectDeleteResponseData> DeleteAsync(string workspaceId, string projectId, CancellationToken cancellationToken = default)
+    public async Task<ProjectDeleteResponseData> DeleteAsync(string projectId, CancellationToken cancellationToken = default)
     {
-        var normalizedWorkspaceId = NormalizeAndValidateGuid(workspaceId, nameof(workspaceId));
         var normalizedProjectId = NormalizeAndValidateGuid(projectId, nameof(projectId));
 
         await using var dbContext = new TiToAIDbContext(_dbOptions);
@@ -286,17 +216,12 @@ public sealed class ProjectService
                     throw new ProjectNotFoundException(normalizedProjectId);
                 }
 
-                if (project.WorkspaceId != normalizedWorkspaceId)
-                {
-                    throw new UnauthorizedWorkspaceException($"Dự án '{normalizedProjectId}' không thuộc không gian làm việc '{normalizedWorkspaceId}'.");
-                }
-
                 // 1. Strict Nonterminal & Unreconciled Side-Effect Job Guard:
                 // Chặn xóa nếu có bất kỳ Job nào thuộc dự án (cả cấp Project với SceneId = null lẫn cấp Scene)
                 // đang ở trạng thái chưa kết thúc (Queued, Reserved, Running, AwaitingUser)
                 // hoặc job có SideEffectSubmitted == 1 mà chưa đối soát xong (ResultReference null/rỗng hoặc đang ở AwaitingUser).
                 bool hasActiveOrUnreconciledJobs = await dbContext.Jobs
-                    .Where(j => j.ProjectId == normalizedProjectId && j.WorkspaceId == normalizedWorkspaceId)
+                    .Where(j => j.ProjectId == normalizedProjectId)
                     .Where(j =>
                         j.State == "Queued" ||
                         j.State == "Reserved" ||
@@ -308,15 +233,15 @@ public sealed class ProjectService
 
                 if (hasActiveOrUnreconciledJobs)
                 {
-                    throw new WorkspaceConcurrencyConflictException(
+                    throw new ProjectConcurrencyConflictException(
                         "Không thể xóa dự án trong khi có tác vụ thuộc dự án hoặc các cảnh đang chờ, đang chạy hoặc tác vụ có tác dụng phụ (side-effect) chưa đối soát xong.");
                 }
 
                 // 2. Safe Asset Detach:
-                // Cập nhật UPDATE Asset SET project_id = NULL WHERE project_id = @id AND workspace_id = @workspaceId
+                // Bỏ liên kết Asset khỏi Project trước khi xóa
                 // để giải phóng composite foreign key ON DELETE NO ACTION trước khi cascade xóa Scene.
                 await dbContext.Assets
-                    .Where(a => a.ProjectId == normalizedProjectId && a.WorkspaceId == normalizedWorkspaceId)
+                    .Where(a => a.ProjectId == normalizedProjectId)
                     .ExecuteUpdateAsync(s => s.SetProperty(a => a.ProjectId, (string?)null), cancellationToken);
 
                 // 3. Xóa Project:
@@ -367,42 +292,6 @@ public sealed class ProjectService
         }
 
         return (trimmedName, trimmedDesc);
-    }
-
-    private static async Task<string> ResolveLegacyWorkspaceIdAsync(
-        TiToAIDbContext dbContext,
-        string? requestedWorkspaceId,
-        CancellationToken cancellationToken)
-    {
-        if (!string.IsNullOrWhiteSpace(requestedWorkspaceId))
-        {
-            return NormalizeAndValidateGuid(requestedWorkspaceId, nameof(requestedWorkspaceId));
-        }
-
-        // Compatibility container for pre-migration schema. It is never shown as a user-facing Workspace.
-        const string defaultId = "00000000-0000-0000-0000-000000000001";
-        var alreadyCreated = await dbContext.Workspaces
-            .AsNoTracking()
-            .AnyAsync(w => w.Id == defaultId, cancellationToken);
-        if (alreadyCreated)
-        {
-            return defaultId;
-        }
-
-        var nowUtc = DateTime.UtcNow.ToString("o");
-        dbContext.Workspaces.Add(new Workspace
-        {
-            Id = defaultId,
-            Name = "TiToAI Local",
-            ChannelHandle = "@titoai-local-000000000001",
-            Topic = string.Empty,
-            Status = "Active",
-            CreatedAtUtc = nowUtc,
-            UpdatedAtUtc = nowUtc
-        });
-
-        await dbContext.SaveChangesAsync(cancellationToken);
-        return defaultId;
     }
 
     private static string NormalizeAndValidateGuid(string? id, string paramName)

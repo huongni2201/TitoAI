@@ -12,6 +12,7 @@ export interface SettingsPageProps {
   initialTab?: SettingsTab;
   onDirtyChange?: (isDirty: boolean) => void;
   resetSignal?: number;
+  accountsNavigationSignal?: number;
 }
 
 // shadcn UI compatible primitives local to Settings to avoid test-loader dual React declaration quirks
@@ -110,13 +111,17 @@ function AlertDescription({ className, ...props }: React.HTMLAttributes<HTMLPara
   return <div className={cn("text-sm [&_p]:leading-relaxed", className)} {...props} />;
 }
 
-export function SettingsPage({ initialTab = "accounts", onDirtyChange, resetSignal }: SettingsPageProps) {
+export function SettingsPage({ initialTab = "accounts", onDirtyChange, resetSignal, accountsNavigationSignal }: SettingsPageProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [isStorageDirty, setIsStorageDirty] = useState<boolean>(false);
   const [isAiDirty, setIsAiDirty] = useState<boolean>(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const isPageDirty = isStorageDirty || isAiDirty;
+
+  useEffect(() => {
+    if (accountsNavigationSignal) setActiveTab("accounts");
+  }, [accountsNavigationSignal]);
 
   useEffect(() => {
     onDirtyChange?.(isPageDirty);

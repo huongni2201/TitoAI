@@ -25,6 +25,10 @@ import { ProjectPage } from "./features/projects/ProjectPage";
 import { PromptTemplateManager } from "./features/prompts";
 import { LibraryPage } from "./features/library/LibraryPage";
 import { AnalyticsPage } from "./features/analytics/AnalyticsPage";
+import { PublishingPage } from "./features/publishing/PublishingPage";
+import { PublishingNavItem } from "./features/publishing/PublishingNavItem";
+import { createPublishingApi } from "./features/publishing/publishingApi";
+import { projectApi } from "./features/projects/projectApi";
 import { cn } from "@/lib/utils";
 
 export type ActiveRoute =
@@ -33,15 +37,20 @@ export type ActiveRoute =
   | "prompt-templates"
   | "library"
   | "analytics"
+  | "publishing"
   | "settings";
+
+const publishingApi = createPublishingApi((command, payload, options) =>
+  bridgeClient.invoke(command, payload, options));
 
 function AppContent() {
   const { preference, effectiveTheme, toggleTheme } = useTheme();
 
   const [activeRoute, setActiveRoute] = useState<ActiveRoute>("projects");
-  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [isQueueOpen, setIsQueueOpen] = useState(false);
+  const [publishTarget, setPublishTarget] = useState<{ projectId: string; revision: number } | null>(null);
+  const [accountsNavigationSignal, setAccountsNavigationSignal] = useState(0);
 
   // References cho việc phục hồi focus sau khi đóng drawer.
   const settingsBtnRef = useRef<HTMLButtonElement>(null);
@@ -116,22 +125,31 @@ function AppContent() {
   const handleNavigateToJob = useCallback(
     (job: JobSummaryDto | JobDetailDto) => {
       setIsQueueOpen(false);
-      if (job.workspaceId && job.workspaceId !== selectedWorkspaceId) {
-        setSelectedWorkspaceId(job.workspaceId);
-        bridgeClient.setActiveWorkspaceId(job.workspaceId);
-      }
       if (job.projectId) {
         setSelectedProjectId(job.projectId);
         setActiveRoute("project-detail");
       }
     },
-    [selectedWorkspaceId],
+    [],
   );
 
   const handleNavigateToSettingsAccounts = useCallback(() => {
     setIsQueueOpen(false);
+    setAccountsNavigationSignal(value => value + 1);
     handleNavigate("settings");
   }, [handleNavigate]);
+
+  const handleOpenPublishing = (projectId: string) => {
+    setPublishTarget(current => ({ projectId, revision: (current?.revision ?? 0) + 1 }));
+    handleNavigate("publishing");
+  };
+
+  const handleReviewPublishedVideo = async (projectId: string) => {
+    const project = (await projectApi.listAll()).find(item => item.projectId === projectId);
+    if (!project) throw new Error("Dự án không còn tồn tại. Hãy tải lại danh sách video.");
+    setSelectedProjectId(projectId);
+    handleNavigate("project-detail");
+  };
 
   const isModalActive = isQueueOpen;
 
@@ -146,6 +164,8 @@ function AppContent() {
         return "Tài nguyên";
       case "analytics":
         return "TikTok Analytics";
+      case "publishing":
+        return "Đăng video";
       case "settings":
         return "Cài đặt";
       default:
@@ -246,6 +266,8 @@ function AppContent() {
             <BarChart3 className="size-4 shrink-0" />
             <span>TikTok Analytics</span>
           </button>
+
+          <PublishingNavItem active={activeRoute === "publishing"} onClick={() => handleNavigate("publishing")} />
 
           <div className="my-2 border-t border-sidebar-border" />
 
@@ -366,6 +388,7 @@ function AppContent() {
           <div className={activeRoute === "settings" ? "block" : "hidden"}>
             <SettingsPage
               onDirtyChange={setIsSettingsDirty}
+              accountsNavigationSignal={accountsNavigationSignal}
             />
           </div>
 
@@ -377,22 +400,15 @@ function AppContent() {
                 : "hidden"
             }
           >
-            {selectedProjectId && selectedWorkspaceId ? (
+            {selectedProjectId ? (
               <ProjectPage
-                workspaceId={selectedWorkspaceId}
                 projectId={selectedProjectId}
                 onBack={() => setSelectedProjectId(null)}
+                onOpenPublishing={handleOpenPublishing}
               />
             ) : (
               <ProjectListPage
-                workspaceId={selectedWorkspaceId ?? ""}
-                onDefaultWorkspaceResolved={(workspaceId) => {
-                  setSelectedWorkspaceId(workspaceId);
-                  bridgeClient.setActiveWorkspaceId(workspaceId);
-                }}
-                onSelectProject={(projectId, workspaceId) => {
-                  setSelectedWorkspaceId(workspaceId);
-                  bridgeClient.setActiveWorkspaceId(workspaceId);
+                onSelectProject={(projectId) => {
                   setSelectedProjectId(projectId);
                 }}
               />
@@ -407,7 +423,7 @@ function AppContent() {
                   Quản lý các mẫu lời dẫn AI dùng cho video.
                 </p>
               </div>
-              <PromptTemplateManager workspaceId={selectedWorkspaceId} />
+              <PromptTemplateManager />
             </div>
           </div>
 
@@ -419,12 +435,23 @@ function AppContent() {
                   Quản lý hình ảnh, âm thanh và video dùng trong các dự án.
                 </p>
               </div>
-              <LibraryPage workspaceId={selectedWorkspaceId} />
+              <LibraryPage />
             </div>
           </div>
 
           <div className={activeRoute === "analytics" ? "block" : "hidden"}>
-            <AnalyticsPage workspaceId={selectedWorkspaceId} />
+            <AnalyticsPage active={activeRoute === "analytics"} />
+          </div>
+
+          <div className={activeRoute === "publishing" ? "block" : "hidden"}>
+            <PublishingPage
+              active={activeRoute === "publishing"}
+              api={publishingApi}
+              initialProjectId={publishTarget?.projectId}
+              selectionRevision={publishTarget?.revision}
+              onOpenAccounts={handleNavigateToSettingsAccounts}
+              onReviewVideo={handleReviewPublishedVideo}
+            />
           </div>
 
         </main>

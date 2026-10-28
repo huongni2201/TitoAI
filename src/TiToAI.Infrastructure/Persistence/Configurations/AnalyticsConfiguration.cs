@@ -17,14 +17,10 @@ public class AnalyticsSnapshotConfiguration : IEntityTypeConfiguration<Analytics
             .HasColumnType("TEXT")
             .IsRequired();
 
-        builder.Property(s => s.WorkspaceId)
-            .HasColumnName("workspace_id")
-            .HasColumnType("TEXT")
-            .IsRequired();
-
         builder.Property(s => s.AccountId)
             .HasColumnName("account_id")
-            .HasColumnType("TEXT");
+            .HasColumnType("TEXT")
+            .IsRequired();
 
         builder.Property(s => s.Source)
             .HasColumnName("source")
@@ -53,8 +49,8 @@ public class AnalyticsSnapshotConfiguration : IEntityTypeConfiguration<Analytics
             .HasColumnType("TEXT")
             .IsRequired();
 
-        builder.HasIndex(s => new { s.WorkspaceId, s.CreatedAtUtc })
-            .HasDatabaseName("ix_analytics_snapshot_workspace_created");
+        builder.HasIndex(s => new { s.AccountId, s.CreatedAtUtc })
+            .HasDatabaseName("ix_analytics_snapshot_account_created");
 
         builder.HasMany(s => s.Records)
             .WithOne(r => r.Snapshot)
@@ -77,8 +73,7 @@ public class TikTokAnalyticsDailyRecordConfiguration : IEntityTypeConfiguration<
 
         builder.Property(r => r.Id).HasColumnName("id").HasColumnType("TEXT").IsRequired();
         builder.Property(r => r.SnapshotId).HasColumnName("snapshot_id").HasColumnType("TEXT").IsRequired();
-        builder.Property(r => r.WorkspaceId).HasColumnName("workspace_id").HasColumnType("TEXT").IsRequired();
-        builder.Property(r => r.AccountId).HasColumnName("account_id").HasColumnType("TEXT");
+        builder.Property(r => r.AccountId).HasColumnName("account_id").HasColumnType("TEXT").IsRequired();
         builder.Property(r => r.DataType).HasColumnName("data_type").HasColumnType("TEXT").IsRequired();
         builder.Property(r => r.PeriodDateUtc).HasColumnName("period_date_utc").HasColumnType("TEXT").IsRequired();
         builder.Property(r => r.VideoViews).HasColumnName("video_views").HasColumnType("INTEGER");
@@ -96,8 +91,8 @@ public class TikTokAnalyticsDailyRecordConfiguration : IEntityTypeConfiguration<
             .HasForeignKey(r => r.SnapshotId)
             .OnDelete(DeleteBehavior.Cascade);
 
-        builder.HasIndex(r => new { r.WorkspaceId, r.DataType, r.PeriodDateUtc })
-            .HasDatabaseName("ix_tiktok_analytics_daily_workspace_type_date");
+        builder.HasIndex(r => new { r.AccountId, r.DataType, r.PeriodDateUtc })
+            .HasDatabaseName("ix_tiktok_analytics_daily_account_type_date");
         builder.HasIndex(r => r.SnapshotId)
             .HasDatabaseName("ix_tiktok_analytics_daily_snapshot_id");
     }
@@ -121,14 +116,10 @@ public class VideoAnalyticsRecordConfiguration : IEntityTypeConfiguration<VideoA
             .HasColumnType("TEXT")
             .IsRequired();
 
-        builder.Property(r => r.WorkspaceId)
-            .HasColumnName("workspace_id")
-            .HasColumnType("TEXT")
-            .IsRequired();
-
         builder.Property(r => r.AccountId)
             .HasColumnName("account_id")
-            .HasColumnType("TEXT");
+            .HasColumnType("TEXT")
+            .IsRequired();
 
         builder.Property(r => r.VideoKey)
             .HasColumnName("video_key")
@@ -182,11 +173,11 @@ public class VideoAnalyticsRecordConfiguration : IEntityTypeConfiguration<VideoA
             .HasForeignKey(r => r.SnapshotId)
             .OnDelete(DeleteBehavior.Cascade);
 
-        builder.HasIndex(r => new { r.WorkspaceId, r.VideoKey })
-            .HasDatabaseName("ix_video_analytics_workspace_video");
+        builder.HasIndex(r => new { r.AccountId, r.VideoKey })
+            .HasDatabaseName("ix_video_analytics_account_video");
 
-        builder.HasIndex(r => new { r.WorkspaceId, r.CapturedAtUtc })
-            .HasDatabaseName("ix_video_analytics_workspace_captured");
+        builder.HasIndex(r => new { r.AccountId, r.CapturedAtUtc })
+            .HasDatabaseName("ix_video_analytics_account_captured");
 
         builder.HasIndex(r => r.SnapshotId)
             .HasDatabaseName("ix_video_analytics_snapshot_id");

@@ -62,6 +62,7 @@ export function TikTokSyncDialog({
     if (!accountId) return;
     setCheckingSession(true);
     setSessionError(null);
+    setSyncError(null);
     try {
       const res = await checkTikTokSession(accountId);
       setSessionData(res);
@@ -76,6 +77,7 @@ export function TikTokSyncDialog({
   // When dialog opens, reset states and check session
   useEffect(() => {
     if (open && accountId) {
+      setSessionData(null);
       setSyncResult(null);
       setSyncError(null);
       setLoginMessage(null);
@@ -122,7 +124,7 @@ export function TikTokSyncDialog({
         onSyncSuccess();
       } else {
         if (res.requiresLogin) {
-          setSyncError("Phiên đăng nhập đã hết hạn hoặc chưa đăng nhập. Vui lòng đăng nhập lại.");
+          setSyncError(res.message || "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.");
           // Update session status
           if (sessionData) {
             setSessionData({ ...sessionData, isLoggedIn: false });
@@ -196,7 +198,7 @@ export function TikTokSyncDialog({
                   data-testid="tiktok-session-disconnected-badge"
                 >
                   <AlertTriangle className="w-3 h-3" />
-                  Chưa đăng nhập TikTok
+                  {sessionData?.sessionStatus === "SessionExpired" ? "Phiên TikTok hết hạn" : "Chưa xác minh được phiên TikTok"}
                 </Badge>
               )}
             </div>
@@ -231,6 +233,7 @@ export function TikTokSyncDialog({
               <div className="mt-2 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-700 dark:text-amber-300 space-y-2">
                 <p className="leading-relaxed">
                   {loginMessage ||
+                    sessionData.errorMessage ||
                     "Trình duyệt TikTok chưa có phiên đăng nhập hợp lệ. Bấm nút dưới đây để mở trình duyệt và hoàn tất đăng nhập."}
                 </p>
                 <Button

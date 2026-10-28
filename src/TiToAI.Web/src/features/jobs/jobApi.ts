@@ -23,11 +23,11 @@ import type {
 
 export const jobApi = {
   /**
-   * Lấy danh sách các tác vụ đang hoạt động toàn app (hoặc theo workspaceId nếu cung cấp)
+   * Lấy danh sách các tác vụ đang hoạt động toàn app
    * Bao gồm cả tác vụ Canceled/Failed chưa giải quyết (unresolved).
    */
-  async listActive(workspaceId?: string): Promise<JobSummaryDto[]> {
-    const payload: JobListActiveRequest = workspaceId ? { workspaceId } : {};
+  async listActive(): Promise<JobSummaryDto[]> {
+    const payload: JobListActiveRequest = {};
     const res = await bridgeClient.invoke<JobListActiveResponseData>(
       "job.list_active",
       payload,
@@ -38,12 +38,11 @@ export const jobApi = {
   /**
    * Lấy thông tin trạng thái chi tiết của một tác vụ cụ thể
    */
-  async getStatus(workspaceId: string, jobId: string): Promise<JobDetailDto> {
-    const payload: JobGetStatusRequest = { workspaceId, jobId };
+  async getStatus(jobId: string): Promise<JobDetailDto> {
+    const payload: JobGetStatusRequest = { jobId };
     const res = await bridgeClient.invoke<JobGetStatusResponseData>(
       "job.get_status",
       payload,
-      { workspaceId },
     );
     return res.job;
   },
@@ -51,24 +50,22 @@ export const jobApi = {
   /**
    * Hủy bỏ một tác vụ đang chạy hoặc đang chờ
    */
-  async cancel(workspaceId: string, jobId: string): Promise<JobCancelResponseData> {
-    const payload: JobCancelRequest = { workspaceId, jobId };
+  async cancel(jobId: string): Promise<JobCancelResponseData> {
+    const payload: JobCancelRequest = { jobId };
     return await bridgeClient.invoke<JobCancelResponseData>(
       "job.cancel",
       payload,
-      { workspaceId },
     );
   },
 
   /**
    * Tiếp tục một tác vụ ở trạng thái AwaitingUser sau khi đã đáp ứng điều kiện
    */
-  async resume(workspaceId: string, jobId: string): Promise<JobResumeResponseData> {
-    const payload: JobResumeRequest = { workspaceId, jobId };
+  async resume(jobId: string): Promise<JobResumeResponseData> {
+    const payload: JobResumeRequest = { jobId };
     return await bridgeClient.invoke<JobResumeResponseData>(
       "job.resume",
       payload,
-      { workspaceId },
     );
   },
 
@@ -79,19 +76,17 @@ export const jobApi = {
     return await bridgeClient.invoke<JobReconcileResponseData>(
       "job.reconcile",
       payload,
-      { workspaceId: payload.workspaceId },
     );
   },
 
   /**
    * Thử lại an toàn một tác vụ thất bại (C2 - job.retry) với ExpectedRevision (CAS)
    */
-  async retry(workspaceId: string, jobId: string, expectedRevision: number): Promise<JobRetryResponseData> {
-    const payload: JobRetryRequest = { workspaceId, jobId, expectedRevision };
+  async retry(jobId: string, expectedRevision: number): Promise<JobRetryResponseData> {
+    const payload: JobRetryRequest = { jobId, expectedRevision };
     return await bridgeClient.invoke<JobRetryResponseData>(
       "job.retry",
       payload,
-      { workspaceId },
     );
   },
 
@@ -102,7 +97,6 @@ export const jobApi = {
     return await bridgeClient.invoke<JobListHistoryResponseData>(
       "job.list_history",
       req,
-      req.workspaceId ? { workspaceId: req.workspaceId } : undefined,
     );
   },
 

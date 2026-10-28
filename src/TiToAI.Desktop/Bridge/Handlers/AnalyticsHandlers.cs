@@ -85,7 +85,6 @@ public sealed class AnalyticsHandlers
 
     /// <summary>
     /// Xử lý RPC analytics.get_summary
-    /// Payload: { workspaceId: string, periodDays?: number, startDate?: string, endDate?: string }
     /// </summary>
     public async Task<ResponseEnvelope> HandleGetSummaryAsync(RequestEnvelope request, CancellationToken cancellationToken)
     {
@@ -94,7 +93,7 @@ public sealed class AnalyticsHandlers
         try
         {
             var payload = ParsePayload<GetAnalyticsSummaryRequest>(request);
-            if (payload is null || (string.IsNullOrWhiteSpace(payload.AccountId) && string.IsNullOrWhiteSpace(payload.WorkspaceId)))
+            if (payload is null || string.IsNullOrWhiteSpace(payload.AccountId))
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
@@ -118,7 +117,6 @@ public sealed class AnalyticsHandlers
 
     /// <summary>
     /// Xử lý RPC analytics.get_timeseries
-    /// Payload: { workspaceId: string, metric: string, periodDays?: number }
     /// </summary>
     public async Task<ResponseEnvelope> HandleGetTimeseriesAsync(RequestEnvelope request, CancellationToken cancellationToken)
     {
@@ -127,7 +125,7 @@ public sealed class AnalyticsHandlers
         try
         {
             var payload = ParsePayload<GetAnalyticsTimeseriesRequest>(request);
-            if (payload is null || (string.IsNullOrWhiteSpace(payload.AccountId) && string.IsNullOrWhiteSpace(payload.WorkspaceId)) || string.IsNullOrWhiteSpace(payload.Metric))
+            if (payload is null || string.IsNullOrWhiteSpace(payload.AccountId) || string.IsNullOrWhiteSpace(payload.Metric))
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
@@ -151,7 +149,6 @@ public sealed class AnalyticsHandlers
 
     /// <summary>
     /// Xử lý RPC analytics.list_top_videos
-    /// Payload: { workspaceId: string, sortBy?: string, limit?: number }
     /// </summary>
     public async Task<ResponseEnvelope> HandleListTopVideosAsync(RequestEnvelope request, CancellationToken cancellationToken)
     {
@@ -160,7 +157,7 @@ public sealed class AnalyticsHandlers
         try
         {
             var payload = ParsePayload<ListTopVideosRequest>(request);
-            if (payload is null || (string.IsNullOrWhiteSpace(payload.AccountId) && string.IsNullOrWhiteSpace(payload.WorkspaceId)))
+            if (payload is null || string.IsNullOrWhiteSpace(payload.AccountId))
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
@@ -202,7 +199,6 @@ public sealed class AnalyticsHandlers
 
     /// <summary>
     /// Xử lý RPC analytics.import_data
-    /// Payload: { workspaceId: string, accountId?: string, format: string, rawContent: string, source?: string }
     /// </summary>
     public async Task<ResponseEnvelope> HandleImportDataAsync(RequestEnvelope request, CancellationToken cancellationToken)
     {
@@ -212,7 +208,7 @@ public sealed class AnalyticsHandlers
         {
             var payload = ParsePayload<ImportAnalyticsDataRequest>(request);
             if (payload is null ||
-                (string.IsNullOrWhiteSpace(payload.AccountId) && string.IsNullOrWhiteSpace(payload.WorkspaceId)) ||
+                string.IsNullOrWhiteSpace(payload.AccountId) ||
                 string.IsNullOrWhiteSpace(payload.Format) ||
                 string.IsNullOrWhiteSpace(payload.RawContent))
             {
@@ -238,7 +234,6 @@ public sealed class AnalyticsHandlers
 
     /// <summary>
     /// Xử lý RPC analytics.export_data
-    /// Payload: { workspaceId: string, format?: string, periodDays?: number }
     /// </summary>
     public async Task<ResponseEnvelope> HandleExportDataAsync(RequestEnvelope request, CancellationToken cancellationToken)
     {
@@ -247,7 +242,7 @@ public sealed class AnalyticsHandlers
         try
         {
             var payload = ParsePayload<ExportAnalyticsDataRequest>(request);
-            if (payload is null || (string.IsNullOrWhiteSpace(payload.AccountId) && string.IsNullOrWhiteSpace(payload.WorkspaceId)))
+            if (payload is null || string.IsNullOrWhiteSpace(payload.AccountId))
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
@@ -271,7 +266,6 @@ public sealed class AnalyticsHandlers
 
     /// <summary>
     /// Xử lý RPC analytics.check_tiktok_session
-    /// Payload: { workspaceId: string, profileId?: string }
     /// </summary>
     public async Task<ResponseEnvelope> HandleCheckTikTokSessionAsync(RequestEnvelope request, CancellationToken cancellationToken)
     {
@@ -289,7 +283,7 @@ public sealed class AnalyticsHandlers
         try
         {
             var payload = ParsePayload<TikTokCheckSessionRequest>(request);
-            if (payload is null || (string.IsNullOrWhiteSpace(payload.AccountId) && string.IsNullOrWhiteSpace(payload.WorkspaceId)))
+            if (payload is null || string.IsNullOrWhiteSpace(payload.AccountId))
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
@@ -313,7 +307,6 @@ public sealed class AnalyticsHandlers
 
     /// <summary>
     /// Xử lý RPC analytics.open_tiktok_login
-    /// Payload: { workspaceId: string, profileId?: string, targetUrl?: string }
     /// </summary>
     public async Task<ResponseEnvelope> HandleOpenTikTokLoginAsync(RequestEnvelope request, CancellationToken cancellationToken)
     {
@@ -331,7 +324,7 @@ public sealed class AnalyticsHandlers
         try
         {
             var payload = ParsePayload<TikTokOpenLoginRequest>(request);
-            if (payload is null || (string.IsNullOrWhiteSpace(payload.AccountId) && string.IsNullOrWhiteSpace(payload.WorkspaceId)))
+            if (payload is null || string.IsNullOrWhiteSpace(payload.AccountId))
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
@@ -355,7 +348,6 @@ public sealed class AnalyticsHandlers
 
     /// <summary>
     /// Xử lý RPC analytics.sync_tiktok_channel
-    /// Payload: { workspaceId: string, profileId?: string, forceOpenBrowser?: bool }
     /// </summary>
     public async Task<ResponseEnvelope> HandleSyncTikTokChannelAsync(RequestEnvelope request, CancellationToken cancellationToken)
     {
@@ -373,12 +365,12 @@ public sealed class AnalyticsHandlers
         try
         {
             var payload = ParsePayload<TikTokSyncChannelRequest>(request);
-            if (payload is null || string.IsNullOrWhiteSpace(payload.WorkspaceId))
+            if (payload is null || string.IsNullOrWhiteSpace(payload.AccountId))
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
                     "INVALID_ARGUMENT",
-                    "Payload thiếu trường 'workspaceId' bắt buộc.",
+                    "Vui lòng chọn tài khoản TikTok.",
                     retryable: false);
             }
 

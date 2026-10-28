@@ -305,7 +305,7 @@ public static class AiWebContentCreationSmokeTests
 
         var context = new AnalyticsContextDto(
             SnapshotId: "snap-001",
-            WorkspaceId: "ws-test",
+            AccountId: "account-test",
             ChannelIdentity: "@testchannel",
             Source: "CSV_IMPORT",
             CapturedAtUtc: "2026-10-27T00:00:00Z",

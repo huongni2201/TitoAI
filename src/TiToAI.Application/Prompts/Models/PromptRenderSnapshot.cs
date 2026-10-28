@@ -5,12 +5,11 @@ namespace TiToAI.Application.Prompts.Models;
 
 /// <summary>
 /// Bản chụp bất biến của kết quả render prompt template tại thời điểm đưa vào job.
-/// Việc sửa đổi hoặc rollback template sau này hoàn toàn không làm thay đổi snapshot của job cũ.
+/// Việc sửa đổi template sau này không làm thay đổi snapshot của job cũ.
 /// </summary>
 public sealed record PromptRenderSnapshot
 {
     public string TemplateId { get; init; } = string.Empty;
-    public string VersionId { get; init; } = string.Empty;
     public string RenderedText { get; init; } = string.Empty;
     public IReadOnlyDictionary<string, string> Variables { get; init; } =
         new ReadOnlyDictionary<string, string>(new Dictionary<string, string>());
@@ -20,13 +19,11 @@ public sealed record PromptRenderSnapshot
 
     public PromptRenderSnapshot(
         string templateId,
-        string versionId,
         string renderedText,
         IReadOnlyDictionary<string, string>? variables,
         string? capturedAtUtc = null)
     {
         TemplateId = templateId ?? throw new ArgumentNullException(nameof(templateId));
-        VersionId = versionId ?? throw new ArgumentNullException(nameof(versionId));
         RenderedText = renderedText ?? throw new ArgumentNullException(nameof(renderedText));
 
         // Bản sao độc lập bất biến (defensive copy)
@@ -41,7 +38,6 @@ public sealed record PromptRenderSnapshot
     public PromptRenderSnapshotDto ToDto() =>
         new(
             TemplateId: TemplateId,
-            VersionId: VersionId,
             RenderedText: RenderedText,
             Variables: Variables,
             CapturedAtUtc: CapturedAtUtc
@@ -52,7 +48,6 @@ public sealed record PromptRenderSnapshot
         ArgumentNullException.ThrowIfNull(dto);
         return new PromptRenderSnapshot(
             dto.TemplateId,
-            dto.VersionId,
             dto.RenderedText,
             dto.Variables,
             dto.CapturedAtUtc

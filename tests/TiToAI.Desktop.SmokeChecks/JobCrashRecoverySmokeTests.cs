@@ -46,7 +46,7 @@ public static class JobCrashRecoverySmokeTests
 
         using (var db = new TiToAIDbContext(dbOptions))
         {
-            db.Database.Migrate();
+            db.Database.EnsureCreated();
 
             var now = DateTimeOffset.UtcNow.ToString("o");
             if (!db.BrowserProfiles.Any(p => p.Id == "shared_ai"))
@@ -107,30 +107,20 @@ public static class JobCrashRecoverySmokeTests
         }
     }
 
-    private static async Task<(string WorkspaceId, string ProjectId, string SceneId)> SeedBasicEntitiesAsync(
+    private static async Task<(string ProjectId, string SceneId)> SeedBasicEntitiesAsync(
         DbContextOptions<TiToAIDbContext> dbOptions)
     {
         await using var db = new TiToAIDbContext(dbOptions);
 
-        var wsId = Guid.NewGuid().ToString();
+
         var prjId = Guid.NewGuid().ToString();
         var scnId = Guid.NewGuid().ToString();
         var now = DateTimeOffset.UtcNow.ToString("o");
 
-        var ws = new Workspace
-        {
-            Id = wsId,
-            Name = "Workspace Crash Test",
-            Status = "Active",
-            CreatedAtUtc = now,
-            UpdatedAtUtc = now
-        };
-        db.Workspaces.Add(ws);
 
         var prj = new Project
         {
             Id = prjId,
-            WorkspaceId = wsId,
             Name = "Project Crash Test",
             CreatedAtUtc = now,
             UpdatedAtUtc = now
@@ -140,7 +130,6 @@ public static class JobCrashRecoverySmokeTests
         var scn = new Scene
         {
             Id = scnId,
-            WorkspaceId = wsId,
             ProjectId = prjId,
             SequenceOrder = 1,
             Name = "Scene 1",
@@ -150,7 +139,7 @@ public static class JobCrashRecoverySmokeTests
         db.Scenes.Add(scn);
 
         await db.SaveChangesAsync();
-        return (wsId, prjId, scnId);
+        return (prjId, scnId);
     }
 
     /// <summary>
@@ -161,7 +150,7 @@ public static class JobCrashRecoverySmokeTests
         var (dbOptions, tempDir) = CreateTestContext();
         try
         {
-            var (wsId, prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
+            var (prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
             var jobId = Guid.NewGuid().ToString();
             var now = DateTimeOffset.UtcNow;
             var nowIso = now.ToString("o");
@@ -172,7 +161,6 @@ public static class JobCrashRecoverySmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = jobId,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     SceneId = null,
                     TaskType = JobTaskType.Script,
@@ -246,7 +234,7 @@ public static class JobCrashRecoverySmokeTests
         var (dbOptions, tempDir) = CreateTestContext();
         try
         {
-            var (wsId, prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
+            var (prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
             var jobId = Guid.NewGuid().ToString();
             var now = DateTimeOffset.UtcNow;
             var nowIso = now.ToString("o");
@@ -257,7 +245,6 @@ public static class JobCrashRecoverySmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = jobId,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     SceneId = null,
                     TaskType = JobTaskType.Script,
@@ -322,7 +309,7 @@ public static class JobCrashRecoverySmokeTests
         var (dbOptions, tempDir) = CreateTestContext();
         try
         {
-            var (wsId, prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
+            var (prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
             var jobId = Guid.NewGuid().ToString();
             var now = DateTimeOffset.UtcNow;
             var nowIso = now.ToString("o");
@@ -333,7 +320,6 @@ public static class JobCrashRecoverySmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = jobId,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     SceneId = null,
                     TaskType = JobTaskType.Script,
@@ -402,7 +388,7 @@ public static class JobCrashRecoverySmokeTests
         var (dbOptions, tempDir) = CreateTestContext();
         try
         {
-            var (wsId, prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
+            var (prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
             var jobId = Guid.NewGuid().ToString();
             var now = DateTimeOffset.UtcNow;
             var nowIso = now.ToString("o");
@@ -413,7 +399,6 @@ public static class JobCrashRecoverySmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = jobId,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     SceneId = null,
                     TaskType = JobTaskType.Script,
@@ -480,7 +465,7 @@ public static class JobCrashRecoverySmokeTests
         var (dbOptions, tempDir) = CreateTestContext();
         try
         {
-            var (wsId, prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
+            var (prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
             var jobId = Guid.NewGuid().ToString();
             var now = DateTimeOffset.UtcNow;
             var nowIso = now.ToString("o");
@@ -490,7 +475,6 @@ public static class JobCrashRecoverySmokeTests
                 var job = new Job
                 {
                     Id = jobId,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     SceneId = null,
                     TaskType = JobTaskType.Script,
@@ -537,7 +521,6 @@ public static class JobCrashRecoverySmokeTests
             try
             {
                 await reconcileService.ReconcileAsync(new JobReconcileRequest(
-                    WorkspaceId: wsId,
                     JobId: jobId,
                     Action: "retry",
                     ConfirmedNotReceived: false
@@ -565,7 +548,6 @@ public static class JobCrashRecoverySmokeTests
 
             // 5b. Thử resubmit khi CÓ ConfirmedNotReceived == true => Thành công, đưa về Queued
             var res = await reconcileService.ReconcileAsync(new JobReconcileRequest(
-                WorkspaceId: wsId,
                 JobId: jobId,
                 Action: "retry",
                 ConfirmedNotReceived: true
@@ -606,7 +588,7 @@ public static class JobCrashRecoverySmokeTests
         var (dbOptions, tempDir) = CreateTestContext();
         try
         {
-            var (wsId, prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
+            var (prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
             var jobId = Guid.NewGuid().ToString();
             var now = DateTimeOffset.UtcNow;
             var nowIso = now.ToString("o");
@@ -616,7 +598,6 @@ public static class JobCrashRecoverySmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = jobId,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     SceneId = null,
                     TaskType = JobTaskType.Script,
@@ -649,7 +630,6 @@ public static class JobCrashRecoverySmokeTests
             try
             {
                 await reconcileService.ReconcileAsync(new JobReconcileRequest(
-                    WorkspaceId: wsId,
                     JobId: jobId,
                     Action: "mark_succeeded",
                     ResultReference: "   ",
@@ -668,7 +648,6 @@ public static class JobCrashRecoverySmokeTests
 
             // 6b. mark_succeeded có ResultReference hợp lệ => Thành công, chuyển Succeeded, xóa Occupancy
             var res = await reconcileService.ReconcileAsync(new JobReconcileRequest(
-                WorkspaceId: wsId,
                 JobId: jobId,
                 Action: "mark_succeeded",
                 ResultReference: "asset-rec-result-999",
@@ -709,7 +688,7 @@ public static class JobCrashRecoverySmokeTests
         var (dbOptions, tempDir) = CreateTestContext();
         try
         {
-            var (wsId, prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
+            var (prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
             var job1Id = Guid.NewGuid().ToString();
             var job2Id = Guid.NewGuid().ToString();
             var now = DateTimeOffset.UtcNow;
@@ -721,7 +700,6 @@ public static class JobCrashRecoverySmokeTests
                     new Job
                     {
                         Id = job1Id,
-                        WorkspaceId = wsId,
                         ProjectId = prjId,
                         SceneId = null,
                         TaskType = JobTaskType.Script,
@@ -733,7 +711,6 @@ public static class JobCrashRecoverySmokeTests
                     new Job
                     {
                         Id = job2Id,
-                        WorkspaceId = wsId,
                         ProjectId = prjId,
                         SceneId = null,
                         TaskType = JobTaskType.Script,
@@ -772,7 +749,6 @@ public static class JobCrashRecoverySmokeTests
 
             // 7a. mark_failed trên job1
             var res1 = await reconcileService.ReconcileAsync(new JobReconcileRequest(
-                WorkspaceId: wsId,
                 JobId: job1Id,
                 Action: "mark_failed"
             ));
@@ -795,7 +771,6 @@ public static class JobCrashRecoverySmokeTests
 
             // 7b. cancel trên job2
             var res2 = await reconcileService.ReconcileAsync(new JobReconcileRequest(
-                WorkspaceId: wsId,
                 JobId: job2Id,
                 Action: "cancel"
             ));
@@ -830,7 +805,7 @@ public static class JobCrashRecoverySmokeTests
         var (dbOptions, tempDir) = CreateTestContext();
         try
         {
-            var (wsId, prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
+            var (prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
             var jobId = Guid.NewGuid().ToString();
             var now = DateTimeOffset.UtcNow;
             var nowIso = now.ToString("o");
@@ -844,7 +819,6 @@ public static class JobCrashRecoverySmokeTests
                 var job = new Job
                 {
                     Id = jobId,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     SceneId = null,
                     TaskType = JobTaskType.Script,
@@ -944,7 +918,7 @@ public static class JobCrashRecoverySmokeTests
         var (dbOptions, tempDir) = CreateTestContext();
         try
         {
-            var (wsId, prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
+            var (prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
             var now = DateTimeOffset.UtcNow;
             var nowIso = now.ToString("o");
             var expiredLease = now.AddMinutes(-10).ToString("o");
@@ -968,7 +942,6 @@ public static class JobCrashRecoverySmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = job1Id,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     SceneId = null,
                     TaskType = JobTaskType.Script,
@@ -1035,7 +1008,6 @@ public static class JobCrashRecoverySmokeTests
             // Do side-effect chưa được giải quyết, ActiveSlotOccupancy của Job 1 VẪN BẮT BUỘC ĐƯỢC GIỮ NGUYÊN!
             var reconcileService = new JobReconciliationService(dbOptions, clock: () => now);
             var cancelRes = await reconcileService.ReconcileAsync(new JobReconcileRequest(
-                WorkspaceId: wsId,
                 JobId: job1Id,
                 Action: "cancel",
                 ConfirmedNotReceived: false
@@ -1065,7 +1037,6 @@ public static class JobCrashRecoverySmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = job2Id,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     SceneId = null,
                     TaskType = JobTaskType.Script,
@@ -1097,7 +1068,6 @@ public static class JobCrashRecoverySmokeTests
             // 6. Thực hiện đối soát an toàn cho Job 1: gọi ReconcileAsync với action: "cancel", ConfirmedNotReceived: true.
             // Khẳng định: ActiveSlotOccupancy của Job 1 bây giờ mới được giải phóng!
             var safeReconcileRes = await reconcileService.ReconcileAsync(new JobReconcileRequest(
-                WorkspaceId: wsId,
                 JobId: job1Id,
                 Action: "cancel",
                 ConfirmedNotReceived: true
@@ -1148,7 +1118,7 @@ public static class JobCrashRecoverySmokeTests
         var (dbOptions, tempDir) = CreateTestContext();
         try
         {
-            var (wsId, prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
+            var (prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
             var now = DateTimeOffset.UtcNow;
             var nowIso = now.ToString("o");
             var expiredLease = now.AddMinutes(-10).ToString("o");
@@ -1163,7 +1133,6 @@ public static class JobCrashRecoverySmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = jobId,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     SceneId = scnId,
                     TaskType = JobTaskType.Image,
@@ -1222,7 +1191,7 @@ public static class JobCrashRecoverySmokeTests
             var jobService = new JobService(dbOptions, snapshotFactory, scheduler, clock: () => now);
 
             // 4. Người dùng gọi JobService.CancelAsync
-            var cancelRes = await jobService.CancelAsync(wsId, jobId);
+            var cancelRes = await jobService.CancelAsync(jobId);
             if (cancelRes.State != JobState.Canceled)
             {
                 throw new Exception($"Kỳ vọng CancelAsync trả về Canceled, thực tế: {cancelRes.State}");
@@ -1251,11 +1220,10 @@ public static class JobCrashRecoverySmokeTests
                 db.Assets.Add(new Asset
                 {
                     Id = assetId,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     AssetType = "Image",
                     StorageRootId = "root_default",
-                    RelativePath = $"{wsId}/images/{assetId}.png",
+                    RelativePath = $"{prjId}/images/{assetId}.png",
                     ByteSize = 1024,
                     Sha256Hash = "abc123hash",
                     Status = "Linked",
@@ -1266,7 +1234,6 @@ public static class JobCrashRecoverySmokeTests
 
             // 6. Gọi JobService.ReconcileAsync với action = "resolve" (hoặc "mark_succeeded")
             var reconcileRes = await jobService.ReconcileAsync(new JobReconcileRequest(
-                WorkspaceId: wsId,
                 JobId: jobId,
                 Action: "resolve",
                 ResultReference: assetId
@@ -1333,7 +1300,7 @@ public static class JobCrashRecoverySmokeTests
         var (dbOptions, tempDir) = CreateTestContext();
         try
         {
-            var (wsId, prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
+            var (prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
             var now = DateTimeOffset.UtcNow;
             var nowIso = now.ToString("o");
             var expiredLease = now.AddMinutes(-10).ToString("o");
@@ -1353,7 +1320,6 @@ public static class JobCrashRecoverySmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = job1Id,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     SceneId = scnId,
                     TaskType = JobTaskType.Image,
@@ -1412,7 +1378,7 @@ public static class JobCrashRecoverySmokeTests
             var jobService = new JobService(dbOptions, snapshotFactory, scheduler, clock: () => now);
 
             // 4. Người dùng gọi JobService.CancelAsync
-            var cancelRes = await jobService.CancelAsync(wsId, job1Id);
+            var cancelRes = await jobService.CancelAsync(job1Id);
             if (cancelRes.State != JobState.Canceled)
             {
                 throw new Exception($"Kỳ vọng CancelAsync trả về Canceled, thực tế: {cancelRes.State}");
@@ -1422,7 +1388,7 @@ public static class JobCrashRecoverySmokeTests
             var freshJobService = new JobService(dbOptions, snapshotFactory, scheduler, clock: () => now);
 
             // KHẲNG ĐỊNH 1: list_active từ service mới BẮT BUỘC phải thấy Job 1 (vì Canceled còn unresolved side effect & occupancy)!
-            var activeListBeforeReconcile = await freshJobService.ListActiveAsync(wsId);
+            var activeListBeforeReconcile = await freshJobService.ListActiveAsync();
             var foundJob1 = activeListBeforeReconcile.Jobs.FirstOrDefault(j => j.Id == job1Id);
             if (foundJob1 == null)
             {
@@ -1432,7 +1398,6 @@ public static class JobCrashRecoverySmokeTests
             // 6. Đối soát an toàn qua JobReconciliationService (action: "cancel" với ConfirmedNotReceived = true)
             var reconcileService = new JobReconciliationService(dbOptions, clock: () => now);
             var reconcileRes = await reconcileService.ReconcileAsync(new JobReconcileRequest(
-                WorkspaceId: wsId,
                 JobId: job1Id,
                 Action: "cancel",
                 ConfirmedNotReceived: true
@@ -1444,7 +1409,7 @@ public static class JobCrashRecoverySmokeTests
             }
 
             // KHẲNG ĐỊNH 2: list_active sau reconcile KHÔNG ĐƯỢC chứa Job 1 nữa (đã resolved)!
-            var activeListAfterReconcile = await freshJobService.ListActiveAsync(wsId);
+            var activeListAfterReconcile = await freshJobService.ListActiveAsync();
             var notFoundJob1 = activeListAfterReconcile.Jobs.FirstOrDefault(j => j.Id == job1Id);
             if (notFoundJob1 != null)
             {
@@ -1468,7 +1433,6 @@ public static class JobCrashRecoverySmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = job2Id,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     SceneId = scnId,
                     TaskType = JobTaskType.Image,
@@ -1506,7 +1470,7 @@ public static class JobCrashRecoverySmokeTests
         var (dbOptions, tempDir) = CreateTestContext();
         try
         {
-            var (wsId, prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
+            var (prjId, scnId) = await SeedBasicEntitiesAsync(dbOptions);
             var now = DateTimeOffset.UtcNow;
             var nowIso = now.ToString("o");
             var expiredLease = now.AddMinutes(-10).ToString("o");
@@ -1531,7 +1495,6 @@ public static class JobCrashRecoverySmokeTests
                 db.Jobs.Add(new Job
                 {
                     Id = jobId,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     SceneId = scnId,
                     TaskType = JobTaskType.Image,
@@ -1586,7 +1549,7 @@ public static class JobCrashRecoverySmokeTests
             {
                 FileStore = fileStore,
                 RootRegistry = rootRegistry,
-                FinalizeRelativePath = $"{wsId}/images/output_test12.png"
+                FinalizeRelativePath = $"{prjId}/images/output_test12.png"
             };
 
             var reservation = new JobReservation(dbOptions, () => now);
@@ -1596,7 +1559,7 @@ public static class JobCrashRecoverySmokeTests
             var jobService = new JobService(dbOptions, snapshotFactory, scheduler, clock: () => now);
 
             // Người dùng gọi JobService.CancelAsync
-            await jobService.CancelAsync(wsId, jobId);
+            await jobService.CancelAsync(jobId);
 
             var reconcileService = new JobReconciliationService(dbOptions, clock: () => now);
 
@@ -1605,7 +1568,6 @@ public static class JobCrashRecoverySmokeTests
             try
             {
                 await reconcileService.ReconcileAsync(new JobReconcileRequest(
-                    WorkspaceId: wsId,
                     JobId: jobId,
                     Action: "retry",
                     ConfirmedNotReceived: true
@@ -1625,7 +1587,6 @@ public static class JobCrashRecoverySmokeTests
             try
             {
                 await reconcileService.ReconcileAsync(new JobReconcileRequest(
-                    WorkspaceId: wsId,
                     JobId: jobId,
                     Action: "resubmit",
                     ConfirmedNotReceived: true
@@ -1645,7 +1606,6 @@ public static class JobCrashRecoverySmokeTests
             try
             {
                 await reconcileService.ReconcileAsync(new JobReconcileRequest(
-                    WorkspaceId: wsId,
                     JobId: jobId,
                     Action: "finalize"
                 ));
@@ -1662,7 +1622,7 @@ public static class JobCrashRecoverySmokeTests
             // Thiết lập checkpoint kết quả trung gian trong DB (giả lập AI đã sinh xong nhưng lỗi storage)
             const string checkpointPayload = "Payload checkpoint thu hoi tu AI sau cancel";
             var assetId = Guid.NewGuid().ToString("N");
-            var relPath = $"{wsId}/images/{assetId}.png";
+            var relPath = $"{prjId}/images/{assetId}.png";
             fakeExecutor.FinalizeRelativePath = relPath;
             fakeExecutor.ResultReferenceToReturn = assetId;
 
@@ -1671,7 +1631,6 @@ public static class JobCrashRecoverySmokeTests
                 db.Assets.Add(new Asset
                 {
                     Id = assetId,
-                    WorkspaceId = wsId,
                     ProjectId = prjId,
                     AssetType = "Image",
                     StorageRootId = "root_default",
@@ -1692,7 +1651,6 @@ public static class JobCrashRecoverySmokeTests
 
             // Gọi Reconcile finalize khi ĐÃ CÓ checkpoint
             var finalizeRes = await reconcileService.ReconcileAsync(new JobReconcileRequest(
-                WorkspaceId: wsId,
                 JobId: jobId,
                 Action: "finalize"
             ));
@@ -1726,7 +1684,9 @@ public static class JobCrashRecoverySmokeTests
 
             if (finalizedJob == null)
             {
-                throw new TimeoutException("Hết thời gian chờ scheduler finalize checkpoint.");
+                await using var db = new TiToAIDbContext(dbOptions);
+                var currentJob = await db.Jobs.AsNoTracking().FirstAsync(x => x.Id == jobId);
+                throw new TimeoutException($"Hết thời gian chờ scheduler finalize checkpoint: state={currentJob.State}, reason={currentJob.ReasonCode}, worker={scheduler.LastWorkerException}");
             }
 
             // KHẲNG ĐỊNH 4: KHÔNG TĂNG AI submits (TotalAiSubmits giữ nguyên)

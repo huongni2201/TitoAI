@@ -105,9 +105,8 @@ public sealed class JobHandlers
             var result = await _jobService.EnqueueAsync(payload, cancellationToken).ConfigureAwait(false);
 
             // Phát Event thông báo trạng thái Queued ban đầu
-            await EmitEventAsync(result.WorkspaceId, "job.state_changed", new JobStateChangedPayload(
+            await EmitEventAsync("job.state_changed", new JobStateChangedPayload(
                 JobId: result.JobId,
-                WorkspaceId: result.WorkspaceId,
                 ProjectId: payload.ProjectId,
                 PreviousState: "",
                 NewState: JobState.Queued,
@@ -136,16 +135,16 @@ public sealed class JobHandlers
         try
         {
             var payload = ParsePayload<JobGetStatusRequest>(request);
-            if (payload is null || string.IsNullOrWhiteSpace(payload.JobId) || string.IsNullOrWhiteSpace(payload.WorkspaceId))
+            if (payload is null || string.IsNullOrWhiteSpace(payload.JobId))
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
                     "INVALID_ARGUMENT",
-                    "Payload yêu cầu kiểm tra trạng thái thiếu 'workspaceId' hoặc 'jobId'.",
+                    "Payload yêu cầu kiểm tra trạng thái thiếu 'jobId'.",
                     retryable: false);
             }
 
-            var result = await _jobService.GetStatusAsync(payload.WorkspaceId, payload.JobId, cancellationToken).ConfigureAwait(false);
+            var result = await _jobService.GetStatusAsync(payload.JobId, cancellationToken).ConfigureAwait(false);
             return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
         }
         catch (OperationCanceledException)
@@ -165,7 +164,7 @@ public sealed class JobHandlers
         try
         {
             var payload = ParsePayload<JobListActiveRequest>(request);
-            var result = await _jobService.ListActiveAsync(payload?.WorkspaceId, cancellationToken).ConfigureAwait(false);
+            var result = await _jobService.ListActiveAsync(cancellationToken).ConfigureAwait(false);
             return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
         }
         catch (OperationCanceledException)
@@ -185,22 +184,21 @@ public sealed class JobHandlers
         try
         {
             var payload = ParsePayload<JobCancelRequest>(request);
-            if (payload is null || string.IsNullOrWhiteSpace(payload.JobId) || string.IsNullOrWhiteSpace(payload.WorkspaceId))
+            if (payload is null || string.IsNullOrWhiteSpace(payload.JobId))
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
                     "INVALID_ARGUMENT",
-                    "Payload yêu cầu hủy tác vụ thiếu 'workspaceId' hoặc 'jobId'.",
+                    "Payload yêu cầu hủy tác vụ thiếu 'jobId'.",
                     retryable: false);
             }
 
-            var result = await _jobService.CancelAsync(payload.WorkspaceId, payload.JobId, cancellationToken).ConfigureAwait(false);
+            var result = await _jobService.CancelAsync(payload.JobId, cancellationToken).ConfigureAwait(false);
 
             if (result.State == JobState.Canceled)
             {
-                await EmitEventAsync(payload.WorkspaceId, "job.state_changed", new JobStateChangedPayload(
+                await EmitEventAsync("job.state_changed", new JobStateChangedPayload(
                     JobId: result.JobId,
-                    WorkspaceId: payload.WorkspaceId,
                     ProjectId: null,
                     PreviousState: result.PreviousState ?? JobState.Running,
                     NewState: JobState.Canceled,
@@ -230,20 +228,19 @@ public sealed class JobHandlers
         try
         {
             var payload = ParsePayload<JobReconcileRequest>(request);
-            if (payload is null || string.IsNullOrWhiteSpace(payload.JobId) || string.IsNullOrWhiteSpace(payload.WorkspaceId) || string.IsNullOrWhiteSpace(payload.Action))
+            if (payload is null || string.IsNullOrWhiteSpace(payload.JobId) || string.IsNullOrWhiteSpace(payload.Action))
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
                     "INVALID_ARGUMENT",
-                    "Payload yêu cầu đối soát thiếu 'workspaceId', 'jobId' hoặc 'action'.",
+                    "Payload yêu cầu đối soát thiếu 'jobId' hoặc 'action'.",
                     retryable: false);
             }
 
             var result = await _jobService.ReconcileAsync(payload, cancellationToken).ConfigureAwait(false);
 
-            await EmitEventAsync(payload.WorkspaceId, "job.state_changed", new JobStateChangedPayload(
+            await EmitEventAsync("job.state_changed", new JobStateChangedPayload(
                 JobId: result.JobId,
-                WorkspaceId: payload.WorkspaceId,
                 ProjectId: null,
                 PreviousState: result.PreviousState,
                 NewState: result.CurrentState,
@@ -272,20 +269,19 @@ public sealed class JobHandlers
         try
         {
             var payload = ParsePayload<JobResumeRequest>(request);
-            if (payload is null || string.IsNullOrWhiteSpace(payload.JobId) || string.IsNullOrWhiteSpace(payload.WorkspaceId))
+            if (payload is null || string.IsNullOrWhiteSpace(payload.JobId))
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
                     "INVALID_ARGUMENT",
-                    "Payload yêu cầu tiếp tục tác vụ thiếu 'workspaceId' hoặc 'jobId'.",
+                    "Payload yêu cầu tiếp tục tác vụ thiếu 'jobId'.",
                     retryable: false);
             }
 
-            var result = await _jobService.ResumeAsync(payload.WorkspaceId, payload.JobId, cancellationToken).ConfigureAwait(false);
+            var result = await _jobService.ResumeAsync(payload.JobId, cancellationToken).ConfigureAwait(false);
 
-            await EmitEventAsync(payload.WorkspaceId, "job.state_changed", new JobStateChangedPayload(
+            await EmitEventAsync("job.state_changed", new JobStateChangedPayload(
                 JobId: result.JobId,
-                WorkspaceId: payload.WorkspaceId,
                 ProjectId: null,
                 PreviousState: JobState.AwaitingUser,
                 NewState: result.State,
@@ -314,20 +310,19 @@ public sealed class JobHandlers
         try
         {
             var payload = ParsePayload<JobRetryRequest>(request);
-            if (payload is null || string.IsNullOrWhiteSpace(payload.JobId) || string.IsNullOrWhiteSpace(payload.WorkspaceId))
+            if (payload is null || string.IsNullOrWhiteSpace(payload.JobId))
             {
                 return ResponseEnvelopeHelper.CreateError(
                     request.Id,
                     "INVALID_ARGUMENT",
-                    "Payload yêu cầu thử lại tác vụ thiếu 'workspaceId' hoặc 'jobId'.",
+                    "Payload yêu cầu thử lại tác vụ thiếu 'jobId'.",
                     retryable: false);
             }
 
             var result = await _jobService.RetryAsync(payload, cancellationToken).ConfigureAwait(false);
 
-            await EmitEventAsync(payload.WorkspaceId, "job.state_changed", new JobStateChangedPayload(
+            await EmitEventAsync("job.state_changed", new JobStateChangedPayload(
                 JobId: result.JobId,
-                WorkspaceId: payload.WorkspaceId,
                 ProjectId: null,
                 PreviousState: JobState.Failed,
                 NewState: result.State,
@@ -369,7 +364,7 @@ public sealed class JobHandlers
         }
     }
 
-    private async Task EmitEventAsync<TPayload>(string? workspaceId, string eventName, TPayload payload)
+    private async Task EmitEventAsync<TPayload>(string eventName, TPayload payload)
         where TPayload : notnull
     {
         if (_eventSink is null)
@@ -382,7 +377,6 @@ public sealed class JobHandlers
             var seq = Interlocked.Increment(ref _eventSequenceCounter);
             var eventEnvelope = ResponseEnvelopeHelper.CreateEvent(
                 eventName,
-                workspaceId,
                 seq,
                 payload);
 

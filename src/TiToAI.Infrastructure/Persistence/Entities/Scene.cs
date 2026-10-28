@@ -4,7 +4,6 @@ public class Scene
 {
     public string Id { get; set; } = string.Empty;
     public string ProjectId { get; set; } = string.Empty;
-    public string WorkspaceId { get; set; } = string.Empty;
     public int SequenceOrder { get; set; }
     public string Name { get; set; } = string.Empty;
     public decimal TargetDurationSeconds { get; set; }

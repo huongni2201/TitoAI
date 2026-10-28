@@ -69,9 +69,7 @@ public sealed class WorkflowDefinitionService
     /// Lấy định nghĩa workflow đang kích hoạt (Active Workflow).
     /// Nếu chưa từng khởi tạo, tự động tạo và lưu phiên bản mặc định Version 1.
     /// </summary>
-    public async Task<WorkflowGetActiveResponseData> GetActiveWorkflowAsync(
-        WorkflowGetActiveRequest? request = null,
-        CancellationToken ct = default)
+    public async Task<WorkflowGetActiveResponseData> GetActiveWorkflowAsync(CancellationToken ct = default)
     {
         await using var dbContext = new TiToAIDbContext(_dbOptions);
 
@@ -203,8 +201,6 @@ public sealed class WorkflowDefinitionService
             var newDefinition = new WorkflowDefinitionDto(
                 WorkflowId: request.WorkflowId ?? DefaultWorkflowId,
                 Version: newVersion,
-                Scope: "global",
-                WorkspaceId: null,
                 Name: request.Name.Trim(),
                 Description: request.Description?.Trim() ?? string.Empty,
                 Steps: request.Steps.ToList(),
@@ -367,8 +363,6 @@ public sealed class WorkflowDefinitionService
         return new WorkflowDefinitionDto(
             WorkflowId: DefaultWorkflowId,
             Version: 1,
-            Scope: "global",
-            WorkspaceId: null,
             Name: "Standard Video Production Pipeline",
             Description: "Quy trình sản xuất video 4 bước tuyến tính: Kịch bản -> Tạo ảnh -> Prompt video -> Kết xuất video.",
             Steps: new[]

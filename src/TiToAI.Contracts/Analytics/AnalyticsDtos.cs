@@ -14,11 +14,10 @@ public sealed record TikTokAnalyticsAccountsResponseData(
 );
 
 /// <summary>
-/// Báo cáo tổng hợp số liệu Analytics theo Không gian làm việc (Workspace) và kỳ thời gian.
+/// Báo cáo tổng hợp số liệu Analytics theo TikTok account và kỳ thời gian.
 /// Tuân thủ nguyên tắc: Không tự sinh số liệu giả, khuyết thì giữ null.
 /// </summary>
 public sealed record AnalyticsSummaryDto(
-    [property: JsonPropertyName("workspaceId")] string WorkspaceId,
     [property: JsonPropertyName("periodDays")] int? PeriodDays,
     [property: JsonPropertyName("startDate")] DateTime? StartDate,
     [property: JsonPropertyName("endDate")] DateTime? EndDate,
@@ -51,7 +50,6 @@ public sealed record AnalyticsTimeseriesPointDto(
 public sealed record VideoMetricRecordDto(
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("snapshotId")] string SnapshotId,
-    [property: JsonPropertyName("workspaceId")] string WorkspaceId,
     [property: JsonPropertyName("accountId")] string? AccountId,
     [property: JsonPropertyName("videoKey")] string VideoKey,
     [property: JsonPropertyName("title")] string Title,
@@ -71,7 +69,6 @@ public sealed record VideoMetricRecordDto(
 /// </summary>
 public sealed record AnalyticsImportResultDto(
     [property: JsonPropertyName("snapshotId")] string SnapshotId,
-    [property: JsonPropertyName("workspaceId")] string WorkspaceId,
     [property: JsonPropertyName("recordCount")] int RecordCount,
     [property: JsonPropertyName("success")] bool Success,
     [property: JsonPropertyName("message")] string Message,
@@ -84,7 +81,6 @@ public sealed record AnalyticsImportResultDto(
 /// Yêu cầu truy vấn tổng hợp Analytics.
 /// </summary>
 public sealed record GetAnalyticsSummaryRequest(
-    [property: JsonPropertyName("workspaceId")] string? WorkspaceId,
     [property: JsonPropertyName("periodDays")] int? PeriodDays = null,
     [property: JsonPropertyName("startDate")] DateTime? StartDate = null,
     [property: JsonPropertyName("endDate")] DateTime? EndDate = null,
@@ -95,7 +91,6 @@ public sealed record GetAnalyticsSummaryRequest(
 /// Yêu cầu truy vấn chuỗi thời gian theo chỉ số ("views", "likes", "comments", "shares", "gmv", "clicks").
 /// </summary>
 public sealed record GetAnalyticsTimeseriesRequest(
-    [property: JsonPropertyName("workspaceId")] string? WorkspaceId,
     [property: JsonPropertyName("metric")] string Metric,
     [property: JsonPropertyName("periodDays")] int? PeriodDays = null,
     [property: JsonPropertyName("dataType")] string? DataType = null,
@@ -106,7 +101,6 @@ public sealed record GetAnalyticsTimeseriesRequest(
 /// Yêu cầu lấy danh sách video hàng đầu theo chỉ số sắp xếp.
 /// </summary>
 public sealed record ListTopVideosRequest(
-    [property: JsonPropertyName("workspaceId")] string? WorkspaceId,
     [property: JsonPropertyName("sortBy")] string? SortBy = null,
     [property: JsonPropertyName("limit")] int? Limit = null,
     [property: JsonPropertyName("accountId")] string? AccountId = null
@@ -116,7 +110,6 @@ public sealed record ListTopVideosRequest(
 /// Yêu cầu nhập khẩu dữ liệu phân tích dạng thô (CSV hoặc JSON).
 /// </summary>
 public sealed record ImportAnalyticsDataRequest(
-    [property: JsonPropertyName("workspaceId")] string? WorkspaceId,
     [property: JsonPropertyName("accountId")] string? AccountId,
     [property: JsonPropertyName("format")] string Format,
     [property: JsonPropertyName("rawContent")] string RawContent,
@@ -127,7 +120,6 @@ public sealed record ImportAnalyticsDataRequest(
 /// Yêu cầu xuất dữ liệu phân tích thành file tải về.
 /// </summary>
 public sealed record ExportAnalyticsDataRequest(
-    [property: JsonPropertyName("workspaceId")] string? WorkspaceId,
     [property: JsonPropertyName("format")] string? Format = null,
     [property: JsonPropertyName("periodDays")] int? PeriodDays = null,
     [property: JsonPropertyName("accountId")] string? AccountId = null
@@ -146,7 +138,6 @@ public sealed record AnalyticsExportResultDto(
 /// Yêu cầu kiểm tra trạng thái phiên làm việc (Session/Cookies) của kênh TikTok trong Không gian làm việc.
 /// </summary>
 public sealed record TikTokCheckSessionRequest(
-    [property: JsonPropertyName("workspaceId")] string? WorkspaceId,
     [property: JsonPropertyName("profileId")] string? ProfileId = null,
     [property: JsonPropertyName("accountId")] string? AccountId = null
 );
@@ -166,7 +157,6 @@ public sealed record TikTokCheckSessionResponseDto(
 /// Yêu cầu mở cửa sổ trình duyệt Chromium hiển thị (Headless = false) để người dùng thực hiện đăng nhập kênh TikTok.
 /// </summary>
 public sealed record TikTokOpenLoginRequest(
-    [property: JsonPropertyName("workspaceId")] string? WorkspaceId,
     [property: JsonPropertyName("profileId")] string? ProfileId = null,
     [property: JsonPropertyName("targetUrl")] string? TargetUrl = null,
     [property: JsonPropertyName("accountId")] string? AccountId = null
@@ -186,7 +176,6 @@ public sealed record TikTokOpenLoginResponseDto(
 /// Yêu cầu đồng bộ dữ liệu chỉ số kênh và danh sách video TikTok trực tiếp qua trình duyệt.
 /// </summary>
 public sealed record TikTokSyncChannelRequest(
-    [property: JsonPropertyName("workspaceId")] string? WorkspaceId,
     [property: JsonPropertyName("profileId")] string? ProfileId = null,
     [property: JsonPropertyName("forceOpenBrowser")] bool ForceOpenBrowser = false,
     [property: JsonPropertyName("accountId")] string? AccountId = null
@@ -210,7 +199,6 @@ public sealed record TikTokSyncChannelResponseDto(
 
 /// <summary>Ba bộ CSV TikTok Studio được nhập thành một snapshot duy nhất.</summary>
 public sealed record ImportTikTokStudioExportsRequest(
-    [property: JsonPropertyName("workspaceId")] string WorkspaceId,
     [property: JsonPropertyName("accountId")] string? AccountId,
     [property: JsonPropertyName("overviewCsv")] string OverviewCsv,
     [property: JsonPropertyName("contentCsv")] string ContentCsv,

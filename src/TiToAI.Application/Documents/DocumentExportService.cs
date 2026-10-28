@@ -2,7 +2,6 @@ using System.IO;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using TiToAI.Application.Scenes;
-using TiToAI.Application.Workspaces;
 using TiToAI.Contracts.Documents;
 using TiToAI.Infrastructure.Persistence;
 using TiToAI.Infrastructure.Persistence.Entities;
@@ -46,7 +45,6 @@ public sealed class DocumentExportService
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var workspaceId = NormalizeGuid(request.WorkspaceId, nameof(request.WorkspaceId));
         var sceneId = NormalizeGuid(request.SceneId, nameof(request.SceneId));
 
         if (!string.Equals(request.Format, "txt", StringComparison.OrdinalIgnoreCase))
@@ -61,19 +59,9 @@ public sealed class DocumentExportService
 
         await using var dbContext = new TiToAIDbContext(_dbOptions);
 
-        var workspaceExists = await dbContext.Workspaces
-            .AsNoTracking()
-            .AnyAsync(w => w.Id == workspaceId, cancellationToken)
-            .ConfigureAwait(false);
-
-        if (!workspaceExists)
-        {
-            throw new WorkspaceNotFoundException(workspaceId);
-        }
-
         var scene = await dbContext.Scenes
             .Include(s => s.Project)
-            .FirstOrDefaultAsync(s => s.Id == sceneId && s.WorkspaceId == workspaceId, cancellationToken)
+            .FirstOrDefaultAsync(s => s.Id == sceneId, cancellationToken)
             .ConfigureAwait(false);
 
         if (scene is null)
@@ -88,7 +76,7 @@ public sealed class DocumentExportService
         var contentBytes = Encoding.UTF8.GetBytes(content);
 
         var assetId = Guid.NewGuid().ToString("N");
-        var relativePath = $"{workspaceId}/projects/{scene.ProjectId}/documents/{assetId}.txt";
+        var relativePath = $"projects/{scene.ProjectId}/documents/{assetId}.txt";
 
         using var memoryStream = new MemoryStream(contentBytes);
         var saveResult = await _fileStore.SaveFileAsync(
@@ -102,7 +90,6 @@ public sealed class DocumentExportService
         var asset = new Asset
         {
             Id = assetId,
-            WorkspaceId = workspaceId,
             ProjectId = scene.ProjectId,
             AssetType = "Document",
             StorageRootId = documentsRootId,

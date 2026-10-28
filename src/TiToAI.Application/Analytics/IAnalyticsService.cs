@@ -14,7 +14,7 @@ public interface IAnalyticsService
     Task<IReadOnlyList<TikTokAnalyticsAccountDto>> ListTikTokAccountsAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Lấy dữ liệu tổng hợp chỉ số (Summary) theo Không gian làm việc và kỳ thời gian.
+    /// Lấy dữ liệu tổng hợp theo TikTok account và kỳ thời gian.
     /// </summary>
     Task<AnalyticsSummaryDto> GetSummaryAsync(GetAnalyticsSummaryRequest request, CancellationToken cancellationToken = default);
 
@@ -38,7 +38,7 @@ public interface IAnalyticsService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Xuất dữ liệu phân tích của Không gian làm việc ra định dạng CSV (UTF-8 có BOM).
+    /// Xuất dữ liệu phân tích của TikTok account ra định dạng CSV (UTF-8 có BOM).
     /// </summary>
     Task<AnalyticsExportResultDto> ExportDataAsync(ExportAnalyticsDataRequest request, CancellationToken cancellationToken = default);
 }

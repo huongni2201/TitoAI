@@ -21,9 +21,6 @@ namespace TiToAI.Application.Content;
 public sealed record VideoPromptCompositionResult(
     string TemplateId,
     string TemplateName,
-    string VersionId,
-    bool IsOverride,
-    string UserBrief,
     string ComposedPrompt,
     int OutputContractVersion
 );
@@ -46,40 +43,27 @@ public sealed class VideoWorkflowPromptComposer
     /// Tổng hợp yêu cầu gửi AI writer viết prompt chuyển động cho một Cảnh (Clip).
     /// </summary>
     public async Task<VideoPromptCompositionResult> ComposeVideoPromptAiRequestAsync(
-        string workspaceId,
         ProjectWorkflowConfigDto config,
         Scene scene,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? scenePurpose = null)
     {
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(scene);
 
-        var brief = (config.GoalPrompt ?? string.Empty).Trim();
 
         await using var dbContext = new TiToAIDbContext(_dbOptions);
+        scenePurpose ??= await dbContext.AppSettings.AsNoTracking()
+            .Where(setting => setting.Key == $"scene.plan.{scene.Id}")
+            .Select(setting => setting.Value).FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
 
-        // 1. Resolve template VideoPrompt: Workspace Override -> Global -> Default Instruction
-        PromptTemplate? template = null;
-        if (!string.IsNullOrWhiteSpace(workspaceId))
-        {
-            template = await dbContext.PromptTemplates
-                .AsNoTracking()
-                .FirstOrDefaultAsync(t => t.Purpose == JobTaskType.VideoPrompt && t.WorkspaceId == workspaceId, cancellationToken)
-                .ConfigureAwait(false);
-        }
-
-        if (template == null)
-        {
-            template = await dbContext.PromptTemplates
-                .AsNoTracking()
-                .FirstOrDefaultAsync(t => t.Purpose == JobTaskType.VideoPrompt && t.WorkspaceId == null, cancellationToken)
-                .ConfigureAwait(false);
-        }
+        var template = await dbContext.PromptTemplates
+            .AsNoTracking()
+            .FirstOrDefaultAsync(t => t.Purpose == JobTaskType.VideoPrompt && t.IsActive, cancellationToken)
+            .ConfigureAwait(false);
 
         string templateId = template?.Id ?? "default-video-prompt";
-        string templateName = template != null ? $"Mẫu {template.Purpose} ({(template.WorkspaceId != null ? "Kênh" : "Toàn cục")})" : "Mẫu Prompt Video Chuẩn";
-        string versionId = template?.Id ?? "default";
-        bool isOverride = template?.WorkspaceId != null;
+        string templateName = template != null ? $"Mẫu {template.Purpose} toàn cục" : "Mẫu Prompt Video Chuẩn";
         string templateText = template?.TemplateText ?? PromptTemplateService.DefaultVideoPromptInstruction;
 
         // Frontend renders dynamic fields before saving. Backend uses the resulting text.
@@ -99,11 +83,8 @@ public sealed class VideoWorkflowPromptComposer
         sb.AppendLine($"Viết prompt chuyển động bằng tiếng Anh (motion prompt) cho clip_{scene.SequenceOrder} (tên cảnh: '{scene.Name}'), không tạo thêm clip. Mô tả các nhịp phân cảnh/shot bên trong thời lượng {durationSec} giây của clip.");
         sb.AppendLine();
         sb.AppendLine("[DỮ LIỆU LẦN TẠO — do app serialize]");
-        if (!string.IsNullOrWhiteSpace(brief))
-        {
-            sb.AppendLine($"USER_BRIEF: \"{EscapeForPromptData(brief)}\"");
-        }
         sb.AppendLine($"CLIP_CONTEXT: clip_{scene.SequenceOrder}, tên: \"{scene.Name}\", thời lượng: {durationSec}s.");
+        if (!string.IsNullOrWhiteSpace(scenePurpose)) sb.AppendLine($"SCENE_PURPOSE: {scenePurpose}");
         sb.AppendLine($"REFERENCE_IMAGES: SelectedImage={scene.ImageAssetId ?? "None"}.");
         sb.AppendLine($"PROVIDER_CAPABILITIES: thời lượng clip = {durationSec}s, hỗ trợ multi-shot = Không (chuyển động liên tục).");
         sb.AppendLine();
@@ -113,9 +94,6 @@ public sealed class VideoWorkflowPromptComposer
         return new VideoPromptCompositionResult(
             TemplateId: templateId,
             TemplateName: templateName,
-            VersionId: versionId,
-            IsOverride: isOverride,
-            UserBrief: brief,
             ComposedPrompt: sb.ToString().TrimEnd(),
             OutputContractVersion: 1
         );
@@ -125,38 +103,21 @@ public sealed class VideoWorkflowPromptComposer
     /// Tổng hợp yêu cầu gửi AI writer cho bước Script lập danh sách cảnh tự động.
     /// </summary>
     public async Task<VideoPromptCompositionResult> ComposeScriptPlanningAiRequestAsync(
-        string workspaceId,
         ProjectWorkflowConfigDto config,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(config);
 
-        var brief = (config.GoalPrompt ?? string.Empty).Trim();
 
         await using var dbContext = new TiToAIDbContext(_dbOptions);
 
-        // 1. Resolve template Script: Workspace Override -> Global -> Default Instruction
-        PromptTemplate? template = null;
-        if (!string.IsNullOrWhiteSpace(workspaceId))
-        {
-            template = await dbContext.PromptTemplates
-                .AsNoTracking()
-                .FirstOrDefaultAsync(t => t.Purpose == JobTaskType.Script && t.WorkspaceId == workspaceId, cancellationToken)
-                .ConfigureAwait(false);
-        }
-
-        if (template == null)
-        {
-            template = await dbContext.PromptTemplates
-                .AsNoTracking()
-                .FirstOrDefaultAsync(t => t.Purpose == JobTaskType.Script && t.WorkspaceId == null, cancellationToken)
-                .ConfigureAwait(false);
-        }
+        var template = await dbContext.PromptTemplates
+            .AsNoTracking()
+            .FirstOrDefaultAsync(t => t.Purpose == JobTaskType.Script && t.IsActive, cancellationToken)
+            .ConfigureAwait(false);
 
         string templateId = template?.Id ?? "default-script";
-        string templateName = template != null ? $"Mẫu {template.Purpose} ({(template.WorkspaceId != null ? "Kênh" : "Toàn cục")})" : "Mẫu Kịch Bản Chuẩn";
-        string versionId = template?.Id ?? "default";
-        bool isOverride = template?.WorkspaceId != null;
+        string templateName = template != null ? $"Mẫu {template.Purpose} toàn cục" : "Mẫu Kịch Bản Chuẩn";
         string templateText = template?.TemplateText ?? PromptTemplateService.DefaultScriptInstruction;
 
         string renderedTemplate = ResolveRenderedTemplate(config.ScriptPromptText, templateText, templateName);
@@ -166,26 +127,18 @@ public sealed class VideoWorkflowPromptComposer
         sb.AppendLine(renderedTemplate.Trim());
         sb.AppendLine();
         sb.AppendLine("[NHIỆM VỤ]");
-        sb.AppendLine($"Lập kế hoạch nội dung cho đúng {config.TargetSceneCount} clip video riêng biệt cho mục tiêu được cung cấp, mỗi clip dài {config.TargetDurationPerSceneSeconds} giây. AI tự phân chia các phân cảnh/nhịp quay trong từng clip. Không tạo clip ghép dài.");
+        sb.AppendLine($"Lập storyboard cho đúng một video dài {config.TargetDurationPerSceneSeconds} giây cho mục tiêu được cung cấp. Chia video thành các phân cảnh liên tiếp, bắt đầu từ 0 và kết thúc đúng {config.TargetDurationPerSceneSeconds} giây; mỗi phân cảnh có mô tả hành động và prompt ảnh tĩnh riêng.");
         sb.AppendLine();
         sb.AppendLine("[DỮ LIỆU LẦN TẠO — do app serialize]");
-        if (!string.IsNullOrWhiteSpace(brief))
-        {
-            sb.AppendLine($"USER_BRIEF: \"{EscapeForPromptData(brief)}\"");
-        }
-        sb.AppendLine($"TARGET_CLIPS: {config.TargetSceneCount} clip riêng biệt.");
-        sb.AppendLine($"DURATION_PER_CLIP: {config.TargetDurationPerSceneSeconds} giây.");
+        sb.AppendLine($"TOTAL_DURATION: {config.TargetDurationPerSceneSeconds} giây.");
         sb.AppendLine($"WORKFLOW_MODE: {config.WorkflowMode}.");
         sb.AppendLine();
         sb.AppendLine("[OUTPUT_CONTRACT]");
-        sb.AppendLine("Trả về danh sách đúng số lượng clip yêu cầu (Clip 1, Clip 2...). Mỗi clip gồm tên clip, mục tiêu nội dung và nhịp phân cảnh mong muốn bên trong clip.");
+        sb.AppendLine($"Chỉ trả về JSON hợp lệ, không markdown. Schema: {{\"durationSeconds\":{config.TargetDurationPerSceneSeconds},\"shots\":[{{\"startSeconds\":0,\"endSeconds\":5,\"description\":\"mô tả hành động\",\"imagePrompt\":\"prompt ảnh tĩnh của phân cảnh\"}}]}}. Các shot liên tiếp, shot đầu bắt đầu từ 0, endSeconds của shot cuối bằng durationSeconds, tối đa 30 shot.");
 
         return new VideoPromptCompositionResult(
             TemplateId: templateId,
             TemplateName: templateName,
-            VersionId: versionId,
-            IsOverride: isOverride,
-            UserBrief: brief,
             ComposedPrompt: sb.ToString().TrimEnd(),
             OutputContractVersion: 1
         );
@@ -196,23 +149,18 @@ public sealed class VideoWorkflowPromptComposer
     /// { idea, hook, video_script, video_prompt, tiktok_content }.
     /// </summary>
     public async Task<VideoPromptCompositionResult> ComposeContentAndPromptAiRequestAsync(
-        string workspaceId,
         ProjectWorkflowConfigDto config,
         Scene? scene = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(config);
-        var brief = (config.GoalPrompt ?? string.Empty).Trim();
 
         var sb = new StringBuilder();
         sb.AppendLine("[VAI TRÒ]");
         sb.AppendLine("Bạn là chuyên gia biên kịch video ngắn (TikTok/Reels/Shorts) và chuyên gia tạo prompt AI video chuyên nghiệp.");
         sb.AppendLine();
-        sb.AppendLine("[YÊU CẦU NỘI DUNG / MỤC TIÊU]");
-        if (!string.IsNullOrWhiteSpace(brief))
-        {
-            sb.AppendLine($"USER_BRIEF: \"{EscapeForPromptData(brief)}\"");
-        }
+        sb.AppendLine("[HƯỚNG DẪN NỘI DUNG]");
+        sb.AppendLine(config.ScriptPromptText ?? string.Empty);
         sb.AppendLine($"WORKFLOW_MODE: {config.WorkflowMode}");
         sb.AppendLine($"DURATION: {config.TargetDurationPerSceneSeconds} giây");
         if (scene != null)
@@ -236,9 +184,6 @@ public sealed class VideoWorkflowPromptComposer
         return new VideoPromptCompositionResult(
             TemplateId: "content-schema-v1",
             TemplateName: "Schema Kịch Bản & Prompt Video",
-            VersionId: "v1",
-            IsOverride: false,
-            UserBrief: brief,
             ComposedPrompt: sb.ToString().TrimEnd(),
             OutputContractVersion: 1
         );
@@ -263,10 +208,4 @@ public sealed class VideoWorkflowPromptComposer
         return promptText;
     }
 
-    private static string EscapeForPromptData(string text)
-    {
-        if (string.IsNullOrEmpty(text)) return string.Empty;
-        // Escape dấu ngoặc kép để bảo đảm serialization rõ ràng, không làm hỏng cấu trúc prompt
-        return text.Replace("\"", "\\\"");
-    }
 }

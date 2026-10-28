@@ -17,24 +17,31 @@ public class ProjectConfiguration : IEntityTypeConfiguration<Project>
             .HasColumnType("TEXT")
             .IsRequired();
 
-        builder.Property(p => p.WorkspaceId)
-            .HasColumnName("workspace_id")
-            .HasColumnType("TEXT")
-            .IsRequired();
-
         builder.Property(p => p.Name)
-            .HasColumnName("name")
+            .HasColumnName("title")
             .HasColumnType("TEXT")
             .IsRequired();
 
-        builder.Property(p => p.Description)
-            .HasColumnName("description")
-            .HasColumnType("TEXT");
+        builder.Property(p => p.Brief)
+            .HasColumnName("brief")
+            .HasColumnType("TEXT")
+            .HasDefaultValue(string.Empty)
+            .IsRequired();
 
         builder.Property(p => p.Status)
             .HasColumnName("status")
             .HasColumnType("TEXT")
             .HasDefaultValue("Draft")
+            .IsRequired();
+
+        builder.Property(p => p.CurrentVideoRevisionId)
+            .HasColumnName("current_video_revision_id")
+            .HasColumnType("TEXT");
+
+        builder.Property(p => p.Revision)
+            .HasColumnName("revision")
+            .HasColumnType("INTEGER")
+            .HasDefaultValue(1L)
             .IsRequired();
 
         builder.Property(p => p.CreatedAtUtc)
@@ -47,12 +54,14 @@ public class ProjectConfiguration : IEntityTypeConfiguration<Project>
             .HasColumnType("TEXT")
             .IsRequired();
 
-        builder.HasOne(p => p.Workspace)
+        builder.HasOne<VideoRevision>()
             .WithMany()
-            .HasForeignKey(p => p.WorkspaceId)
-            .OnDelete(DeleteBehavior.Cascade);
+            .HasForeignKey(p => new { p.CurrentVideoRevisionId, p.Id })
+            .HasPrincipalKey(v => new { v.Id, v.ProjectId })
+            .IsRequired(false)
+            .OnDelete(DeleteBehavior.NoAction);
 
-        builder.HasAlternateKey(p => new { p.Id, p.WorkspaceId })
-            .HasName("uq_project_id_workspace");
+        builder.HasIndex(p => p.Status)
+            .HasDatabaseName("ix_project_status_updated");
     }
 }

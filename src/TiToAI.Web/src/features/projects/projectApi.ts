@@ -2,7 +2,6 @@ import { bridgeClient } from "../../services/bridgeClient";
 
 export interface ProjectSummaryDto {
   projectId: string;
-  workspaceId: string;
   name: string;
   description: string | null;
   status: string;
@@ -14,7 +13,6 @@ export interface ProjectSummaryDto {
 
 export interface ProjectDetailDto {
   projectId: string;
-  workspaceId: string;
   name: string;
   description: string | null;
   status: string;
@@ -31,7 +29,6 @@ export interface ProjectGetResponseData {
 }
 
 export interface ProjectCreateRequest {
-  workspaceId: string;
   name: string;
   description?: string | null;
 }
@@ -41,7 +38,6 @@ export interface ProjectCreateResponseData {
 }
 
 export interface ProjectUpdateRequest {
-  workspaceId: string;
   projectId: string;
   name?: string | null;
   description?: string | null;
@@ -53,7 +49,6 @@ export interface ProjectUpdateResponseData {
 }
 
 export interface ProjectDeleteRequest {
-  workspaceId: string;
   projectId: string;
 }
 
@@ -65,7 +60,6 @@ export interface ProjectDeleteResponseData {
 export interface SceneDto {
   sceneId: string;
   projectId: string;
-  workspaceId: string;
   name: string;
   sceneSequence: number;
   targetDurationSeconds: number;
@@ -88,7 +82,6 @@ export interface SceneGetResponseData {
 }
 
 export interface SceneCreateRequest {
-  workspaceId: string;
   projectId: string;
   name?: string | null;
   promptText?: string | null;
@@ -104,7 +97,6 @@ export interface SceneCreateResponseData {
 }
 
 export interface SceneUpdateRequest {
-  workspaceId: string;
   projectId: string;
   sceneId: string;
   expectedRevision?: string | null;
@@ -122,7 +114,6 @@ export interface SceneUpdateResponseData {
 }
 
 export interface SceneDeleteRequest {
-  workspaceId: string;
   projectId: string;
   sceneId: string;
 }
@@ -133,7 +124,6 @@ export interface SceneDeleteResponseData {
 }
 
 export interface SceneReorderRequest {
-  workspaceId: string;
   projectId: string;
   sceneIds: string[];
   expectedProjectRevision?: string | null;
@@ -159,37 +149,23 @@ export const projectApi = {
   },
 
   /**
-   * Lấy danh sách Dự án theo Workspace
-   */
-  async listByWorkspace(workspaceId: string): Promise<ProjectSummaryDto[]> {
-    const data = await bridgeClient.invoke<ProjectListResponseData>(
-      "project.list_by_workspace",
-      { workspaceId },
-      { workspaceId },
-    );
-    return data?.projects ?? [];
-  },
-
-  /**
    * Lấy chi tiết một Dự án
    */
-  async getProject(workspaceId: string, projectId: string): Promise<ProjectDetailDto> {
+  async getProject(projectId: string): Promise<ProjectDetailDto> {
     const data = await bridgeClient.invoke<ProjectGetResponseData>(
       "project.get",
-      { workspaceId, projectId },
-      { workspaceId },
+      { projectId },
     );
     return data.project;
   },
 
   /**
-   * Tạo mới Dự án trong Workspace
+   * Tạo mới Dự án
    */
   async createProject(payload: ProjectCreateRequest): Promise<string> {
     const data = await bridgeClient.invoke<ProjectCreateResponseData>(
       "project.create",
       payload,
-      { workspaceId: payload.workspaceId },
     );
     return data.projectId;
   },
@@ -201,7 +177,6 @@ export const projectApi = {
     const data = await bridgeClient.invoke<ProjectUpdateResponseData>(
       "project.update",
       payload,
-      { workspaceId: payload.workspaceId },
     );
     return data.project;
   },
@@ -209,11 +184,10 @@ export const projectApi = {
   /**
    * Xóa một Dự án (kèm kiểm tra an toàn active jobs)
    */
-  async deleteProject(workspaceId: string, projectId: string): Promise<boolean> {
+  async deleteProject(projectId: string): Promise<boolean> {
     const data = await bridgeClient.invoke<ProjectDeleteResponseData>(
       "project.delete",
-      { workspaceId, projectId },
-      { workspaceId },
+      { projectId },
     );
     return data?.success ?? true;
   },
@@ -221,11 +195,10 @@ export const projectApi = {
   /**
    * Lấy danh sách toàn bộ Cảnh trong Dự án (được sắp xếp theo sceneSequence)
    */
-  async listScenes(workspaceId: string, projectId: string): Promise<SceneDto[]> {
+  async listScenes(projectId: string): Promise<SceneDto[]> {
     const data = await bridgeClient.invoke<SceneListResponseData>(
       "scene.list_by_project",
-      { workspaceId, projectId },
-      { workspaceId },
+      { projectId },
     );
     return data?.scenes ?? [];
   },
@@ -233,11 +206,10 @@ export const projectApi = {
   /**
    * Lấy thông tin chi tiết một Cảnh
    */
-  async getScene(workspaceId: string, projectId: string, sceneId: string): Promise<SceneDto> {
+  async getScene(projectId: string, sceneId: string): Promise<SceneDto> {
     const data = await bridgeClient.invoke<SceneGetResponseData>(
       "scene.get",
-      { workspaceId, projectId, sceneId },
-      { workspaceId },
+      { projectId, sceneId },
     );
     return data.scene;
   },
@@ -249,7 +221,6 @@ export const projectApi = {
     return await bridgeClient.invoke<SceneCreateResponseData>(
       "scene.create",
       payload,
-      { workspaceId: payload.workspaceId },
     );
   },
 
@@ -261,7 +232,6 @@ export const projectApi = {
     const data = await bridgeClient.invoke<SceneUpdateResponseData>(
       "scene.update",
       payload,
-      { workspaceId: payload.workspaceId },
     );
     return data.scene;
   },
@@ -269,11 +239,10 @@ export const projectApi = {
   /**
    * Xóa một Cảnh khỏi Dự án
    */
-  async deleteScene(workspaceId: string, projectId: string, sceneId: string): Promise<boolean> {
+  async deleteScene(projectId: string, sceneId: string): Promise<boolean> {
     const data = await bridgeClient.invoke<SceneDeleteResponseData>(
       "scene.delete",
-      { workspaceId, projectId, sceneId },
-      { workspaceId },
+      { projectId, sceneId },
     );
     return data?.success ?? true;
   },
@@ -286,7 +255,6 @@ export const projectApi = {
     const data = await bridgeClient.invoke<SceneReorderResponseData>(
       "scene.reorder",
       payload,
-      { workspaceId: payload.workspaceId },
     );
     return data?.scenes ?? [];
   },

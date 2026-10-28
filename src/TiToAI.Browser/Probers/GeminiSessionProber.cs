@@ -192,6 +192,11 @@ public sealed class GeminiSessionProber : IPlatformSessionProber
 
             if (string.IsNullOrWhiteSpace(email))
             {
+                await _profileRegistry.UpdateProfileStateAsync(
+                    profile.ProfileId,
+                    sessionStatus: BrowserSessionStatus.Unverified,
+                    reasonCode: BrowserReasonCode.LoginRequired,
+                    cancellationToken: cancellationToken);
                 return ProfileIdentityResolutionResult.Failed("Phiên Gemini đã mở nhưng chưa đọc được email tài khoản. Vui lòng hoàn tất đăng nhập trên cửa sổ trình duyệt rồi kiểm tra lại.");
             }
 

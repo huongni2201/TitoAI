@@ -22,9 +22,8 @@ public class PromptTemplateConfiguration : IEntityTypeConfiguration<PromptTempla
             .HasColumnType("TEXT")
             .IsRequired();
 
-        builder.Property(t => t.WorkspaceId)
-            .HasColumnName("workspace_id")
-            .HasColumnType("TEXT");
+        builder.Property(t => t.Name).HasColumnName("name").HasColumnType("TEXT").IsRequired();
+        builder.Property(t => t.IsActive).HasColumnName("is_active").IsRequired();
 
         builder.Property(t => t.TemplateText)
             .HasColumnName("template_text")
@@ -47,21 +46,9 @@ public class PromptTemplateConfiguration : IEntityTypeConfiguration<PromptTempla
             .HasColumnType("TEXT")
             .IsRequired();
 
-        builder.HasOne(t => t.Workspace)
-            .WithMany()
-            .HasForeignKey(t => t.WorkspaceId)
-            .OnDelete(DeleteBehavior.Cascade);
-
-        // Global templates unique index: purpose when workspace_id IS NULL
         builder.HasIndex(t => t.Purpose)
             .IsUnique()
-            .HasFilter("workspace_id IS NULL")
-            .HasDatabaseName("uq_prompt_template_global_purpose");
-
-        // Workspace overrides unique index: (workspace_id, purpose) when workspace_id IS NOT NULL
-        builder.HasIndex(t => new { t.WorkspaceId, t.Purpose })
-            .IsUnique()
-            .HasFilter("workspace_id IS NOT NULL")
-            .HasDatabaseName("uq_prompt_template_workspace_purpose");
+            .HasFilter("\"is_active\" = 1")
+            .HasDatabaseName("uq_prompt_template_active_purpose");
     }
 }

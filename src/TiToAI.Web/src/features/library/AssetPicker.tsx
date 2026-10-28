@@ -12,7 +12,6 @@ import {
 import { listAssets, uploadAsset, type AssetItem } from "./libraryApi";
 
 interface AssetPickerProps {
-  workspaceId: string | null;
   projectId?: string;
   assetType: "Image" | "Audio";
   onSelect: (asset: AssetItem) => void;
@@ -20,7 +19,6 @@ interface AssetPickerProps {
 }
 
 export function AssetPicker({
-  workspaceId,
   projectId,
   assetType,
   onSelect,
@@ -37,15 +35,11 @@ export function AssetPicker({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchAssets = useCallback(async () => {
-    if (!workspaceId) {
-      setLoading(false);
-      return;
-    }
     setLoading(true);
     setError(null);
     try {
       const res = await listAssets({
-        workspaceId,
+        projectId,
         assetType,
         search: search.trim() || undefined,
         page: 1,
@@ -61,7 +55,7 @@ export function AssetPicker({
     } finally {
       setLoading(false);
     }
-  }, [workspaceId, assetType, search]);
+  }, [projectId, assetType, search]);
 
   useEffect(() => {
     fetchAssets();
@@ -75,7 +69,6 @@ export function AssetPicker({
   };
 
   const handleUploadFile = async (file: File) => {
-    if (!workspaceId) return;
     setUploading(true);
     setError(null);
     try {
@@ -87,7 +80,6 @@ export function AssetPicker({
       });
 
       const res = await uploadAsset({
-        workspaceId,
         projectId,
         assetType,
         fileName: file.name,
@@ -110,7 +102,6 @@ export function AssetPicker({
   };
 
   const handleTriggerUpload = async () => {
-    if (!workspaceId) return;
 
     // Nếu môi trường desktop WebView2 có window.chrome?.webview, gọi asset.upload mở native dialog
     if (typeof window !== "undefined" && window.chrome?.webview) {
@@ -118,7 +109,6 @@ export function AssetPicker({
       setError(null);
       try {
         const res = await uploadAsset({
-          workspaceId,
           projectId,
           assetType,
         });

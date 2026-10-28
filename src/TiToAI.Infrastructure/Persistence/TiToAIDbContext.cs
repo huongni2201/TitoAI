@@ -10,15 +10,12 @@ public class TiToAIDbContext : DbContext
     {
     }
 
-    public DbSet<Workspace> Workspaces => Set<Workspace>();
-    public DbSet<Account> Accounts => Set<Account>();
     public DbSet<Project> Projects => Set<Project>();
     public DbSet<Scene> Scenes => Set<Scene>();
     public DbSet<Asset> Assets => Set<Asset>();
     public DbSet<Job> Jobs => Set<Job>();
     public DbSet<AppSetting> AppSettings => Set<AppSetting>();
     public DbSet<PromptTemplate> PromptTemplates => Set<PromptTemplate>();
-    public DbSet<PromptVersion> PromptVersions => Set<PromptVersion>();
     public DbSet<BrowserProfile> BrowserProfiles => Set<BrowserProfile>();
     public DbSet<BrowserHandoffCheckpoint> BrowserHandoffCheckpoints => Set<BrowserHandoffCheckpoint>();
     public DbSet<ProviderAccount> ProviderAccounts => Set<ProviderAccount>();
@@ -27,6 +24,8 @@ public class TiToAIDbContext : DbContext
     public DbSet<AnalyticsSnapshot> AnalyticsSnapshots => Set<AnalyticsSnapshot>();
     public DbSet<VideoAnalyticsRecord> VideoAnalyticsRecords => Set<VideoAnalyticsRecord>();
     public DbSet<TikTokAnalyticsDailyRecord> TikTokAnalyticsDailyRecords => Set<TikTokAnalyticsDailyRecord>();
+    public DbSet<VideoRevision> VideoRevisions => Set<VideoRevision>();
+    public DbSet<PublishRecord> PublishRecords => Set<PublishRecord>();
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
@@ -37,7 +36,6 @@ public class TiToAIDbContext : DbContext
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
-        modelBuilder.Ignore<PromptVersion>();
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(TiToAIDbContext).Assembly);
     }
 }

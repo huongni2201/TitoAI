@@ -17,11 +17,6 @@ public class AssetConfiguration : IEntityTypeConfiguration<Asset>
             .HasColumnType("TEXT")
             .IsRequired();
 
-        builder.Property(a => a.WorkspaceId)
-            .HasColumnName("workspace_id")
-            .HasColumnType("TEXT")
-            .IsRequired();
-
         builder.Property(a => a.ProjectId)
             .HasColumnName("project_id")
             .HasColumnType("TEXT");
@@ -66,22 +61,11 @@ public class AssetConfiguration : IEntityTypeConfiguration<Asset>
             .HasColumnType("TEXT")
             .IsRequired();
 
-        builder.HasOne(a => a.Workspace)
-            .WithMany()
-            .HasForeignKey(a => a.WorkspaceId)
-            .OnDelete(DeleteBehavior.Cascade);
-
         builder.HasOne(a => a.Project)
             .WithMany()
-            .HasForeignKey(a => new { a.ProjectId, a.WorkspaceId })
-            .HasPrincipalKey(p => new { p.Id, p.WorkspaceId })
+            .HasForeignKey(a => a.ProjectId)
             .OnDelete(DeleteBehavior.NoAction);
-
-        builder.HasIndex(a => new { a.Id, a.WorkspaceId })
-            .IsUnique()
-            .HasDatabaseName("uq_asset_id_workspace");
-
-        builder.HasIndex(a => new { a.ProjectId, a.WorkspaceId })
-            .HasDatabaseName("ix_asset_project_workspace");
+        builder.HasIndex(a => a.ProjectId)
+            .HasDatabaseName("ix_asset_project");
     }
 }

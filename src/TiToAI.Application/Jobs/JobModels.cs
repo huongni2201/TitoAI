@@ -10,11 +10,10 @@ namespace TiToAI.Application.Jobs;
 
 /// <summary>
 /// Tín hiệu đánh thức gửi tới JobScheduler thông qua In-memory Channel
-/// khi có sự kiện enqueue mới, unpause workspace hoặc hoàn tất đăng nhập browser.
+/// khi có sự kiện enqueue mới, hoàn tất đăng nhập browser hoặc giải phóng account slot.
 /// </summary>
 public sealed record JobWakeupSignal(
     string Source,
-    string? WorkspaceId = null,
     string? JobId = null,
     string? ProfileId = null
 );
@@ -42,7 +41,6 @@ public sealed record JobSnapshotResult(
 /// </summary>
 public sealed record JobExecutionContext(
     string JobId,
-    string WorkspaceId,
     string ProjectId,
     string? SceneId,
     string TaskType,
@@ -85,7 +83,7 @@ public interface IJobExecutor
 
 /// <summary>
 /// Cổng kiểm soát (Gatekeeper) trạng thái trình duyệt và hạn ngạch tab.
-/// Scheduler sử dụng giao diện này để tự động bỏ qua Workspace Paused,
+/// Scheduler sử dụng giao diện này để tự động bỏ qua profile đang tạm dừng,
 /// Profile đang chờ đăng nhập hoặc Role Tab đang bận.
 /// </summary>
 public interface IBrowserGatekeeper
@@ -323,7 +321,7 @@ public sealed class DeterministicFakeJobExecutor : IJobExecutor
             if (!string.IsNullOrWhiteSpace(textToSave))
             {
                 var rootPath = await RootRegistry.ResolveRootPathAsync(context.StorageRootId, cancellationToken).ConfigureAwait(false);
-                var relPath = FinalizeRelativePath ?? $"{context.WorkspaceId}/output/{context.JobId}_output.txt";
+                var relPath = FinalizeRelativePath ?? $"{context.ProjectId}/output/{context.JobId}_output.txt";
                 using var ms = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(textToSave));
                 await FileStore.SaveFileAsync(rootPath, relPath, ms, cancellationToken).ConfigureAwait(false);
 

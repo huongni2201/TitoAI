@@ -4,14 +4,13 @@ using System.Collections.Generic;
 namespace TiToAI.Infrastructure.Persistence.Entities;
 
 /// <summary>
-/// Snapshot bất biến (immutable snapshot) đóng băng lịch sử thu thập phân tích theo Workspace.
+/// Snapshot bất biến của dữ liệu Analytics theo TikTok account.
 /// Lưu trữ bằng chứng và phân cách rõ ràng từng lần thu thập/nhập khẩu dữ liệu.
 /// </summary>
 public class AnalyticsSnapshot
 {
     public string Id { get; set; } = string.Empty;
-    public string WorkspaceId { get; set; } = string.Empty;
-    public string? AccountId { get; set; }
+    public string AccountId { get; set; } = string.Empty;
     public string Source { get; set; } = string.Empty;
     public DateTime? PeriodStart { get; set; }
     public DateTime? PeriodEnd { get; set; }

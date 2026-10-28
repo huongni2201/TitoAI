@@ -168,7 +168,7 @@ public static class ProviderCapabilities
             SupportsImageInputForPrompt: false,
             SupportsNoAudioVideo: true,
             AudioBehaviorDescription: "Không gửi audio: hệ thống TiToAI không tải tệp audio lên MuseAI. Video kết quả từ MuseAI có thể có nhạc nền mặc định của nhà cung cấp hoặc im lặng tùy phiên bản hệ thống MuseAI.",
-            SupportedDurations: new[] { 10, 15 },
+            SupportedDurations: new[] { 10, 15, 30 },
             SupportsMultiShot: false
         ),
         new ProviderTaskCapabilityDto(

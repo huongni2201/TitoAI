@@ -23,7 +23,6 @@ Coordinator xác nhận ownership trước sửa các file đang có worker khá
 
 Kiểm tra tối thiểu:
 
-1. Job automation hợp lệ thành công và tự kích hoạt bước tiếp theo, áp output đúng Workspace/scene, không có điểm bàn giao thủ công.
 2. Automation chưa sẵn sàng báo lỗi hữu ích, không hiển thị CTA hoặc mở bảng handoff, không gọi RPC nhập kết quả, không tự retry thiếu adapter/capability.
 3. Giữ đăng nhập/resume, hủy và đối soát kết quả chưa xác định; không gửi trùng sau crash hoặc mất phiên.
 4. Job lịch sử chờ handoff không mất dữ liệu hoặc bị tự chạy lại; UI hiển thị đúng khi mở hàng đợi/chi tiết.
@@ -34,7 +33,6 @@ Kiểm tra tối thiểu:
 Người dùng xác nhận không có AI khác đang triển khai và cho phép Codex sửa trực tiếp. Đã xóa service/DTO/RPC và UI/API/tests handoff; cập nhật provider metadata, lỗi executor, retry/resume guard và Settings. Không thay schema DB, không sửa job/asset đang lưu của người dùng.
 
 - Frontend: `pnpm build` PASS; queueProduction 13/13, queueDrawer 9/9 và AI Settings 6/6 PASS. Các suite DOM chạy bằng `node src/features/.../*.test.ts` cho từng file; có cảnh báo React act trong queueProduction.
-- Backend build: `dotnet build tests/TiToAI.Desktop.SmokeChecks/TiToAI.Desktop.SmokeChecks.csproj --no-restore -p:UseAppHost=false -p:UseSharedCompilation=false -p:BaseOutputPath=D:/workspace/TitoAI/.tmp/auto-video-build/ -m:1 -v:minimal` PASS, 0 warning/error. Output riêng vì ứng dụng đang mở khóa DLL ở thư mục mặc định.
 - Chạy DLL từ output trên với các tham số: `provider` 8/8, `remediation` 11/11, `workflow` 14/14, `retry` 8/8, `t15` 19/19 PASS. Bao gồm chặn RPC cũ, job lịch sử không resume/handoff nhưng vẫn hủy được, lỗi automation không retry và kết quả uncertain vẫn phải đối soát.
 - Fixture regression Image → VideoPrompt/continuation được cập nhật để tạo active run bằng service thật; không bỏ validation run ID để làm test xanh.
 - Website/provider thật và nghiệm thu WPF/WebView2: `NOT_RUN`. Adapters thật hiện trả automation chưa sẵn sàng; không công bố hệ thống đã tạo video trên website chỉ dựa vào các test này.

@@ -2,7 +2,6 @@ namespace TiToAI.Contracts.Assets;
 
 public sealed record AssetDto(
     string AssetId,
-    string WorkspaceId,
     string? ProjectId,
     string AssetType,
     string StorageRootId,
@@ -15,7 +14,6 @@ public sealed record AssetDto(
 );
 
 public sealed record ImportAudioRequest(
-    string WorkspaceId,
     string ProjectId,
     string SceneId,
     string? SourceFilePath = null // Dùng khi programmatic import/smoke test hoặc truyền trực tiếp từ dialog
@@ -26,7 +24,6 @@ public sealed record ImportAudioResponse(
 );
 
 public sealed record SelectReferenceImageRequest(
-    string WorkspaceId,
     string ProjectId,
     string SceneId,
     string? SourceFilePath = null
@@ -37,7 +34,6 @@ public sealed record SelectReferenceImageResponse(
 );
 
 public sealed record UploadAssetRequest(
-    string WorkspaceId,
     string? ProjectId = null,
     string AssetType = "Image", // Image | Audio
     string? FileName = null,
@@ -51,13 +47,11 @@ public sealed record UploadAssetResponse(
 );
 
 public sealed record GetAssetMetadataRequest(
-    string AssetId,
-    string WorkspaceId
+    string AssetId
 );
 
 public sealed record OpenFolderRequest(
-    string AssetId,
-    string WorkspaceId
+    string AssetId
 );
 
 public sealed record OpenFolderResponse(
@@ -66,7 +60,6 @@ public sealed record OpenFolderResponse(
 );
 
 public sealed record ListAssetsRequest(
-    string WorkspaceId,
     string? ProjectId = null,
     string? AssetType = null,
     int Page = 1,
@@ -82,13 +75,11 @@ public sealed record ListAssetsResponse(
 );
 
 public sealed record GetAssetPreviewRequest(
-    string AssetId,
-    string WorkspaceId
+    string AssetId
 );
 
 public sealed record GetAssetPreviewResponse(
     string AssetId,
-    string WorkspaceId,
     string AssetType,
     string RelativePath,
     string? MimeType,

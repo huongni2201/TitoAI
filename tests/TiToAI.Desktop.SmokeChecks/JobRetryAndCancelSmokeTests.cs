@@ -44,7 +44,7 @@ public static class JobRetryAndCancelSmokeTests
 
         using (var db = new TiToAIDbContext(dbOptions))
         {
-            db.Database.Migrate();
+            db.Database.EnsureCreated();
 
             var now = DateTimeOffset.UtcNow.ToString("o");
 
@@ -106,28 +106,15 @@ public static class JobRetryAndCancelSmokeTests
         }
     }
 
-    private static async Task<(string WorkspaceId, string ProjectId)> SeedWorkspaceAndProjectAsync(TiToAIDbContext db)
+    private static async Task<string> SeedProjectAsync(TiToAIDbContext db)
     {
         var now = DateTimeOffset.UtcNow.ToString("o");
-        var wsId = Guid.NewGuid().ToString();
         var prjId = Guid.NewGuid().ToString();
 
-        var ws = new Workspace
-        {
-            Id = wsId,
-            Name = "Workspace Smoke Test",
-            ChannelHandle = "@smoke_channel",
-            Topic = "AI Video Generation",
-            Status = "Active",
-            CreatedAtUtc = now,
-            UpdatedAtUtc = now
-        };
-        db.Workspaces.Add(ws);
 
         var prj = new Project
         {
             Id = prjId,
-            WorkspaceId = wsId,
             Name = "Project Smoke Test",
             CreatedAtUtc = now,
             UpdatedAtUtc = now
@@ -135,7 +122,7 @@ public static class JobRetryAndCancelSmokeTests
         db.Projects.Add(prj);
 
         await db.SaveChangesAsync().ConfigureAwait(false);
-        return (wsId, prjId);
+        return prjId;
     }
 
     /// <summary>
@@ -147,13 +134,12 @@ public static class JobRetryAndCancelSmokeTests
         try
         {
             await using var db = new TiToAIDbContext(dbOptions);
-            var (wsId, prjId) = await SeedWorkspaceAndProjectAsync(db);
+            var prjId = await SeedProjectAsync(db);
             var now = DateTimeOffset.UtcNow.ToString("o");
 
             var job = new Job
             {
                 Id = Guid.NewGuid().ToString(),
-                WorkspaceId = wsId,
                 ProjectId = prjId,
                 TaskType = JobTaskType.Script,
                 State = JobState.Running,
@@ -235,13 +221,12 @@ public static class JobRetryAndCancelSmokeTests
         try
         {
             await using var db = new TiToAIDbContext(dbOptions);
-            var (wsId, prjId) = await SeedWorkspaceAndProjectAsync(db);
+            var prjId = await SeedProjectAsync(db);
             var now = DateTimeOffset.UtcNow.ToString("o");
 
             var job = new Job
             {
                 Id = Guid.NewGuid().ToString(),
-                WorkspaceId = wsId,
                 ProjectId = prjId,
                 TaskType = JobTaskType.Script,
                 State = JobState.Queued,
@@ -295,14 +280,13 @@ public static class JobRetryAndCancelSmokeTests
         try
         {
             await using var db = new TiToAIDbContext(dbOptions);
-            var (wsId, prjId) = await SeedWorkspaceAndProjectAsync(db);
+            var prjId = await SeedProjectAsync(db);
             var now = DateTimeOffset.UtcNow.ToString("o");
             var jobId = Guid.NewGuid().ToString();
 
             var job = new Job
             {
                 Id = jobId,
-                WorkspaceId = wsId,
                 ProjectId = prjId,
                 TaskType = JobTaskType.Script,
                 State = JobState.Running,
@@ -332,7 +316,7 @@ public static class JobRetryAndCancelSmokeTests
             await db.SaveChangesAsync();
 
             // Thực hiện hủy tác vụ trước submit
-            var cancelResult = await JobRetryAndCancelPolicy.HandleCancellationRequestAsync(db, jobId, wsId);
+            var cancelResult = await JobRetryAndCancelPolicy.HandleCancellationRequestAsync(db, jobId);
 
             Assert(cancelResult.FinalState == JobState.Canceled, $"Trạng thái trả về phải là Canceled, thực tế: '{cancelResult.FinalState}'.");
             Assert(!cancelResult.CancelRequested, "CancelRequested phải là false (vì chuyển Canceled ngay lập tức).");
@@ -367,7 +351,7 @@ public static class JobRetryAndCancelSmokeTests
         try
         {
             await using var db = new TiToAIDbContext(dbOptions);
-            var (wsId, prjId) = await SeedWorkspaceAndProjectAsync(db);
+            var prjId = await SeedProjectAsync(db);
             var now = DateTimeOffset.UtcNow;
             var nowIso = now.ToString("o");
             var futureIso = now.AddMinutes(5).ToString("o");
@@ -377,7 +361,6 @@ public static class JobRetryAndCancelSmokeTests
             var job = new Job
             {
                 Id = jobId,
-                WorkspaceId = wsId,
                 ProjectId = prjId,
                 TaskType = JobTaskType.Script,
                 State = JobState.Running,
@@ -411,7 +394,6 @@ public static class JobRetryAndCancelSmokeTests
             var asset = new Asset
             {
                 Id = assetId,
-                WorkspaceId = wsId,
                 ProjectId = prjId,
                 StorageRootId = "root_test",
                 RelativePath = "scripts/late_result.txt",
@@ -424,7 +406,7 @@ public static class JobRetryAndCancelSmokeTests
             await db.SaveChangesAsync();
 
             // BƯỚC 1: Người dùng yêu cầu hủy sau submit
-            var cancelResult = await JobRetryAndCancelPolicy.HandleCancellationRequestAsync(db, jobId, wsId);
+            var cancelResult = await JobRetryAndCancelPolicy.HandleCancellationRequestAsync(db, jobId);
 
             Assert(cancelResult.CancelRequested, "CancelRequested trả về phải là true.");
             Assert(!cancelResult.OccupancyReleased, "Occupancy KHÔNG được giải phóng ngay sau submit để giữ ngữ cảnh.");
@@ -479,7 +461,6 @@ public static class JobRetryAndCancelSmokeTests
             var awaitingJob = new Job
             {
                 Id = awaitingJobId,
-                WorkspaceId = wsId,
                 ProjectId = prjId,
                 TaskType = JobTaskType.Script,
                 State = JobState.AwaitingUser,
@@ -511,7 +492,6 @@ public static class JobRetryAndCancelSmokeTests
             var awaitingAsset = new Asset
             {
                 Id = awaitingAssetId,
-                WorkspaceId = wsId,
                 ProjectId = prjId,
                 StorageRootId = "root_test",
                 RelativePath = "scripts/awaiting_result.txt",
@@ -523,7 +503,7 @@ public static class JobRetryAndCancelSmokeTests
             await db.SaveChangesAsync();
 
             // Người dùng hủy tác vụ AwaitingUser có unresolved side effect
-            var cancelAwaitingResult = await JobRetryAndCancelPolicy.HandleCancellationRequestAsync(db, awaitingJobId, wsId);
+            var cancelAwaitingResult = await JobRetryAndCancelPolicy.HandleCancellationRequestAsync(db, awaitingJobId);
             Assert(cancelAwaitingResult.FinalState == JobState.Canceled,
                 $"AwaitingUser cancel phải chuyển sang Canceled, thực tế: '{cancelAwaitingResult.FinalState}'.");
             Assert(!cancelAwaitingResult.CancelRequested, "CancelRequested phải là false vì đã chuyển Canceled ngay.");
@@ -570,7 +550,7 @@ public static class JobRetryAndCancelSmokeTests
         try
         {
             await using var db = new TiToAIDbContext(dbOptions);
-            var (wsId, prjId) = await SeedWorkspaceAndProjectAsync(db);
+            var prjId = await SeedProjectAsync(db);
             var now = DateTimeOffset.UtcNow;
             var nowIso = now.ToString("o");
             var pastIso = now.AddMinutes(-5).ToString("o"); // Lease đã hết hạn 5 phút trước
@@ -579,7 +559,6 @@ public static class JobRetryAndCancelSmokeTests
             var job = new Job
             {
                 Id = jobId,
-                WorkspaceId = wsId,
                 ProjectId = prjId,
                 TaskType = JobTaskType.Script,
                 State = JobState.Canceled,
@@ -681,7 +660,7 @@ public static class JobRetryAndCancelSmokeTests
         try
         {
             await using var db = new TiToAIDbContext(dbOptions);
-            var (wsId, prjId) = await SeedWorkspaceAndProjectAsync(db);
+            var prjId = await SeedProjectAsync(db);
             var now = DateTimeOffset.UtcNow.ToString("o");
             var jobId = Guid.NewGuid().ToString();
 
@@ -696,7 +675,6 @@ public static class JobRetryAndCancelSmokeTests
             var job = new Job
             {
                 Id = jobId,
-                WorkspaceId = wsId,
                 ProjectId = prjId,
                 TaskType = JobTaskType.Script,
                 State = JobState.Running,
@@ -779,7 +757,7 @@ public static class JobRetryAndCancelSmokeTests
         try
         {
             await using var db = new TiToAIDbContext(dbOptions);
-            var (wsId, prjId) = await SeedWorkspaceAndProjectAsync(db);
+            var prjId = await SeedProjectAsync(db);
             var now = DateTimeOffset.UtcNow;
             var nowIso = now.ToString("o");
             var futureIso = now.AddMinutes(5).ToString("o");
@@ -796,7 +774,6 @@ public static class JobRetryAndCancelSmokeTests
             var job = new Job
             {
                 Id = jobId,
-                WorkspaceId = wsId,
                 ProjectId = prjId,
                 TaskType = JobTaskType.Script,
                 State = JobState.Running,

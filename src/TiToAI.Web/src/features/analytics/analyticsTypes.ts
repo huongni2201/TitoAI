@@ -4,7 +4,6 @@
  */
 
 export interface AnalyticsSummary {
-  workspaceId: string;
   periodDays: number | null;
   startDate: string | null;
   endDate: string | null;
@@ -31,7 +30,6 @@ export interface AnalyticsTimeseriesPoint {
 export interface VideoMetricRecord {
   id: string;
   snapshotId?: string | null;
-  workspaceId: string;
   accountId?: string | null;
   videoKey: string;
   title: string;
@@ -48,7 +46,6 @@ export interface VideoMetricRecord {
 
 export interface AnalyticsImportResult {
   snapshotId: string;
-  workspaceId: string;
   recordCount: number;
   success: boolean;
   message: string;

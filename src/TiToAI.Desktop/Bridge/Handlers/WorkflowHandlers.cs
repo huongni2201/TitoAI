@@ -71,8 +71,7 @@ public sealed class WorkflowHandlers
 
         try
         {
-            var payload = ParsePayload<WorkflowGetActiveRequest>(request);
-            var response = await _workflowService.GetActiveWorkflowAsync(payload, cancellationToken).ConfigureAwait(false);
+            var response = await _workflowService.GetActiveWorkflowAsync(cancellationToken).ConfigureAwait(false);
             return ResponseEnvelopeHelper.CreateSuccess(request.Id, response);
         }
         catch (OperationCanceledException)

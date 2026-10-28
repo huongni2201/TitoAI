@@ -9,8 +9,7 @@ using TiToAI.Infrastructure.Persistence;
 namespace TiToAI.Desktop.Bridge.Handlers;
 
 /// <summary>
-/// Bridge Handlers tiếp nhận và điều phối 7 lệnh Prompt Engine qua WebView2 Bridge
-/// theo đặc tả contracts.md v1.0.4 và G2-SCOPE §T10.
+/// Bridge handlers cho các lệnh prompt template toàn ứng dụng.
 /// </summary>
 public sealed class PromptHandlers
 {
@@ -66,22 +65,14 @@ public sealed class PromptHandlers
         dispatcher.RegisterHandler("prompt.get_template", HandleGetTemplateAsync);
 
         dispatcher.AllowCommand("prompt.save_template");
-        dispatcher.RegisterHandler("prompt.save_template", HandleCreateVersionAsync);
+        dispatcher.RegisterHandler("prompt.save_template", HandleSaveTemplateAsync);
 
-        dispatcher.AllowCommand("prompt.create_version");
-        dispatcher.RegisterHandler("prompt.create_version", HandleCreateVersionAsync);
-
-        dispatcher.AllowCommand("prompt.list_versions");
-        dispatcher.RegisterHandler("prompt.list_versions", HandleListVersionsAsync);
+        dispatcher.AllowCommand("prompt.activate_template");
+        dispatcher.RegisterHandler("prompt.activate_template", HandleActivateTemplateAsync);
 
         dispatcher.AllowCommand("prompt.preview");
         dispatcher.RegisterHandler("prompt.preview", HandlePreviewAsync);
 
-        dispatcher.AllowCommand("prompt.rollback_version");
-        dispatcher.RegisterHandler("prompt.rollback_version", HandleRollbackVersionAsync);
-
-        dispatcher.AllowCommand("prompt.delete_override");
-        dispatcher.RegisterHandler("prompt.delete_override", HandleDeleteOverrideAsync);
     }
 
     /// <summary>
@@ -94,11 +85,8 @@ public sealed class PromptHandlers
         dispatcher.UnregisterHandler("prompt.list_templates");
         dispatcher.UnregisterHandler("prompt.get_template");
         dispatcher.UnregisterHandler("prompt.save_template");
-        dispatcher.UnregisterHandler("prompt.create_version");
-        dispatcher.UnregisterHandler("prompt.list_versions");
+        dispatcher.UnregisterHandler("prompt.activate_template");
         dispatcher.UnregisterHandler("prompt.preview");
-        dispatcher.UnregisterHandler("prompt.rollback_version");
-        dispatcher.UnregisterHandler("prompt.delete_override");
     }
 
     public async Task<ResponseEnvelope> HandleListTemplatesAsync(RequestEnvelope request, CancellationToken cancellationToken)
@@ -107,25 +95,15 @@ public sealed class PromptHandlers
 
         try
         {
-            PromptListTemplatesRequest? payload = null;
-            if (!IsEmptyPayload(request.Payload))
-            {
-                payload = request.Payload.Deserialize<PromptListTemplatesRequest>(JsonOptions);
-            }
-
             await using var db = CreateDbContext();
             var service = new PromptTemplateService(db);
-            var result = await service.ListTemplatesAsync(payload?.WorkspaceId, cancellationToken);
+            var result = await service.ListTemplatesAsync(cancellationToken);
 
             return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
         }
         catch (OperationCanceledException)
         {
             throw;
-        }
-        catch (PromptSecurityException ex)
-        {
-            return ResponseEnvelopeHelper.CreateError(request.Id, "UNAUTHORIZED_WORKSPACE", ex.Message);
         }
         catch (PromptValidationException ex)
         {
@@ -156,7 +134,7 @@ public sealed class PromptHandlers
 
             await using var db = CreateDbContext();
             var service = new PromptTemplateService(db);
-            var result = await service.GetTemplateAsync(payload.TemplateId, payload.Purpose, payload.WorkspaceId, cancellationToken);
+            var result = await service.GetTemplateAsync(payload.TemplateId, payload.Purpose, cancellationToken);
 
             return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
         }
@@ -167,10 +145,6 @@ public sealed class PromptHandlers
         catch (PromptTemplateNotFoundException ex)
         {
             return ResponseEnvelopeHelper.CreateError(request.Id, "ENTITY_NOT_FOUND", ex.Message);
-        }
-        catch (PromptSecurityException ex)
-        {
-            return ResponseEnvelopeHelper.CreateError(request.Id, "UNAUTHORIZED_WORKSPACE", ex.Message);
         }
         catch (PromptValidationException ex)
         {
@@ -182,7 +156,7 @@ public sealed class PromptHandlers
         }
     }
 
-    public async Task<ResponseEnvelope> HandleListVersionsAsync(RequestEnvelope request, CancellationToken cancellationToken)
+    public async Task<ResponseEnvelope> HandleSaveTemplateAsync(RequestEnvelope request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
 
@@ -190,69 +164,24 @@ public sealed class PromptHandlers
         {
             if (IsEmptyPayload(request.Payload))
             {
-                return ResponseEnvelopeHelper.CreateError(request.Id, "INVALID_ARGUMENT", "Payload không được để trống cho lệnh prompt.list_versions.");
+                return ResponseEnvelopeHelper.CreateError(request.Id, "INVALID_ARGUMENT", "Payload không được để trống cho lệnh prompt.save_template.");
             }
 
-            var payload = request.Payload.Deserialize<PromptListVersionsRequest>(JsonOptions);
-            if (payload == null || string.IsNullOrWhiteSpace(payload.TemplateId))
-            {
-                return ResponseEnvelopeHelper.CreateError(request.Id, "INVALID_ARGUMENT", "templateId là bắt buộc cho lệnh prompt.list_versions.");
-            }
-
-            await using var db = CreateDbContext();
-            var service = new PromptTemplateService(db);
-            var result = await service.ListVersionsAsync(payload.TemplateId, workspaceId: null, cancellationToken);
-
-            return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (PromptTemplateNotFoundException ex)
-        {
-            return ResponseEnvelopeHelper.CreateError(request.Id, "ENTITY_NOT_FOUND", ex.Message);
-        }
-        catch (PromptSecurityException ex)
-        {
-            return ResponseEnvelopeHelper.CreateError(request.Id, "UNAUTHORIZED_WORKSPACE", ex.Message);
-        }
-        catch (Exception ex)
-        {
-            return ResponseEnvelopeHelper.CreateError(request.Id, "INTERNAL_ERROR", $"Lỗi hệ thống khi lấy danh sách version: {ex.Message}");
-        }
-    }
-
-    public async Task<ResponseEnvelope> HandleCreateVersionAsync(RequestEnvelope request, CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-
-        try
-        {
-            if (IsEmptyPayload(request.Payload))
-            {
-                return ResponseEnvelopeHelper.CreateError(request.Id, "INVALID_ARGUMENT", "Payload không được để trống cho lệnh prompt.create_version.");
-            }
-
-            var payload = request.Payload.Deserialize<PromptCreateVersionRequest>(JsonOptions);
+            var payload = request.Payload.Deserialize<PromptSaveTemplateRequest>(JsonOptions);
             if (payload == null)
             {
-                return ResponseEnvelopeHelper.CreateError(request.Id, "INVALID_ARGUMENT", "Dữ liệu yêu cầu prompt.create_version không hợp lệ.");
+                return ResponseEnvelopeHelper.CreateError(request.Id, "INVALID_ARGUMENT", "Dữ liệu yêu cầu prompt.save_template không hợp lệ.");
             }
 
             await using var db = CreateDbContext();
             var service = new PromptTemplateService(db);
-            var result = await service.CreateVersionAsync(payload, cancellationToken);
+            var result = await service.SaveTemplateAsync(payload, cancellationToken);
 
             return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
         }
         catch (OperationCanceledException)
         {
             throw;
-        }
-        catch (PromptSecurityException ex)
-        {
-            return ResponseEnvelopeHelper.CreateError(request.Id, "UNAUTHORIZED_WORKSPACE", ex.Message);
         }
         catch (PromptValidationException ex)
         {
@@ -260,8 +189,27 @@ public sealed class PromptHandlers
         }
         catch (Exception ex)
         {
-            return ResponseEnvelopeHelper.CreateError(request.Id, "INTERNAL_ERROR", $"Lỗi hệ thống khi tạo version: {ex.Message}");
+            return ResponseEnvelopeHelper.CreateError(request.Id, "INTERNAL_ERROR", $"Lỗi hệ thống khi lưu template: {ex.Message}");
         }
+    }
+
+    public async Task<ResponseEnvelope> HandleActivateTemplateAsync(RequestEnvelope request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (IsEmptyPayload(request.Payload))
+                return ResponseEnvelopeHelper.CreateError(request.Id, "INVALID_ARGUMENT", "Cần chọn mẫu prompt.");
+            var payload = request.Payload.Deserialize<PromptActivateTemplateRequest>(JsonOptions);
+            if (payload == null)
+                return ResponseEnvelopeHelper.CreateError(request.Id, "INVALID_ARGUMENT", "Dữ liệu chọn mẫu không hợp lệ.");
+            await using var db = CreateDbContext();
+            var result = await new PromptTemplateService(db).ActivateTemplateAsync(payload.TemplateId, cancellationToken);
+            return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (PromptTemplateNotFoundException ex) { return ResponseEnvelopeHelper.CreateError(request.Id, "ENTITY_NOT_FOUND", ex.Message); }
+        catch (PromptValidationException ex) { return ResponseEnvelopeHelper.CreateError(request.Id, "VALIDATION_FAILED", ex.Message); }
+        catch (Exception ex) { return ResponseEnvelopeHelper.CreateError(request.Id, "INTERNAL_ERROR", $"Không thể chọn mẫu prompt: {ex.Message}"); }
     }
 
     public async Task<ResponseEnvelope> HandlePreviewAsync(RequestEnvelope request, CancellationToken cancellationToken)
@@ -295,10 +243,6 @@ public sealed class PromptHandlers
         {
             return ResponseEnvelopeHelper.CreateError(request.Id, "ENTITY_NOT_FOUND", ex.Message);
         }
-        catch (PromptSecurityException ex)
-        {
-            return ResponseEnvelopeHelper.CreateError(request.Id, "UNAUTHORIZED_WORKSPACE", ex.Message);
-        }
         catch (PromptValidationException ex)
         {
             return ResponseEnvelopeHelper.CreateError(request.Id, "VALIDATION_FAILED", ex.Message);
@@ -309,97 +253,4 @@ public sealed class PromptHandlers
         }
     }
 
-    public async Task<ResponseEnvelope> HandleRollbackVersionAsync(RequestEnvelope request, CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-
-        try
-        {
-            if (IsEmptyPayload(request.Payload))
-            {
-                return ResponseEnvelopeHelper.CreateError(request.Id, "INVALID_ARGUMENT", "Payload không được để trống cho lệnh prompt.rollback_version.");
-            }
-
-            var payload = request.Payload.Deserialize<PromptRollbackVersionRequest>(JsonOptions);
-            if (payload == null || string.IsNullOrWhiteSpace(payload.TemplateId) || string.IsNullOrWhiteSpace(payload.TargetVersionId))
-            {
-                return ResponseEnvelopeHelper.CreateError(request.Id, "INVALID_ARGUMENT", "templateId và targetVersionId là bắt buộc cho lệnh prompt.rollback_version.");
-            }
-
-            await using var db = CreateDbContext();
-            var service = new PromptTemplateService(db);
-            var result = await service.RollbackVersionAsync(payload, workspaceId: null, cancellationToken);
-
-            return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (PromptTemplateNotFoundException ex)
-        {
-            return ResponseEnvelopeHelper.CreateError(request.Id, "ENTITY_NOT_FOUND", ex.Message);
-        }
-        catch (PromptVersionNotFoundException ex)
-        {
-            return ResponseEnvelopeHelper.CreateError(request.Id, "ENTITY_NOT_FOUND", ex.Message);
-        }
-        catch (PromptRollbackException ex)
-        {
-            return ResponseEnvelopeHelper.CreateError(request.Id, "VALIDATION_FAILED", ex.Message);
-        }
-        catch (PromptSecurityException ex)
-        {
-            return ResponseEnvelopeHelper.CreateError(request.Id, "UNAUTHORIZED_WORKSPACE", ex.Message);
-        }
-        catch (Exception ex)
-        {
-            return ResponseEnvelopeHelper.CreateError(request.Id, "INTERNAL_ERROR", $"Lỗi hệ thống khi rollback version: {ex.Message}");
-        }
-    }
-
-    public async Task<ResponseEnvelope> HandleDeleteOverrideAsync(RequestEnvelope request, CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-
-        try
-        {
-            if (IsEmptyPayload(request.Payload))
-            {
-                return ResponseEnvelopeHelper.CreateError(request.Id, "INVALID_ARGUMENT", "Payload không được để trống cho lệnh prompt.delete_override.");
-            }
-
-            var payload = request.Payload.Deserialize<PromptDeleteOverrideRequest>(JsonOptions);
-            if (payload == null || string.IsNullOrWhiteSpace(payload.TemplateId))
-            {
-                return ResponseEnvelopeHelper.CreateError(request.Id, "INVALID_ARGUMENT", "templateId là bắt buộc cho lệnh prompt.delete_override.");
-            }
-
-            await using var db = CreateDbContext();
-            var service = new PromptTemplateService(db);
-            var result = await service.DeleteOverrideAsync(payload, workspaceId: null, cancellationToken);
-
-            return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (PromptTemplateNotFoundException ex)
-        {
-            return ResponseEnvelopeHelper.CreateError(request.Id, "ENTITY_NOT_FOUND", ex.Message);
-        }
-        catch (PromptOverrideException ex)
-        {
-            return ResponseEnvelopeHelper.CreateError(request.Id, "VALIDATION_FAILED", ex.Message);
-        }
-        catch (PromptSecurityException ex)
-        {
-            return ResponseEnvelopeHelper.CreateError(request.Id, "UNAUTHORIZED_WORKSPACE", ex.Message);
-        }
-        catch (Exception ex)
-        {
-            return ResponseEnvelopeHelper.CreateError(request.Id, "INTERNAL_ERROR", $"Lỗi hệ thống khi xóa override: {ex.Message}");
-        }
-    }
 }

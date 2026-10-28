@@ -1,3 +1,5 @@
+> Cập nhật 2026-10-28: Đã bỏ `USER_BRIEF` khỏi contract tạo prompt. Những hướng dẫn mapping hoặc kiểm thử `USER_BRIEF` bên dưới là lịch sử và không còn áp dụng; nội dung được cung cấp qua template đã render.
+
 # TiToAI — thời lượng clip và phân cảnh trong prompt
 
 Ngày 2026-10-27 (UTC+07). **Spec bàn giao; chưa triển khai, chưa nghiệm thu runtime/provider.**
@@ -70,7 +72,6 @@ Phân biệt ba nội dung:
 
 | Nội dung | Nguồn và vai trò |
 |---|---|
-| Template | Hướng dẫn dùng lại về cách AI viết prompt, resolve theo purpose và Workspace override hiện hành; giữ version |
 | Brief lần tạo | Ô yêu cầu nội dung, lưu ở `goalPrompt`; yêu cầu cụ thể của project/run, không ghi đè template |
 | Prompt chuyển động đầu ra | Kết quả AI viết cho từng clip sau khi nhận template, brief và ảnh; đây là phần gửi Muse để tạo video |
 
@@ -112,7 +113,6 @@ Schema của operation do app cung cấp.
 - Render template trước, serialize/append context sau. Dấu ngoặc, JSON, tiếng Việt, xuống dòng trong brief không bị parser coi là placeholder hoặc làm hỏng vùng dữ liệu. Nội dung ảnh/tài liệu đính kèm là tư liệu, không phải chỉ dẫn thay schema/nhiệm vụ app.
 - Template quyết định phương pháp/phong cách mặc định; brief quyết định nội dung và phong cách yêu cầu riêng của lần tạo. Giới hạn kỹ thuật, số clip, duration và schema do app kiểm soát. Mâu thuẫn rõ giữa template và brief không thể đáp ứng đồng thời phải báo để người dùng sửa, không im lặng bỏ brief; không hứa tự phát hiện mọi mâu thuẫn ngữ nghĩa.
 - Brief trống sau trim: báo thiếu yêu cầu nội dung ngay tại ô nhập và từ backend trước chạy, giữ draft. Áp dụng cho lần tạo tự động mới; project cũ vẫn mở/xem/tải output và dùng prompt chuyển động đã lưu qua luồng thủ công hiện có. Không tự điền brief từ placeholder ví dụ trên UI.
-- Không ghi template mặc định đè template tùy chỉnh. Seed/migration chỉ tạo mặc định khi thiếu theo policy hiện có; template override của Workspace và version cũ vẫn giữ nguyên.
 
 ### 3.3. Preview, snapshot và sửa brief
 
@@ -157,7 +157,6 @@ Sửa brief chung làm stale kế hoạch/prompt/video của các clip phụ thu
 | CD08 | Legacy 3 × 5s giữ dữ liệu/history qua mở/lưu/restart; cần sửa duration trước run khi không được hỗ trợ; không gửi AI lúc mở |
 | CD09 | Đổi duration/shot chỉ stale đúng nhánh; snapshot job cũ bất biến; expected revision/idempotency vẫn bảo vệ output |
 | CD10 | Ba chế độ ảnh, audio tùy chọn, scope, dirty guard, Light/Dark, keyboard và kết quả tải riêng tiếp tục hoạt động |
-| CD11 | Nhập brief chứa chuỗi nhận diện riêng, đi qua save/start thật đến request bắt ở ranh giới AI writer: template tùy chỉnh hiệu lực và brief đều có mặt, đúng Workspace/version; chứng minh cả bước lập clip và viết prompt, không chỉ assert DTO đã lưu |
 | CD12 | Template không placeholder vẫn nhận brief; `{USER_BRIEF}` được bind nếu dùng; brief có JSON/ngoặc/xuống dòng/tiếng Việt không bị render lần hai; composer gọi lại không nối lặp context; biến legacy chưa mapping báo lỗi rõ |
 | CD13 | Preview/manual export và request enqueue cùng revision có cùng prompt cuối; template/brief sửa sau enqueue không đổi snapshot retry; save thất bại không start từ config cũ; trống brief bị chặn ở UI/backend cho run tự động mới |
 | CD14 | Thay brief stale đúng nhánh, giữ ảnh khi chỉ đổi chuyển động, giữ prompt chỉnh tay/history; template tùy chỉnh không bị seed ghi đè; Muse chỉ nhận prompt chuyển động output đã validate, không nhận nguyên request AI writer |

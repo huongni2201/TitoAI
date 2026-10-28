@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json;
@@ -18,7 +19,7 @@ namespace TiToAI.Application.Analytics;
 /// <summary>
 /// Backend Engine thực thi kiểm tra phiên, mở cửa sổ đăng nhập hiển thị trên Desktop và
 /// tự động tải các CSV Overview, Content, Viewers từ TikTok Studio bằng Playwright,
-/// sau đó xử lý thành snapshot bất biến trong SQLite theo từng Không gian làm việc (Workspace).
+/// sau đó xử lý thành snapshot bất biến trong SQLite theo tài khoản TikTok.
 /// </summary>
 public sealed class TikTokAnalyticsSyncService : ITikTokAnalyticsCrawler
 {
@@ -51,7 +52,7 @@ public sealed class TikTokAnalyticsSyncService : ITikTokAnalyticsCrawler
     }
 
     /// <summary>
-    /// Thẩm định trạng thái session của tài khoản TikTok liên kết với Workspace.
+    /// Thẩm định trạng thái session của tài khoản TikTok.
     /// </summary>
     public async Task<TikTokCheckSessionResponseDto> CheckSessionAsync(
         TikTokCheckSessionRequest request,
@@ -59,19 +60,19 @@ public sealed class TikTokAnalyticsSyncService : ITikTokAnalyticsCrawler
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        if (string.IsNullOrWhiteSpace(request.WorkspaceId))
+        if (string.IsNullOrWhiteSpace(request.AccountId) && string.IsNullOrWhiteSpace(request.ProfileId))
         {
             return new TikTokCheckSessionResponseDto(
                 IsLoggedIn: false,
                 ProfileId: request.ProfileId,
                 AccountIdentity: null,
                 SessionStatus: "Unverified",
-                ErrorMessage: "WorkspaceId không được để trống.");
+                ErrorMessage: "Vui lòng chọn tài khoản TikTok.");
         }
 
         try
         {
-            string profileId = await ResolveTikTokProfileIdAsync(request.WorkspaceId, request.ProfileId, cancellationToken);
+            string profileId = await ResolveTikTokProfileIdAsync(request.ProfileId, request.AccountId, cancellationToken);
 
             var probeResult = await ProbeSessionAsync(profileId, cancellationToken);
             string sessionStatus = probeResult.SessionStatus;
@@ -116,18 +117,18 @@ public sealed class TikTokAnalyticsSyncService : ITikTokAnalyticsCrawler
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        if (string.IsNullOrWhiteSpace(request.WorkspaceId))
+        if (string.IsNullOrWhiteSpace(request.AccountId) && string.IsNullOrWhiteSpace(request.ProfileId))
         {
             return new TikTokOpenLoginResponseDto(
                 Success: false,
                 ProfileId: string.Empty,
                 VisibilityState: "Hidden",
-                Message: "WorkspaceId không được để trống.");
+                Message: "Vui lòng chọn tài khoản TikTok.");
         }
 
         try
         {
-            string profileId = await ResolveTikTokProfileIdAsync(request.WorkspaceId, request.ProfileId, cancellationToken);
+            string profileId = await ResolveTikTokProfileIdAsync(request.ProfileId, request.AccountId, cancellationToken);
             string targetUrl = !string.IsNullOrWhiteSpace(request.TargetUrl)
                 ? request.TargetUrl
                 : "https://www.tiktok.com/tiktokstudio";
@@ -162,24 +163,25 @@ public sealed class TikTokAnalyticsSyncService : ITikTokAnalyticsCrawler
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        if (string.IsNullOrWhiteSpace(request.WorkspaceId))
+        if (string.IsNullOrWhiteSpace(request.AccountId))
         {
             return new TikTokSyncChannelResponseDto(
                 Success: false, SnapshotId: null, RecordCount: 0, ChannelHandle: null,
-                Message: "WorkspaceId không được để trống.", ProfileId: request.ProfileId);
+                Message: "Vui lòng chọn tài khoản TikTok.", ProfileId: request.ProfileId);
         }
 
-        string profileId = await ResolveTikTokProfileIdAsync(request.WorkspaceId, request.ProfileId, cancellationToken);
-        var session = await CheckSessionAsync(new TikTokCheckSessionRequest(request.WorkspaceId, profileId), cancellationToken);
+        string accountId = request.AccountId.Trim();
+        string profileId = await ResolveTikTokProfileIdAsync(request.ProfileId, accountId, cancellationToken);
+        var session = await CheckSessionAsync(
+            new TikTokCheckSessionRequest(ProfileId: profileId, AccountId: accountId),
+            cancellationToken);
         if (!session.IsLoggedIn || string.Equals(session.SessionStatus, "SessionExpired", StringComparison.OrdinalIgnoreCase))
         {
-            var login = await OpenLoginAsync(new TikTokOpenLoginRequest(request.WorkspaceId, profileId), cancellationToken);
             return new TikTokSyncChannelResponseDto(
                 Success: false, SnapshotId: null, RecordCount: 0, ChannelHandle: session.AccountIdentity,
-                Message: login.Success
-                    ? "Đã mở TikTok Studio để đăng nhập. Sau khi đăng nhập xong, bấm Kéo dữ liệu lần nữa."
-                    : login.Message,
-                RequiresLogin: true, ProfileId: profileId);
+                Message: session.ErrorMessage ?? "Chưa xác minh được phiên TikTok. Bấm Kiểm tra lại hoặc mở trình duyệt đăng nhập.",
+                RequiresLogin: string.Equals(session.SessionStatus, "SessionExpired", StringComparison.OrdinalIgnoreCase),
+                ProfileId: profileId);
         }
 
         if (_analyticsService == null)
@@ -231,7 +233,9 @@ public sealed class TikTokAnalyticsSyncService : ITikTokAnalyticsCrawler
                 });
             }
 
-            await ClickExactAsync(page, "Analytics", cancellationToken);
+            var analyticsSidebarButton = page.Locator("button[data-tt='Sidebar_Sidebar_Clickable']:has-text('Analytics')").And(page.Locator(":visible"));
+            var analyticsText = page.GetByText("Analytics", new() { Exact = true }).And(page.Locator(":visible"));
+            await analyticsSidebarButton.Or(analyticsText).First.ClickAsync(new() { Timeout = 30000 });
             tempDir = Path.Combine(Path.GetTempPath(), "TiToAI", "tiktok-export-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(tempDir);
 
@@ -239,17 +243,8 @@ public sealed class TikTokAnalyticsSyncService : ITikTokAnalyticsCrawler
             string contentCsv = await ExportSectionCsvAsync(page, "Content", tempDir, cancellationToken);
             string viewersCsv = await ExportSectionCsvAsync(page, "Viewers", tempDir, cancellationToken);
 
-            string? accountId;
-            await using (var db = new TiToAIDbContext(_dbOptions))
-            {
-                accountId = await db.Accounts.AsNoTracking()
-                    .Where(a => a.WorkspaceId == request.WorkspaceId && a.ProfileId == profileId)
-                    .Select(a => a.Id)
-                    .FirstOrDefaultAsync(cancellationToken);
-            }
-
             var imported = await _analyticsService.ImportTikTokStudioExportsAsync(
-                new ImportTikTokStudioExportsRequest(request.WorkspaceId, accountId, overviewCsv, contentCsv, viewersCsv),
+                new ImportTikTokStudioExportsRequest(accountId, overviewCsv, contentCsv, viewersCsv),
                 cancellationToken);
 
             await UpdateProfileStateAsync(
@@ -313,13 +308,14 @@ public sealed class TikTokAnalyticsSyncService : ITikTokAnalyticsCrawler
         };
         foreach (var locator in locators)
         {
-            if (await locator.CountAsync() > 0)
+            var visible = locator.And(page.Locator(":visible"));
+            if (await visible.CountAsync() > 0)
             {
-                await locator.First.ClickAsync(new() { Timeout = 10000 });
+                await visible.First.ClickAsync(new() { Timeout = 10000 });
                 return;
             }
         }
-        await page.GetByText(label, new() { Exact = true }).First.ClickAsync(new() { Timeout = 15000 });
+        await page.GetByText(label, new() { Exact = true }).And(page.Locator(":visible")).First.ClickAsync(new() { Timeout = 15000 });
     }
 
     private static async Task<string> ExportSectionCsvAsync(
@@ -354,7 +350,8 @@ public sealed class TikTokAnalyticsSyncService : ITikTokAnalyticsCrawler
         {
             page.GetByRole(AriaRole.Menuitem, new() { NameRegex = new Regex("csv", RegexOptions.IgnoreCase) }),
             page.GetByRole(AriaRole.Button, new() { NameRegex = new Regex("csv", RegexOptions.IgnoreCase) }),
-            page.GetByRole(AriaRole.Link, new() { NameRegex = new Regex("csv", RegexOptions.IgnoreCase) })
+            page.GetByRole(AriaRole.Link, new() { NameRegex = new Regex("csv", RegexOptions.IgnoreCase) }),
+            page.GetByText("CSV", new() { Exact = true })
         };
         for (int attempt = 0; attempt < 20 && !downloadTask.IsCompleted; attempt++)
         {
@@ -364,6 +361,9 @@ public sealed class TikTokAnalyticsSyncService : ITikTokAnalyticsCrawler
                 if (await csvOption.CountAsync() > 0 && await csvOption.First.IsVisibleAsync())
                 {
                     await csvOption.First.ClickAsync();
+                    var confirmDownload = page.GetByRole(AriaRole.Button, new() { Name = "Download", Exact = true });
+                    if (await confirmDownload.CountAsync() > 0 && await confirmDownload.First.IsVisibleAsync())
+                        await confirmDownload.First.ClickAsync();
                     attempt = 20;
                     break;
                 }
@@ -376,155 +376,58 @@ public sealed class TikTokAnalyticsSyncService : ITikTokAnalyticsCrawler
         var fileName = $"{section.ToLowerInvariant()}-{Guid.NewGuid():N}.csv";
         var filePath = Path.Combine(tempDir, fileName);
         await download.SaveAsAsync(filePath);
-        return await File.ReadAllTextAsync(filePath, cancellationToken);
+        return await ReadExportCsvAsync(filePath, section, cancellationToken);
+    }
+
+    private static async Task<string> ReadExportCsvAsync(string filePath, string section, CancellationToken cancellationToken)
+    {
+        await using var stream = File.OpenRead(filePath);
+        var signature = new byte[4];
+        var signatureLength = await stream.ReadAsync(signature, cancellationToken);
+        stream.Position = 0;
+        if (signatureLength == 4 && signature[0] == 'P' && signature[1] == 'K' && signature[2] == 3 && signature[3] == 4)
+        {
+            using var archive = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);
+            var matches = archive.Entries.Where(entry =>
+                string.Equals(entry.FullName, $"{section}.csv", StringComparison.OrdinalIgnoreCase)).ToList();
+            if (matches.Count != 1 || matches[0].Length > 32 * 1024 * 1024)
+                throw new InvalidDataException($"Tệp tải về không chứa một báo cáo {section}.csv hợp lệ.");
+            await using var entryStream = matches[0].Open();
+            using var entryReader = new StreamReader(entryStream);
+            return await entryReader.ReadToEndAsync(cancellationToken);
+        }
+
+        if (stream.Length > 32 * 1024 * 1024)
+            throw new InvalidDataException($"Báo cáo {section} vượt quá dung lượng cho phép.");
+        using var reader = new StreamReader(stream);
+        return await reader.ReadToEndAsync(cancellationToken);
     }
     private async Task<string> ResolveTikTokProfileIdAsync(
-        string workspaceId,
         string? requestedProfileId,
+        string? accountId,
         CancellationToken cancellationToken)
     {
+        if (!string.IsNullOrWhiteSpace(accountId))
+        {
+            return await GetTikTokAccountAsync(accountId.Trim(), cancellationToken);
+        }
+
         if (!string.IsNullOrWhiteSpace(requestedProfileId))
         {
             return requestedProfileId.Trim();
         }
 
-        await using var dbContext = new TiToAIDbContext(_dbOptions);
-
-        string? workspaceHandle = await dbContext.Workspaces.AsNoTracking()
-            .Where(w => w.Id == workspaceId)
-            .Select(w => w.ChannelHandle)
-            .FirstOrDefaultAsync(cancellationToken);
-
-        var providerAccounts = await dbContext.ProviderAccounts
-            .Include(a => a.Profile)
-            .AsNoTracking()
-            .Where(a => a.ProviderKey == "tiktok" && a.Lifecycle == "Active")
-            .ToListAsync(cancellationToken);
-
-        if (!string.IsNullOrWhiteSpace(workspaceHandle))
-        {
-            var matchingProfileIds = providerAccounts
-                .Where(a => TikTokIdentityMatches(a.VerifiedIdentity ?? a.Profile?.AccountIdentity, workspaceHandle))
-                .Select(a => a.ProfileId)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            if (matchingProfileIds.Count == 1) return matchingProfileIds[0];
-            if (matchingProfileIds.Count > 1)
-            {
-                throw new InvalidOperationException($"Có nhiều profile TikTok trùng với kênh {workspaceHandle}; không thể chọn an toàn.");
-            }
-        }
-
-        var activeProviderProfileIds = providerAccounts
-            .Select(a => a.ProfileId)
-            .Where(id => !string.IsNullOrWhiteSpace(id))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        if (activeProviderProfileIds.Count == 1) return activeProviderProfileIds[0];
-        if (activeProviderProfileIds.Count > 1)
-        {
-            throw new InvalidOperationException($"Workspace '{workspaceId}' chưa được liên kết với một trong các tài khoản TikTok đang hoạt động.");
-        }
-
-        // Ưu tiên profile đang hoạt động ở Cài đặt; liên kết Workspace cũ có thể trỏ tới profile hết hạn.
-        var account = await dbContext.Accounts
-            .AsNoTracking()
-            .Where(a => a.WorkspaceId == workspaceId &&
-                        (a.Provider == "tiktok" || a.Provider == "TikTok" || a.Provider == "tiktok-channel") &&
-                        a.Status != "Unlinked")
-            .OrderByDescending(a => a.CreatedAtUtc)
-            .FirstOrDefaultAsync(cancellationToken);
-
-        if (account != null && !string.IsNullOrWhiteSpace(account.ProfileId))
-        {
-            return account.ProfileId;
-        }
-
-        // Tìm profile trình duyệt cũ theo Workspace.
-        var browserProfile = await dbContext.BrowserProfiles
-            .AsNoTracking()
-            .Where(p => (p.Kind == "TikTok" || p.Kind == "tiktok") &&
-                        p.WorkspaceId == workspaceId &&
-                        p.Lifecycle == "Active")
-            .FirstOrDefaultAsync(cancellationToken);
-
-        if (browserProfile != null && !string.IsNullOrWhiteSpace(browserProfile.Id))
-        {
-            return browserProfile.Id;
-        }
-
-        // 3. Tìm xem có profile TikTok nào khác đang active hoặc profile có sẵn trên máy
-        var existingAnyProfiles = await dbContext.BrowserProfiles
-            .AsNoTracking()
-            .Where(p => (p.Kind == "TikTok" || p.Kind == "tiktok" || p.Id.StartsWith("profile_tiktok_")) &&
-                        p.Lifecycle == "Active")
-            .ToListAsync(cancellationToken);
-
-        if (existingAnyProfiles.Count == 1 && !string.IsNullOrWhiteSpace(existingAnyProfiles[0].Id))
-        {
-            return existingAnyProfiles[0].Id;
-        }
-        if (existingAnyProfiles.Count > 1)
-        {
-            throw new InvalidOperationException($"Workspace '{workspaceId}' chưa được liên kết với tài khoản TikTok; có nhiều profile nên không thể chọn an toàn.");
-        }
-
-        // Kiểm tra thư mục vật lý %LOCALAPPDATA%/TiToAI/profiles
-        bool ambiguousProfileDirectories = false;
-        try
-        {
-            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            string profilesDir = Path.Combine(localAppData, "TiToAI", "profiles");
-            if (Directory.Exists(profilesDir))
-            {
-                var matchDirs = Directory.GetDirectories(profilesDir, "profile_tiktok_*");
-                if (matchDirs.Length == 1)
-                {
-                    string candidateId = Path.GetFileName(matchDirs[0]);
-                    if (!string.IsNullOrWhiteSpace(candidateId))
-                    {
-                        await EnsureProfileAsync(candidateId, "TikTok", workspaceId, cancellationToken);
-                        return candidateId;
-                    }
-                }
-                if (matchDirs.Length > 1)
-                {
-                    ambiguousProfileDirectories = true;
-                }
-            }
-        }
-        catch
-        {
-            // Bỏ qua lỗi truy cập hệ thống file nếu có
-        }
-        if (ambiguousProfileDirectories)
-        {
-            throw new InvalidOperationException("Có nhiều thư mục profile TikTok cũ nhưng chưa có liên kết Workspace; cần chọn đúng tài khoản trước khi đồng bộ.");
-        }
-
-        // 4. Fallback: Tạo mới profile theo quy chuẩn tiktok-{workspaceId}
-        string fallbackProfileId = $"tiktok-{workspaceId}";
-        await EnsureProfileAsync(fallbackProfileId, "TikTok", workspaceId, cancellationToken);
-        return fallbackProfileId;
+        throw new ArgumentException("Vui lòng chọn tài khoản TikTok.", nameof(accountId));
     }
 
-    private static bool TikTokIdentityMatches(string? identity, string? channelHandle)
+    private async Task<string> GetTikTokAccountAsync(string accountId, CancellationToken cancellationToken)
     {
-        static string? ExtractHandle(string? value)
-        {
-            if (string.IsNullOrWhiteSpace(value)) return null;
-            var match = Regex.Match(value.Trim(), @"^@?([A-Za-z0-9_.-]+)(?:\s*\(.*\))?$");
-            return match.Success ? match.Groups[1].Value : null;
-        }
-
-        var identityHandle = ExtractHandle(identity);
-        var workspaceHandle = ExtractHandle(channelHandle);
-        return identityHandle != null && workspaceHandle != null &&
-               string.Equals(identityHandle, workspaceHandle, StringComparison.OrdinalIgnoreCase);
+        await using var dbContext = new TiToAIDbContext(_dbOptions);
+        var profile = await dbContext.BrowserProfiles.AsNoTracking()
+            .FirstOrDefaultAsync(p => p.Id == accountId && p.Kind == "TikTok" && p.Lifecycle == "Active", cancellationToken);
+        return profile?.Id
+            ?? throw new KeyNotFoundException($"Không tìm thấy tài khoản TikTok đang liên kết '{accountId}'.");
     }
-
-    #region Reflection Helpers for Browser Abstractions
-
     private async Task<(bool IsLoggedIn, string SessionStatus, string? AccountIdentity, string? ErrorMessage)> ProbeSessionAsync(
         string profileId,
         CancellationToken cancellationToken)
@@ -603,37 +506,6 @@ public sealed class TikTokAnalyticsSyncService : ITikTokAnalyticsCrawler
         }
 
         return (false, "VisibleWaiting");
-    }
-
-    private async Task EnsureProfileAsync(string profileId, string kind, string? workspaceId, CancellationToken cancellationToken)
-    {
-        var methods = _profileRegistry.GetType().GetMethods().Where(m => m.Name == "EnsureProfileAsync");
-        foreach (var m in methods)
-        {
-            var ps = m.GetParameters();
-            if (ps.Length >= 2 && ps[0].ParameterType == typeof(string) && ps[1].ParameterType == typeof(string))
-            {
-                var args = new object?[ps.Length];
-                args[0] = profileId;
-                args[1] = kind;
-                for (int i = 2; i < ps.Length; i++)
-                {
-                    if (ps[i].Name?.Equals("workspaceId", StringComparison.OrdinalIgnoreCase) == true)
-                        args[i] = workspaceId;
-                    else if (ps[i].ParameterType == typeof(CancellationToken))
-                        args[i] = cancellationToken;
-                    else
-                        args[i] = ps[i].DefaultValue ?? null;
-                }
-
-                var taskObj = m.Invoke(_profileRegistry, args);
-                if (taskObj is Task task)
-                {
-                    await task.ConfigureAwait(false);
-                    return;
-                }
-            }
-        }
     }
 
     private async Task UpdateProfileStateAsync(
@@ -754,8 +626,5 @@ public sealed class TikTokAnalyticsSyncService : ITikTokAnalyticsCrawler
             }
         }
     }
-
-    #endregion
-
 
 }

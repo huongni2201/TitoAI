@@ -19,9 +19,9 @@ namespace TiToAI.Desktop.SmokeChecks;
 
 /// <summary>
 /// Bộ kiểm thử khói định lượng AI Pool v1.1 toàn cục:
-/// 1. 10 Workspace dùng chung 1 ChatGPT theo tab capacity.
+/// 1. 10 Project dùng chung 1 ChatGPT theo tab capacity.
 /// 2. 10 video qua 4 MuseAI: khi đủ budget, tối đa 4 chạy và 6 chờ; slot nào xong cấp ngay job tiếp, không đợi cả đợt.
-/// 3. Output luôn đúng Workspace/project/scene dù account phục vụ nhiều kênh.
+/// 3. Output luôn đúng Project/project/scene dù account phục vụ nhiều kênh.
 /// 4. Đủ 8 tổ hợp lựa chọn provider cho Script/Image/VideoPrompt.
 /// </summary>
 public static class GlobalAiPoolSmokeTests
@@ -50,7 +50,7 @@ public static class GlobalAiPoolSmokeTests
 
         using (var db = new TiToAIDbContext(dbOptions))
         {
-            db.Database.Migrate();
+            db.Database.EnsureCreated();
         }
 
         var registry = new StorageRootRegistry(dbOptions, tempDir);
@@ -74,11 +74,11 @@ public static class GlobalAiPoolSmokeTests
     }
 
     /// <summary>
-    /// Ca 1: 10 Workspace dùng chung 1 ChatGPT theo tab capacity.
-    /// 10 Workspace độc lập cùng enqueue job; chỉ 3 job chạy đồng thời (theo MaxTabs=3);
-    /// khi 1 job xong, slot tiếp theo được cấp ngay cho workspace chờ theo thứ tự công bằng.
+    /// Ca 1: 10 Project dùng chung 1 ChatGPT theo tab capacity.
+    /// 10 Project độc lập cùng enqueue job; chỉ 3 job chạy đồng thời (theo MaxTabs=3);
+    /// khi 1 job xong, slot tiếp theo được cấp ngay cho project chờ theo thứ tự công bằng.
     /// </summary>
-    public static async Task Test_Case1_TenWorkspaces_SingleChatGPT_TabCapacityAsync()
+    public static async Task Test_Case1_TenProjects_SingleChatGPT_TabCapacityAsync()
     {
         var (dbOptions, tempDir, registry, settingsService) = CreateTestContext();
         try
@@ -124,26 +124,14 @@ public static class GlobalAiPoolSmokeTests
                     new AppSetting { Key = SettingsService.KeyVideoPromptProvider, Value = "chatgpt-web", UpdatedAtUtc = now }
                 );
 
-                // 2. Tạo 10 Workspace độc lập (WS_01 .. WS_10)
+                // 2. Tạo 10 Project độc lập (WS_01 .. WS_10)
                 for (int i = 1; i <= 10; i++)
                 {
-                    var wsId = $"ws_{i:D2}";
                     var prjId = $"prj_{i:D2}";
-                    db.Workspaces.Add(new Workspace
-                    {
-                        Id = wsId,
-                        Name = $"Kênh TikTok {i}",
-                        ChannelHandle = $"@channel_{i}",
-                        Topic = "Công nghệ AI",
-                        Status = "Active",
-                        CreatedAtUtc = now,
-                        UpdatedAtUtc = now
-                    });
 
                     db.Projects.Add(new Project
                     {
                         Id = prjId,
-                        WorkspaceId = wsId,
                         Name = $"Dự án video {i}",
                         Status = "Draft",
                         CreatedAtUtc = now,
@@ -154,7 +142,6 @@ public static class GlobalAiPoolSmokeTests
                     {
                         Id = $"scene_{i:D2}",
                         ProjectId = prjId,
-                        WorkspaceId = wsId,
                         SequenceOrder = 1,
                         Name = $"Cảnh 1 kênh {i}",
                         Status = "Draft",
@@ -173,7 +160,7 @@ public static class GlobalAiPoolSmokeTests
             var scheduler = new JobScheduler(dbOptions, reservation, controlledExecutor);
             var jobService = new JobService(dbOptions, snapshotFactory, scheduler);
 
-            // 4. Enqueue 10 Jobs từ 10 Workspace khác nhau (đan xen 3 loại task: Script, Image, VideoPrompt)
+            // 4. Enqueue 10 Jobs từ 10 Project khác nhau (đan xen 3 loại task: Script, Image, VideoPrompt)
             var jobIds = new List<string>();
             var taskTypes = new[] { JobTaskType.Script, JobTaskType.Image, JobTaskType.VideoPrompt };
 
@@ -183,7 +170,6 @@ public static class GlobalAiPoolSmokeTests
                 string? sceneId = taskType == JobTaskType.Script ? null : $"scene_{i:D2}";
 
                 var res = await jobService.EnqueueAsync(new JobEnqueueRequest(
-                    WorkspaceId: $"ws_{i:D2}",
                     ProjectId: $"prj_{i:D2}",
                     SceneId: sceneId,
                     TaskType: taskType,
@@ -261,21 +247,10 @@ public static class GlobalAiPoolSmokeTests
         try
         {
             var now = DateTimeOffset.UtcNow.ToString("o");
-            string wsId = "ws_video_main";
             string prjId = "prj_video_main";
 
             await using (var db = new TiToAIDbContext(dbOptions))
             {
-                db.Workspaces.Add(new Workspace
-                {
-                    Id = wsId,
-                    Name = "Kênh Video TikTok",
-                    ChannelHandle = "@tiktok_videos",
-                    Topic = "Phim ngắn AI",
-                    Status = "Active",
-                    CreatedAtUtc = now,
-                    UpdatedAtUtc = now
-                });
 
                 // Cấu hình đủ budget browser toàn app (5) cho ca nghiệm thu 4 MuseAI
                 db.AppSettings.Add(new AppSetting
@@ -288,7 +263,6 @@ public static class GlobalAiPoolSmokeTests
                 db.Projects.Add(new Project
                 {
                     Id = prjId,
-                    WorkspaceId = wsId,
                     Name = "Phim ngắn 10 phân cảnh",
                     Status = "Draft",
                     CreatedAtUtc = now,
@@ -339,7 +313,6 @@ public static class GlobalAiPoolSmokeTests
                     {
                         Id = $"scene_{i:D2}",
                         ProjectId = prjId,
-                        WorkspaceId = wsId,
                         SequenceOrder = i,
                         Name = $"Cảnh quay {i}",
                         PromptText = $"Cinematic 4k video shot {i}",
@@ -362,7 +335,6 @@ public static class GlobalAiPoolSmokeTests
             for (int i = 1; i <= 10; i++)
             {
                 await jobService.EnqueueAsync(new JobEnqueueRequest(
-                    WorkspaceId: wsId,
                     ProjectId: prjId,
                     SceneId: $"scene_{i:D2}",
                     TaskType: JobTaskType.VideoRender,
@@ -436,9 +408,9 @@ public static class GlobalAiPoolSmokeTests
     }
 
     /// <summary>
-    /// Ca 3: Output luôn đúng Workspace/project/scene dù account AI phục vụ nhiều kênh.
-    /// Hai Workspace khác nhau (WS_A, WS_B) cùng xử lý qua 1 account AI chung;
-    /// kết quả và binding không bao giờ bị rò rỉ hoặc trỏ nhầm sang Workspace khác.
+    /// Ca 3: Output luôn đúng Project/project/scene dù account AI phục vụ nhiều kênh.
+    /// Hai Project khác nhau (WS_A, WS_B) cùng xử lý qua 1 account AI chung;
+    /// kết quả và binding không bao giờ bị rò rỉ hoặc trỏ nhầm sang Project khác.
     /// </summary>
     public static async Task Test_Case3_StrictOutputIsolation_MultiChannelSingleAccountAsync()
     {
@@ -485,21 +457,10 @@ public static class GlobalAiPoolSmokeTests
                     new AppSetting { Key = SettingsService.KeyImageProvider, Value = "chatgpt-web", UpdatedAtUtc = now }
                 );
 
-                // Workspace A: Kênh Review Phim
-                db.Workspaces.Add(new Workspace
-                {
-                    Id = "ws_movie_review",
-                    Name = "Kênh Review Phim",
-                    ChannelHandle = "@review_phim",
-                    Topic = "Điện ảnh",
-                    Status = "Active",
-                    CreatedAtUtc = now,
-                    UpdatedAtUtc = now
-                });
+                // Project A: Kênh Review Phim
                 db.Projects.Add(new Project
                 {
                     Id = "prj_movie_01",
-                    WorkspaceId = "ws_movie_review",
                     Name = "Review Avatar 3",
                     Status = "Draft",
                     CreatedAtUtc = now,
@@ -509,7 +470,6 @@ public static class GlobalAiPoolSmokeTests
                 {
                     Id = "scene_movie_01",
                     ProjectId = "prj_movie_01",
-                    WorkspaceId = "ws_movie_review",
                     SequenceOrder = 1,
                     Name = "Poster phim",
                     PromptText = "Movie poster 4k",
@@ -518,21 +478,10 @@ public static class GlobalAiPoolSmokeTests
                     UpdatedAtUtc = now
                 });
 
-                // Workspace B: Kênh Nấu Ăn
-                db.Workspaces.Add(new Workspace
-                {
-                    Id = "ws_cooking",
-                    Name = "Kênh Bếp Mẹ Nấu",
-                    ChannelHandle = "@bep_me_nau",
-                    Topic = "Ẩm thực",
-                    Status = "Active",
-                    CreatedAtUtc = now,
-                    UpdatedAtUtc = now
-                });
+                // Project B: Kênh Nấu Ăn
                 db.Projects.Add(new Project
                 {
                     Id = "prj_cooking_01",
-                    WorkspaceId = "ws_cooking",
                     Name = "Món Phở Bò",
                     Status = "Draft",
                     CreatedAtUtc = now,
@@ -542,7 +491,6 @@ public static class GlobalAiPoolSmokeTests
                 {
                     Id = "scene_cooking_01",
                     ProjectId = "prj_cooking_01",
-                    WorkspaceId = "ws_cooking",
                     SequenceOrder = 1,
                     Name = "Tô phở nóng",
                     PromptText = "Vietnamese pho soup, cinematic",
@@ -562,7 +510,6 @@ public static class GlobalAiPoolSmokeTests
 
             // Enqueue Job A từ kênh Review Phim (TaskType: Script)
             var resA = await jobService.EnqueueAsync(new JobEnqueueRequest(
-                WorkspaceId: "ws_movie_review",
                 ProjectId: "prj_movie_01",
                 SceneId: null,
                 TaskType: JobTaskType.Script,
@@ -571,7 +518,6 @@ public static class GlobalAiPoolSmokeTests
 
             // Enqueue Job B từ kênh Bếp Mẹ Nấu (TaskType: Image)
             var resB = await jobService.EnqueueAsync(new JobEnqueueRequest(
-                WorkspaceId: "ws_cooking",
                 ProjectId: "prj_cooking_01",
                 SceneId: "scene_cooking_01",
                 TaskType: JobTaskType.Image,
@@ -582,21 +528,19 @@ public static class GlobalAiPoolSmokeTests
             int dispatched = await scheduler.DispatchPendingJobsAsync();
             Assert(dispatched == 2, "Cả hai jobs phải được dispatch.");
 
-            // Kiểm tra phân lập 100% về Workspace, Project, Scene và StorageRoot
+            // Kiểm tra phân lập 100% về Project, Project, Scene và StorageRoot
             await using (var db = new TiToAIDbContext(dbOptions))
             {
                 var jobA = await db.Jobs.Include(j => j.ExecutionBinding).FirstAsync(j => j.Id == resA.JobId);
                 var jobB = await db.Jobs.Include(j => j.ExecutionBinding).FirstAsync(j => j.Id == resB.JobId);
 
                 // Job A
-                Assert(jobA.WorkspaceId == "ws_movie_review", "Job A phải thuộc Workspace Movie Review.");
                 Assert(jobA.ProjectId == "prj_movie_01", "Job A phải thuộc Project Movie 01.");
                 Assert(jobA.SceneId == null, "Job A (Script) phải có SceneId null.");
                 Assert(jobA.ExecutionBinding!.JobId == jobA.Id, "ExecutionBinding A phải gắn đúng Job A.");
                 Assert(jobA.ExecutionBinding.ProviderAccountId == "acc-shared-engine", "Job A dùng đúng account AI.");
 
                 // Job B
-                Assert(jobB.WorkspaceId == "ws_cooking", "Job B phải thuộc Workspace Cooking.");
                 Assert(jobB.ProjectId == "prj_cooking_01", "Job B phải thuộc Project Cooking 01.");
                 Assert(jobB.SceneId == "scene_cooking_01", "Job B phải thuộc Scene Cooking 01.");
                 Assert(jobB.ExecutionBinding!.JobId == jobB.Id, "ExecutionBinding B phải gắn đúng Job B.");
@@ -620,27 +564,15 @@ public static class GlobalAiPoolSmokeTests
         try
         {
             var now = DateTimeOffset.UtcNow.ToString("o");
-            string wsId = "ws_combinations";
             string prjId = "prj_combinations";
             string scnId = "scene_combinations";
 
             await using (var db = new TiToAIDbContext(dbOptions))
             {
-                db.Workspaces.Add(new Workspace
-                {
-                    Id = wsId,
-                    Name = "Workspace Combinations",
-                    ChannelHandle = "@combos",
-                    Topic = "Test Combos",
-                    Status = "Active",
-                    CreatedAtUtc = now,
-                    UpdatedAtUtc = now
-                });
 
                 db.Projects.Add(new Project
                 {
                     Id = prjId,
-                    WorkspaceId = wsId,
                     Name = "Combo Project",
                     Status = "Draft",
                     CreatedAtUtc = now,
@@ -651,7 +583,6 @@ public static class GlobalAiPoolSmokeTests
                 {
                     Id = scnId,
                     ProjectId = prjId,
-                    WorkspaceId = wsId,
                     SequenceOrder = 1,
                     Name = "Combo Scene",
                     PromptText = "Test prompt",
@@ -706,7 +637,6 @@ public static class GlobalAiPoolSmokeTests
 
                         // Kiểm tra SnapshotFactory chụp đúng provider tương ứng cho từng loại tác vụ
                         var scriptSnapshot = await snapshotFactory.CreateSnapshotAsync(new JobEnqueueRequest(
-                            WorkspaceId: wsId,
                             ProjectId: prjId,
                             SceneId: null,
                             TaskType: JobTaskType.Script,
@@ -715,7 +645,6 @@ public static class GlobalAiPoolSmokeTests
                         Assert(scriptSnapshot.ProviderKey == scriptP, $"Combo {comboIndex}: Script snapshot sai provider: {scriptSnapshot.ProviderKey} vs {scriptP}");
 
                         var imageSnapshot = await snapshotFactory.CreateSnapshotAsync(new JobEnqueueRequest(
-                            WorkspaceId: wsId,
                             ProjectId: prjId,
                             SceneId: scnId,
                             TaskType: JobTaskType.Image,
@@ -724,7 +653,6 @@ public static class GlobalAiPoolSmokeTests
                         Assert(imageSnapshot.ProviderKey == imageP, $"Combo {comboIndex}: Image snapshot sai provider: {imageSnapshot.ProviderKey} vs {imageP}");
 
                         var videoPromptSnapshot = await snapshotFactory.CreateSnapshotAsync(new JobEnqueueRequest(
-                            WorkspaceId: wsId,
                             ProjectId: prjId,
                             SceneId: scnId,
                             TaskType: JobTaskType.VideoPrompt,
@@ -778,15 +706,15 @@ public static class GlobalAiPoolSmokeTests
         }
 
         await RunCaseAsync(
-            "Ca 1: 10 Workspace dùng chung 1 ChatGPT theo tab capacity (3 running, 7 queued, streaming next)",
-            Test_Case1_TenWorkspaces_SingleChatGPT_TabCapacityAsync);
+            "Ca 1: 10 Project dùng chung 1 ChatGPT theo tab capacity (3 running, 7 queued, streaming next)",
+            Test_Case1_TenProjects_SingleChatGPT_TabCapacityAsync);
 
         await RunCaseAsync(
             "Ca 2: 10 video qua 4 MuseAI (tối đa 4 running, streaming cấp ngay slot rảnh, không batch-wait)",
             Test_Case2_TenVideos_FourMuseAI_StreamingSlotsAsync);
 
         await RunCaseAsync(
-            "Ca 3: Output luôn đúng Workspace/project/scene dù account AI phục vụ nhiều kênh",
+            "Ca 3: Output luôn đúng Project/project/scene dù account AI phục vụ nhiều kênh",
             Test_Case3_StrictOutputIsolation_MultiChannelSingleAccountAsync);
 
         await RunCaseAsync(

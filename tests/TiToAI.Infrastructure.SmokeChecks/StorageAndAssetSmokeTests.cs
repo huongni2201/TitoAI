@@ -258,28 +258,16 @@ public static class StorageAndAssetSmokeTests
         string testWorkDir)
     {
         Console.WriteLine("\n[T09-5] Kiểm thử Atomic staging & finalize asset file (audio MP3/WAV & image)...");
-
-        var workspaceId = Guid.NewGuid().ToString("D").ToLowerInvariant();
         var projectId = Guid.NewGuid().ToString("D").ToLowerInvariant();
         var sceneId = Guid.NewGuid().ToString("D").ToLowerInvariant();
         var now = DateTimeOffset.UtcNow.ToString("O");
 
         await using (var db = new TiToAIDbContext(dbOptions))
         {
-            db.Workspaces.Add(new Workspace
-            {
-                Id = workspaceId,
-                Name = "Workspace Test Media",
-                ChannelHandle = "@test_media",
-                Topic = "Giải trí",
-                Status = "Active",
-                CreatedAtUtc = now
-            });
 
             db.Projects.Add(new Project
             {
                 Id = projectId,
-                WorkspaceId = workspaceId,
                 Name = "Dự án Media Test",
                 Status = "Draft",
                 CreatedAtUtc = now,
@@ -289,7 +277,6 @@ public static class StorageAndAssetSmokeTests
             db.Scenes.Add(new Scene
             {
                 Id = sceneId,
-                WorkspaceId = workspaceId,
                 ProjectId = projectId,
                 SequenceOrder = 1,
                 Name = "Cảnh 1 Nhạc nền",
@@ -312,7 +299,6 @@ public static class StorageAndAssetSmokeTests
 
         // 1. Import Audio
         var importAudioResp = await assetService.ImportAudioAsync(new ImportAudioRequest(
-            WorkspaceId: workspaceId,
             ProjectId: projectId,
             SceneId: sceneId,
             SourceFilePath: sourceAudioPath
@@ -339,7 +325,6 @@ public static class StorageAndAssetSmokeTests
         await AssertThrowsAsync<AssetValidationException>(async () =>
         {
             await assetService.ImportAudioAsync(new ImportAudioRequest(
-                WorkspaceId: workspaceId,
                 ProjectId: projectId,
                 SceneId: sceneId,
                 SourceFilePath: invalidFile
@@ -352,7 +337,6 @@ public static class StorageAndAssetSmokeTests
         await File.WriteAllBytesAsync(sourceImagePath, sampleImageData);
 
         var selectImgResp = await assetService.SelectReferenceImageAsync(new SelectReferenceImageRequest(
-            WorkspaceId: workspaceId,
             ProjectId: projectId,
             SceneId: sceneId,
             SourceFilePath: sourceImagePath
@@ -371,7 +355,6 @@ public static class StorageAndAssetSmokeTests
         // 4. Lấy metadata
         var metadata = await assetService.GetMetadataAsync(new GetAssetMetadataRequest(
             AssetId: importAudioResp.Asset.AssetId,
-            WorkspaceId: workspaceId
         ));
         Assert(metadata.AssetId == importAudioResp.Asset.AssetId, "GetMetadataAsync phải trả về đúng AssetId.");
 
@@ -384,8 +367,6 @@ public static class StorageAndAssetSmokeTests
         string testWorkDir)
     {
         Console.WriteLine("\n[T09-6] Kiểm thử Document export UTF-8 có dấu tiếng Việt, newline, metadata...");
-
-        var workspaceId = Guid.NewGuid().ToString("D").ToLowerInvariant();
         var projectId = Guid.NewGuid().ToString("D").ToLowerInvariant();
         var sceneId = Guid.NewGuid().ToString("D").ToLowerInvariant();
         var now = DateTimeOffset.UtcNow.ToString("O");
@@ -398,20 +379,10 @@ public static class StorageAndAssetSmokeTests
 
         await using (var db = new TiToAIDbContext(dbOptions))
         {
-            db.Workspaces.Add(new Workspace
-            {
-                Id = workspaceId,
-                Name = "Workspace Kịch Bản",
-                ChannelHandle = "@kichban_space",
-                Topic = "Vũ trụ học",
-                Status = "Active",
-                CreatedAtUtc = now
-            });
 
             db.Projects.Add(new Project
             {
                 Id = projectId,
-                WorkspaceId = workspaceId,
                 Name = "Dự Án Kịch Bản Thiên Văn",
                 Status = "Draft",
                 CreatedAtUtc = now,
@@ -421,7 +392,6 @@ public static class StorageAndAssetSmokeTests
             db.Scenes.Add(new Scene
             {
                 Id = sceneId,
-                WorkspaceId = workspaceId,
                 ProjectId = projectId,
                 SequenceOrder = 1,
                 Name = "Khởi đầu vũ trụ",
@@ -436,7 +406,6 @@ public static class StorageAndAssetSmokeTests
         }
 
         var exportResp = await documentExportService.ExportDocumentAsync(new DocumentExportRequest(
-            WorkspaceId: workspaceId,
             SceneId: sceneId,
             Format: "txt",
             CustomFileName: "KichBan_Canh1_VuTru.txt"
@@ -459,7 +428,6 @@ public static class StorageAndAssetSmokeTests
         await AssertThrowsAsync<DocumentExportException>(async () =>
         {
             await documentExportService.ExportDocumentAsync(new DocumentExportRequest(
-                WorkspaceId: workspaceId,
                 SceneId: sceneId,
                 Format: "docx"
             ));
@@ -578,17 +546,14 @@ public static class StorageAndAssetSmokeTests
         string testWorkDir)
     {
         Console.WriteLine("\n[T09-REGRESSION-4] Kiểm thử Audio header byte check và giới hạn kích thước...");
-
-        var workspaceId = Guid.NewGuid().ToString("D").ToLowerInvariant();
         var projectId = Guid.NewGuid().ToString("D").ToLowerInvariant();
         var sceneId = Guid.NewGuid().ToString("D").ToLowerInvariant();
         var now = DateTimeOffset.UtcNow.ToString("O");
 
         await using (var db = new TiToAIDbContext(dbOptions))
         {
-            db.Workspaces.Add(new Workspace { Id = workspaceId, Name = "WS Audio", Status = "Active", CreatedAtUtc = now });
-            db.Projects.Add(new Project { Id = projectId, WorkspaceId = workspaceId, Name = "PRJ Audio", Status = "Draft", CreatedAtUtc = now, UpdatedAtUtc = now });
-            db.Scenes.Add(new Scene { Id = sceneId, WorkspaceId = workspaceId, ProjectId = projectId, SequenceOrder = 1, Name = "SCN Audio", TargetDurationSeconds = 10, Status = "Draft", CreatedAtUtc = now, UpdatedAtUtc = now });
+            db.Projects.Add(new Project { Id = projectId, Name = "PRJ Audio", Status = "Draft", CreatedAtUtc = now, UpdatedAtUtc = now });
+            db.Scenes.Add(new Scene { Id = sceneId, ProjectId = projectId, SequenceOrder = 1, Name = "SCN Audio", TargetDurationSeconds = 10, Status = "Draft", CreatedAtUtc = now, UpdatedAtUtc = now });
             await db.SaveChangesAsync();
         }
 
@@ -598,7 +563,7 @@ public static class StorageAndAssetSmokeTests
 
         await AssertThrowsAsync<AssetValidationException>(async () =>
         {
-            await assetService.ImportAudioAsync(new ImportAudioRequest(workspaceId, projectId, sceneId, fakeWavPath));
+            await assetService.ImportAudioAsync(new ImportAudioRequest(projectId, sceneId, fakeWavPath));
         }, "Chặn file đuôi .wav nhưng thiếu header RIFF/WAVE.");
 
         // 2. Valid WAV: Header RIFF + WAVE
@@ -609,7 +574,7 @@ public static class StorageAndAssetSmokeTests
         var validWavPath = Path.Combine(testWorkDir, "valid.wav");
         await File.WriteAllBytesAsync(validWavPath, validWavData);
 
-        var wavResp = await assetService.ImportAudioAsync(new ImportAudioRequest(workspaceId, projectId, sceneId, validWavPath));
+        var wavResp = await assetService.ImportAudioAsync(new ImportAudioRequest(projectId, sceneId, validWavPath));
         Assert(wavResp.Asset != null, "Valid WAV file phải được import thành công.");
 
         Console.WriteLine("    -> Audio header validation (RIFF/WAVE & MP3 byte checks): PASS");
@@ -619,16 +584,16 @@ public static class StorageAndAssetSmokeTests
     {
         Console.WriteLine("\n[T09-REGRESSION-5] Kiểm thử Check Constraint CK_Job_TaskType_Scene & Composite FK...");
 
-        var workspaceId = Guid.NewGuid().ToString("D").ToLowerInvariant();
         var projectId = Guid.NewGuid().ToString("D").ToLowerInvariant();
+        var otherProjectId = Guid.NewGuid().ToString("D").ToLowerInvariant();
         var sceneId = Guid.NewGuid().ToString("D").ToLowerInvariant();
         var now = DateTimeOffset.UtcNow.ToString("O");
 
         await using (var db = new TiToAIDbContext(dbOptions))
         {
-            db.Workspaces.Add(new Workspace { Id = workspaceId, Name = "WS JobCheck", Status = "Active", CreatedAtUtc = now });
-            db.Projects.Add(new Project { Id = projectId, WorkspaceId = workspaceId, Name = "PRJ JobCheck", Status = "Draft", CreatedAtUtc = now, UpdatedAtUtc = now });
-            db.Scenes.Add(new Scene { Id = sceneId, WorkspaceId = workspaceId, ProjectId = projectId, SequenceOrder = 1, Name = "SCN JobCheck", TargetDurationSeconds = 10, Status = "Draft", CreatedAtUtc = now, UpdatedAtUtc = now });
+            db.Projects.Add(new Project { Id = projectId, Name = "PRJ JobCheck", Status = "Draft", CreatedAtUtc = now, UpdatedAtUtc = now });
+            db.Projects.Add(new Project { Id = otherProjectId, Name = "PRJ khác", Status = "Draft", CreatedAtUtc = now, UpdatedAtUtc = now });
+            db.Scenes.Add(new Scene { Id = sceneId, ProjectId = projectId, SequenceOrder = 1, Name = "SCN JobCheck", TargetDurationSeconds = 10, Status = "Draft", CreatedAtUtc = now, UpdatedAtUtc = now });
             await db.SaveChangesAsync();
         }
 
@@ -638,7 +603,6 @@ public static class StorageAndAssetSmokeTests
             db.Jobs.Add(new Job
             {
                 Id = Guid.NewGuid().ToString("N"),
-                WorkspaceId = workspaceId,
                 ProjectId = projectId,
                 SceneId = sceneId, // Script KHÔNG ĐƯỢC có scene_id
                 TaskType = "Script",
@@ -661,15 +625,14 @@ public static class StorageAndAssetSmokeTests
             Assert(checkViolated, "Job TaskType = 'Script' có SceneId phải bị SQLite từ chối bởi CK_Job_TaskType_Scene!");
         }
 
-        // Test 2: Task Image mà scene_id null -> Vi phạm CK_Job_TaskType_Scene
+        // Image có thể là job cấp Project, không cần Scene.
         await using (var db = new TiToAIDbContext(dbOptions))
         {
             db.Jobs.Add(new Job
             {
                 Id = Guid.NewGuid().ToString("N"),
-                WorkspaceId = workspaceId,
                 ProjectId = projectId,
-                SceneId = null, // Image BẮT BUỘC có scene_id
+                SceneId = null,
                 TaskType = "Image",
                 State = "Queued",
                 ProviderKey = "chatgpt-web",
@@ -678,16 +641,23 @@ public static class StorageAndAssetSmokeTests
                 UpdatedAtUtc = now
             });
 
-            bool checkViolated = false;
-            try
+            await db.SaveChangesAsync();
+        }
+
+        // Composite FK ngăn gắn Scene của Project khác vào Job.
+        await using (var db = new TiToAIDbContext(dbOptions))
+        {
+            db.Jobs.Add(new Job
             {
-                await db.SaveChangesAsync();
-            }
+                Id = Guid.NewGuid().ToString("N"), ProjectId = otherProjectId, SceneId = sceneId,
+                TaskType = "Image", State = "Queued", ProviderKey = "chatgpt-web",
+                StorageRootId = "root-images", CreatedAtUtc = now, UpdatedAtUtc = now
+            });
+            var rejected = false;
+            try { await db.SaveChangesAsync(); }
             catch (DbUpdateException ex) when (ex.InnerException is SqliteException sqlEx && sqlEx.SqliteErrorCode == 19)
-            {
-                checkViolated = true;
-            }
-            Assert(checkViolated, "Job TaskType = 'Image' có SceneId null phải bị SQLite từ chối bởi CK_Job_TaskType_Scene!");
+            { rejected = true; }
+            Assert(rejected, "Job không được tham chiếu Scene thuộc Project khác.");
         }
 
         Console.WriteLine("    -> Check Constraint CK_Job_TaskType_Scene & Composite FK: PASS");
@@ -695,7 +665,7 @@ public static class StorageAndAssetSmokeTests
 
     private static async Task TestUpgradeLegacyDbWithRealJobsAsync(string testWorkDir)
     {
-        Console.WriteLine("\n[T09-REGRESSION-6] Kiểm thử Upgrade DB cũ có Job thật và PRAGMA foreign_key_check...");
+        Console.WriteLine("\n[T09-REGRESSION-6] Kiểm thử PRAGMA foreign_key_check trên DB mới...");
 
         var legacyDbPath = Path.Combine(testWorkDir, "legacy_upgrade.db");
         var connStr = DatabasePathHelper.BuildConnectionString(legacyDbPath);
@@ -711,9 +681,9 @@ public static class StorageAndAssetSmokeTests
         cmd.CommandText = "PRAGMA foreign_key_check;";
         using var reader = await cmd.ExecuteReaderAsync();
         bool hasFkViolation = await reader.ReadAsync();
-        Assert(!hasFkViolation, "PRAGMA foreign_key_check phải trả về 0 vi phạm trên DB sau khi áp migration!");
+        Assert(!hasFkViolation, "PRAGMA foreign_key_check phải trả về 0 vi phạm trên DB mới!");
 
-        Console.WriteLine("    -> Upgrade DB cũ có Job thật & PRAGMA foreign_key_check = 0 vi phạm: PASS");
+        Console.WriteLine("    -> DB mới có PRAGMA foreign_key_check = 0 vi phạm: PASS");
     }
 
     private static void Assert(bool condition, string message)

@@ -22,7 +22,6 @@ globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
 const initialScenes: Array<{
   sceneId: string;
   projectId: string;
-  workspaceId: string;
   name: string;
   sceneSequence: number;
   targetDurationSeconds: number;
@@ -38,7 +37,6 @@ const initialScenes: Array<{
   {
     sceneId: "scn_01",
     projectId: "prj_01",
-    workspaceId: "ws_01",
     name: "Phân cảnh mở đầu",
     sceneSequence: 1,
     targetDurationSeconds: 15,
@@ -90,7 +88,6 @@ window.chrome = {
               assets: [
                 {
                   assetId: "ast_img_02",
-                  workspaceId: "ws_01",
                   projectId: "prj_01",
                   assetType: "Image",
                   storageRootId: "root-default-images",
@@ -111,7 +108,6 @@ window.chrome = {
           case "asset.get_preview": {
             responseData = {
               assetId: "ast_aud_01",
-              workspaceId: "ws_01",
               assetType: "Audio",
               relativePath: "ws_01/projects/prj_01/audio/voice.mp3",
               mimeType: "audio/mpeg",
@@ -160,7 +156,6 @@ const { bridgeClient } = await import("../../services/bridgeClient.ts");
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 test("T12a: SceneTable Detach Audio gửi chuỗi rỗng và revision", async () => {
-  bridgeClient.setActiveWorkspaceId("ws_01");
   lastUpdateRequest = null;
 
   const container = document.createElement("div");
@@ -171,7 +166,6 @@ test("T12a: SceneTable Detach Audio gửi chuỗi rỗng và revision", async ()
   await act(async () => {
     root.render(
       React.createElement(SceneTable, {
-        workspaceId: "ws_01",
         projectId: "prj_01",
         scenes: initialScenes,
         isLoading: false,
@@ -206,7 +200,6 @@ test("T12a: SceneTable Detach Audio gửi chuỗi rỗng và revision", async ()
 });
 
 test("T12a: SceneTable Detach Image gửi chuỗi rỗng và revision", async () => {
-  bridgeClient.setActiveWorkspaceId("ws_01");
   lastUpdateRequest = null;
 
   const container = document.createElement("div");
@@ -217,7 +210,6 @@ test("T12a: SceneTable Detach Image gửi chuỗi rỗng và revision", async ()
   await act(async () => {
     root.render(
       React.createElement(SceneTable, {
-        workspaceId: "ws_01",
         projectId: "prj_01",
         scenes: initialScenes,
         isLoading: false,

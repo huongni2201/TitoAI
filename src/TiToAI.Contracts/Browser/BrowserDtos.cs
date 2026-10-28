@@ -6,7 +6,6 @@ public sealed record BrowserProfileDto(
     [property: JsonPropertyName("profileId")] string ProfileId,
     [property: JsonPropertyName("kind")] string Kind,
     [property: JsonPropertyName("accountIdentity")] string? AccountIdentity,
-    [property: JsonPropertyName("workspaceId")] string? WorkspaceId,
     [property: JsonPropertyName("visibilityState")] string VisibilityState,
     [property: JsonPropertyName("sessionStatus")] string SessionStatus,
     [property: JsonPropertyName("operationalState")] string OperationalState,
@@ -16,8 +15,7 @@ public sealed record BrowserProfileDto(
     [property: JsonPropertyName("displayName")] string? DisplayName = null,
     [property: JsonPropertyName("lifecycle")] string Lifecycle = "Active");
 
-public sealed record BrowserListProfilesRequest(
-    [property: JsonPropertyName("workspaceId")] string? WorkspaceId);
+public sealed record BrowserListProfilesRequest();
 
 public sealed record BrowserListProfilesResponseData(
     [property: JsonPropertyName("profiles")] IReadOnlyList<BrowserProfileDto> Profiles);

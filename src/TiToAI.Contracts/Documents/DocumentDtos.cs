@@ -1,7 +1,6 @@
 namespace TiToAI.Contracts.Documents;
 
 public sealed record DocumentExportRequest(
-    string WorkspaceId,
     string SceneId,
     string Format = "txt",
     string? CustomFileName = null

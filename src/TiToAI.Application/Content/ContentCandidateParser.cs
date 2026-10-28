@@ -219,7 +219,6 @@ public static class ContentCandidateParser
     public static ContentCandidateResult<VideoContentItemDto> ParseVideoContent(
         string rawText,
         string projectId = "",
-        string workspaceId = "",
         string? sceneId = null,
         int sequenceOrder = 1,
         string? imageAssetId = null)
@@ -286,7 +285,6 @@ public static class ContentCandidateParser
             var item = new VideoContentItemDto(
                 Id: Guid.NewGuid().ToString("D").ToLowerInvariant(),
                 ProjectId: projectId,
-                WorkspaceId: workspaceId,
                 SceneId: sceneId,
                 SequenceOrder: sequenceOrder,
                 Idea: idea,
@@ -311,7 +309,6 @@ public static class ContentCandidateParser
             var item = new VideoContentItemDto(
                 Id: Guid.NewGuid().ToString("D").ToLowerInvariant(),
                 ProjectId: projectId,
-                WorkspaceId: workspaceId,
                 SceneId: sceneId,
                 SequenceOrder: sequenceOrder,
                 Idea: "Kịch bản sản phẩm ngắn",

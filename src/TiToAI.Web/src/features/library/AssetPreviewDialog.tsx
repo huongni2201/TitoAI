@@ -11,14 +11,14 @@ import {
   IconFilm,
 } from "../../components/Icons";
 import { getAssetPreview, openAssetFolder, type GetAssetPreviewResponse } from "./libraryApi";
+import { AssetMediaPreview } from "./AssetMediaPreview";
 
 interface AssetPreviewDialogProps {
   assetId: string;
-  workspaceId: string;
   onClose: () => void;
 }
 
-export function AssetPreviewDialog({ assetId, workspaceId, onClose }: AssetPreviewDialogProps) {
+export function AssetPreviewDialog({ assetId, onClose }: AssetPreviewDialogProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<GetAssetPreviewResponse | null>(null);
@@ -29,7 +29,7 @@ export function AssetPreviewDialog({ assetId, workspaceId, onClose }: AssetPrevi
     setLoading(true);
     setError(null);
 
-    getAssetPreview({ assetId, workspaceId })
+    getAssetPreview({ assetId })
       .then((data) => {
         if (isMounted) {
           setPreview(data);
@@ -46,12 +46,12 @@ export function AssetPreviewDialog({ assetId, workspaceId, onClose }: AssetPrevi
     return () => {
       isMounted = false;
     };
-  }, [assetId, workspaceId]);
+  }, [assetId]);
 
   const handleOpenFolder = async () => {
     try {
       setOpenFolderMsg(null);
-      const res = await openAssetFolder({ assetId, workspaceId });
+      const res = await openAssetFolder({ assetId });
       if (res.success) {
         setOpenFolderMsg("Đã mở thư mục trên máy.");
       } else {
@@ -91,7 +91,7 @@ export function AssetPreviewDialog({ assetId, workspaceId, onClose }: AssetPrevi
       aria-labelledby="asset-preview-title"
       className="asset-preview-dialog fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
     >
-      <div className="bg-card text-card-foreground border rounded-lg shadow-xl max-w-lg w-full p-6 space-y-4">
+      <div className="bg-card text-card-foreground border rounded-lg shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-6 space-y-4">
         <div className="flex items-center justify-between border-b pb-3">
           <div className="flex items-center gap-2">
             {preview && renderIcon(preview.assetType)}
@@ -125,6 +125,7 @@ export function AssetPreviewDialog({ assetId, workspaceId, onClose }: AssetPrevi
 
         {preview && (
           <div className="space-y-3 text-sm">
+            {preview.fileExists && !preview.isRootOffline && <AssetMediaPreview assetId={preview.assetId} assetType={preview.assetType} fileName={preview.relativePath.split("/").pop() || preview.relativePath} />}
             <div className="grid grid-cols-3 gap-2 py-1 border-b">
               <span className="text-muted-foreground font-medium">Mã tài nguyên:</span>
               <span className="col-span-2 font-mono text-xs break-all">{preview.assetId}</span>
@@ -174,7 +175,7 @@ export function AssetPreviewDialog({ assetId, workspaceId, onClose }: AssetPrevi
               ) : (
                 <div className="flex items-center gap-2 p-2.5 rounded bg-green-50 dark:bg-green-950/30 border border-green-300 dark:border-green-700 text-green-800 dark:text-green-300">
                   <IconCheck size={18} className="shrink-0" />
-                  <span className="text-xs">Tệp vật lý sẵn sàng và toàn vẹn.</span>
+                  <span className="text-xs">Tệp vật lý sẵn sàng.</span>
                 </div>
               )}
             </div>

@@ -305,16 +305,13 @@ public static class JobRetryAndCancelPolicy
     public static async Task<CancellationHandlingResult> HandleCancellationRequestAsync(
         TiToAIDbContext dbContext,
         string jobId,
-        string workspaceId,
         CancellationToken cancellationToken = default,
         Func<DateTimeOffset>? clock = null)
     {
         ArgumentNullException.ThrowIfNull(dbContext);
         ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
-
         var job = await dbContext.Jobs
-            .FirstOrDefaultAsync(j => j.Id == jobId && j.WorkspaceId == workspaceId, cancellationToken)
+            .FirstOrDefaultAsync(j => j.Id == jobId, cancellationToken)
             .ConfigureAwait(false);
 
         if (job is null)
@@ -429,10 +426,9 @@ public static class JobRetryAndCancelPolicy
     public static Task<CancellationHandlingResult> HandleCancellationRequest(
         TiToAIDbContext dbContext,
         string jobId,
-        string workspaceId,
         CancellationToken cancellationToken = default,
         Func<DateTimeOffset>? clock = null)
-        => HandleCancellationRequestAsync(dbContext, jobId, workspaceId, cancellationToken, clock);
+        => HandleCancellationRequestAsync(dbContext, jobId, cancellationToken, clock);
 
     /// <summary>
     /// Xử lý kết quả đến muộn (Late Result) trên tác vụ đã có yêu cầu hủy (CancelRequested == 1 hoặc đã Canceled):

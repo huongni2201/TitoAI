@@ -164,7 +164,6 @@ public sealed class ProviderAccountService
             {
                 Id = profileId,
                 Kind = profileKind,
-                WorkspaceId = null, // Global AI Account không gắn với Workspace
                 AccountIdentity = null,
                 VisibilityState = "Hidden",
                 SessionStatus = "Unverified",

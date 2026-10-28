@@ -43,6 +43,12 @@ public interface IBrowserProcessController : IAsyncDisposable, IDisposable
         bool isHeadless,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Visible automation trial; closing it must not emit a login-close event.</summary>
+    Task<IBrowserContextHandle> LaunchVisibleAutomationContextAsync(
+        string profileId,
+        CancellationToken cancellationToken = default) =>
+        LaunchPersistentContextAsync(profileId, isHeadless: false, cancellationToken);
+
     /// <summary>
     /// Khởi chạy persistent context của Chromium cho profile được chỉ định và điều hướng tới initialUrl (nếu có).
     /// </summary>

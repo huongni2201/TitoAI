@@ -10,8 +10,7 @@ public class VideoAnalyticsRecord
 {
     public string Id { get; set; } = string.Empty;
     public string SnapshotId { get; set; } = string.Empty;
-    public string WorkspaceId { get; set; } = string.Empty;
-    public string? AccountId { get; set; }
+    public string AccountId { get; set; } = string.Empty;
     public string VideoKey { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
     public long? Views { get; set; }

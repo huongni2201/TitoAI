@@ -6,6 +6,7 @@ export interface ProviderAccountDto {
   profileId: string;
   displayName: string;
   verifiedIdentity?: string | null;
+  sessionStatus?: string | null;
   enabled: boolean;
   lifecycle: string;
   maxConcurrentJobs: number;

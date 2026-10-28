@@ -60,8 +60,8 @@ public static class VideoWorkflowSmokeTests
         await RunCaseAsync("5. Chuyển sang Running chỉ khi có job bền vững được enqueue (mô phỏng Scheduler)",
             TestCase5_StartWithDurableJobEnqueuer_TransitionsToRunningAsync);
 
-        await RunCaseAsync("6. Quyết định Audio không bắt buộc: Mặc định không gửi audio vẫn hợp lệ; audio cross-workspace bị chặn",
-            TestCase6_AudioOptionalAndWorkspaceIsolationAsync);
+        await RunCaseAsync("6. Audio là tùy chọn; asset khác Project bị chặn",
+            TestCase6_AudioOptionalAndProjectIsolationAsync);
 
         await RunCaseAsync("7. Ma trận phụ thuộc §3.4: Sửa prompt chỉ làm lại video cảnh đó; đổi ảnh làm lại prompt + video; giữ ảnh và cảnh khác",
             TestCase7_DependencyReRunMatrixAsync);
@@ -89,6 +89,9 @@ public static class VideoWorkflowSmokeTests
 
         await RunCaseAsync("15. Project-first: legacy multi-scene project is preserved and blocked from producing multiple videos",
             TestCase15_LegacyMultiSceneProjectIsPreservedAsync);
+
+        await RunCaseAsync("16. Run và job đầu tiên cùng rollback khi lưu thất bại",
+            TestCase16_StartRunAndJobRollbackTogetherAsync);
 
         Console.WriteLine("\n-----------------------------------------------------------------");
         Console.WriteLine($"Kết quả kiểm thử Video Workflow: {_passCount} PASS, {_failCount} FAIL.");
@@ -126,7 +129,7 @@ public static class VideoWorkflowSmokeTests
         }
     }
 
-    private static (DbContextOptions<TiToAIDbContext> dbOptions, string tempDir, string workspaceId, string projectId) CreateTestEnvironment()
+    private static (DbContextOptions<TiToAIDbContext> dbOptions, string tempDir, string projectId) CreateTestEnvironment()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "titoai_wf_smoke_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
@@ -141,31 +144,20 @@ public static class VideoWorkflowSmokeTests
             db.Database.EnsureCreated();
 
             var now = DateTimeOffset.UtcNow.ToString("o");
-            var wsId = Guid.NewGuid().ToString("D").ToLowerInvariant();
             var prjId = Guid.NewGuid().ToString("D").ToLowerInvariant();
 
-            db.Workspaces.Add(new Workspace
-            {
-                Id = wsId,
-                Name = "Workspace Quần Áo",
-                Status = "Active",
-                CreatedAtUtc = now,
-                UpdatedAtUtc = now
-            });
 
             db.Projects.Add(new Project
             {
                 Id = prjId,
-                WorkspaceId = wsId,
                 Name = "Dự án BST Mùa Thu",
-                Description = "Video mẫu mặc áo sơ mi lụa",
                 Status = "Draft",
                 CreatedAtUtc = now,
                 UpdatedAtUtc = now
             });
 
             db.SaveChanges();
-            return (dbOptions, tempDir, wsId, prjId);
+            return (dbOptions, tempDir, prjId);
         }
     }
 
@@ -181,7 +173,7 @@ public static class VideoWorkflowSmokeTests
         catch { }
     }
 
-    private static string SeedAsset(DbContextOptions<TiToAIDbContext> dbOptions, string workspaceId, string assetType, string relativePath)
+    private static string SeedAsset(DbContextOptions<TiToAIDbContext> dbOptions, string assetType, string relativePath, string? ownerProjectId = null)
     {
         using var db = new TiToAIDbContext(dbOptions);
         var assetId = Guid.NewGuid().ToString("D").ToLowerInvariant();
@@ -190,8 +182,7 @@ public static class VideoWorkflowSmokeTests
         db.Assets.Add(new Asset
         {
             Id = assetId,
-            WorkspaceId = workspaceId,
-            ProjectId = null,
+            ProjectId = ownerProjectId,
             StorageRootId = "root-1",
             RelativePath = relativePath,
             AssetType = assetType,
@@ -205,7 +196,7 @@ public static class VideoWorkflowSmokeTests
         return assetId;
     }
 
-    private static string SeedScene(DbContextOptions<TiToAIDbContext> dbOptions, string workspaceId, string projectId, string name, int sequence, string? imageAssetId, string? prompt, int targetDurationSeconds = 15)
+    private static string SeedScene(DbContextOptions<TiToAIDbContext> dbOptions, string projectId, string name, int sequence, string? imageAssetId, string? prompt, int targetDurationSeconds = 15)
     {
         using var db = new TiToAIDbContext(dbOptions);
         var sceneId = Guid.NewGuid().ToString("D").ToLowerInvariant();
@@ -215,7 +206,6 @@ public static class VideoWorkflowSmokeTests
         {
             Id = sceneId,
             ProjectId = projectId,
-            WorkspaceId = workspaceId,
             SequenceOrder = sequence,
             Name = name,
             TargetDurationSeconds = targetDurationSeconds,
@@ -237,17 +227,16 @@ public static class VideoWorkflowSmokeTests
     /// </summary>
     private static async Task TestCase1_InputModesValidationAsync()
     {
-        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        var (dbOptions, tempDir, prjId) = CreateTestEnvironment();
         try
         {
             var service = new ProjectWorkflowService(dbOptions);
-            var modelAssetId = SeedAsset(dbOptions, wsId, "Image", "models/model1.jpg");
-            var productAssetId = SeedAsset(dbOptions, wsId, "Image", "products/shirt1.jpg");
-            var readyAssetId = SeedAsset(dbOptions, wsId, "Image", "ready/wearing_shirt.jpg");
+            var modelAssetId = SeedAsset(dbOptions, "Image", "models/model1.jpg");
+            var productAssetId = SeedAsset(dbOptions, "Image", "products/shirt1.jpg");
+            var readyAssetId = SeedAsset(dbOptions, "Image", "ready/wearing_shirt.jpg");
 
             // 1. ModelAndProduct thiếu ProductAssetId -> Báo lỗi rõ
             await service.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 WorkflowMode: WorkflowModes.ModelAndProduct,
                 GoalPrompt: "Test validation",
@@ -263,7 +252,7 @@ public static class VideoWorkflowSmokeTests
             bool failedModelProduct = false;
             try
             {
-                await service.StartWorkflowAsync(new StartProjectWorkflowRequest(wsId, prjId));
+                await service.StartWorkflowAsync(new StartProjectWorkflowRequest(prjId));
             }
             catch (ProjectWorkflowValidationException ex) when (ex.Message.Contains("Mẫu + sản phẩm"))
             {
@@ -273,7 +262,6 @@ public static class VideoWorkflowSmokeTests
 
             // 2. ReadyImage thiếu ReadyImageAssetId -> Báo lỗi rõ
             await service.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 WorkflowMode: WorkflowModes.ReadyImage,
                 GoalPrompt: "Test validation",
@@ -289,7 +277,7 @@ public static class VideoWorkflowSmokeTests
             bool failedReady = false;
             try
             {
-                await service.StartWorkflowAsync(new StartProjectWorkflowRequest(wsId, prjId));
+                await service.StartWorkflowAsync(new StartProjectWorkflowRequest(prjId));
             }
             catch (ProjectWorkflowValidationException ex) when (ex.Message.Contains("Ảnh đã sẵn sàng"))
             {
@@ -299,7 +287,6 @@ public static class VideoWorkflowSmokeTests
 
             // 3. ProductOnly thiếu ProductAssetId -> Báo lỗi rõ
             await service.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 WorkflowMode: WorkflowModes.ProductOnly,
                 GoalPrompt: "Test validation",
@@ -315,7 +302,7 @@ public static class VideoWorkflowSmokeTests
             bool failedProduct = false;
             try
             {
-                await service.StartWorkflowAsync(new StartProjectWorkflowRequest(wsId, prjId));
+                await service.StartWorkflowAsync(new StartProjectWorkflowRequest(prjId));
             }
             catch (ProjectWorkflowValidationException ex) when (ex.Message.Contains("Chỉ sản phẩm"))
             {
@@ -334,19 +321,18 @@ public static class VideoWorkflowSmokeTests
     /// </summary>
     private static async Task TestCase2_StartWithoutDurableJob_RejectsRunningStateAndKeepsInputAsync()
     {
-        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        var (dbOptions, tempDir, prjId) = CreateTestEnvironment();
         try
         {
             // Khởi tạo service KHÔNG có enqueuer job (mô phỏng khi scheduler/provider chưa nối)
             var service = new ProjectWorkflowService(dbOptions, durableJobEnqueuer: null);
-            var readyAssetId = SeedAsset(dbOptions, wsId, "Image", "ready/wearing_shirt.jpg");
+            var readyAssetId = SeedAsset(dbOptions, "Image", "ready/wearing_shirt.jpg");
 
             // Người dùng có sẵn 1 cảnh
-            SeedScene(dbOptions, wsId, prjId, "Cảnh mở đầu", 1, readyAssetId, "Cinematic panning shot", targetDurationSeconds: 15);
+            SeedScene(dbOptions, prjId, "Cảnh mở đầu", 1, readyAssetId, "Cinematic panning shot", targetDurationSeconds: 15);
 
             // Người dùng lưu cấu hình đầy đủ
             var savedConfig = await service.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 WorkflowMode: WorkflowModes.ReadyImage,
                 GoalPrompt: "Áo sơ mi lụa dạo phố thanh lịch, góc máy điện ảnh 4K",
@@ -363,7 +349,7 @@ public static class VideoWorkflowSmokeTests
             bool rejectedWithClearReason = false;
             try
             {
-                await service.StartWorkflowAsync(new StartProjectWorkflowRequest(wsId, prjId));
+                await service.StartWorkflowAsync(new StartProjectWorkflowRequest(prjId));
             }
             catch (ProjectWorkflowValidationException ex) when (ex.Message.Contains("tác vụ nền bền vững") || ex.Message.Contains("hàng đợi"))
             {
@@ -372,7 +358,7 @@ public static class VideoWorkflowSmokeTests
             Assert(rejectedWithClearReason, "Gọi startWorkflow khi chưa có job bền vững phải ném ngoại lệ với lý do rõ ràng.");
 
             // Kiểm tra DB: RunState KHÔNG ĐƯỢC CHUYỂN SANG RUNNING!
-            var currentConfig = await service.GetWorkflowConfigAsync(wsId, prjId);
+            var currentConfig = await service.GetWorkflowConfigAsync(prjId);
             Assert(currentConfig.RunState != WorkflowRunState.Running, $"RunState tuyệt đối không được là Running khi không có job, thực tế: '{currentConfig.RunState}'");
             Assert(currentConfig.RunState == WorkflowRunState.Idle, $"RunState phải duy trì là Idle, thực tế: '{currentConfig.RunState}'");
 
@@ -392,16 +378,15 @@ public static class VideoWorkflowSmokeTests
     /// </summary>
     private static async Task TestCase3_NoHardcodedScenesGeneratedAsync()
     {
-        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        var (dbOptions, tempDir, prjId) = CreateTestEnvironment();
         try
         {
             var service = new ProjectWorkflowService(dbOptions);
-            var modelAssetId = SeedAsset(dbOptions, wsId, "Image", "models/model1.jpg");
-            var productAssetId = SeedAsset(dbOptions, wsId, "Image", "products/shirt1.jpg");
+            var modelAssetId = SeedAsset(dbOptions, "Image", "models/model1.jpg");
+            var productAssetId = SeedAsset(dbOptions, "Image", "products/shirt1.jpg");
 
             // Lưu cấu hình
             await service.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 WorkflowMode: WorkflowModes.ModelAndProduct,
                 GoalPrompt: "BST thu đông thanh lịch",
@@ -418,7 +403,7 @@ public static class VideoWorkflowSmokeTests
             bool rejectedNoScenes = false;
             try
             {
-                await service.StartWorkflowAsync(new StartProjectWorkflowRequest(wsId, prjId));
+                await service.StartWorkflowAsync(new StartProjectWorkflowRequest(prjId));
             }
             catch (ProjectWorkflowValidationException ex) when (ex.Message.Contains("chưa có cảnh nào") || ex.Message.Contains("từ chối sinh cảnh mẫu cố định"))
             {
@@ -444,19 +429,18 @@ public static class VideoWorkflowSmokeTests
     /// </summary>
     private static async Task TestCase4_ExistingUserDataPreservedAsync()
     {
-        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        var (dbOptions, tempDir, prjId) = CreateTestEnvironment();
         try
         {
             var service = new ProjectWorkflowService(dbOptions);
-            var readyAssetId = SeedAsset(dbOptions, wsId, "Image", "ready/wearing_shirt.jpg");
+            var readyAssetId = SeedAsset(dbOptions, "Image", "ready/wearing_shirt.jpg");
 
             // Người dùng tự tạo 2 cảnh với thông tin riêng biệt
-            var s1Id = SeedScene(dbOptions, wsId, prjId, "Cảnh Người Dùng 1: Tự tạo", 1, readyAssetId, "Prompt do người dùng tự viết A");
-            var s2Id = SeedScene(dbOptions, wsId, prjId, "Cảnh Người Dùng 2: Tự tạo", 2, readyAssetId, "Prompt do người dùng tự viết B");
+            var s1Id = SeedScene(dbOptions, prjId, "Cảnh Người Dùng 1: Tự tạo", 1, readyAssetId, "Prompt do người dùng tự viết A");
+            var s2Id = SeedScene(dbOptions, prjId, "Cảnh Người Dùng 2: Tự tạo", 2, readyAssetId, "Prompt do người dùng tự viết B");
 
             // Lưu cấu hình workflow
             await service.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 WorkflowMode: WorkflowModes.ReadyImage,
                 GoalPrompt: "Goal prompt người dùng",
@@ -470,7 +454,7 @@ public static class VideoWorkflowSmokeTests
             ));
 
             // Nạp danh sách cảnh chi tiết qua service
-            var scenes = await service.ListSceneWorkflowDetailsAsync(wsId, prjId);
+            var scenes = await service.ListSceneWorkflowDetailsAsync(prjId);
             Assert(scenes.Count == 2, $"Phải nạp đúng 2 cảnh người dùng đã tạo, thực tế: {scenes.Count}");
 
             var sc1 = scenes.First(s => s.SceneId == s1Id);
@@ -492,18 +476,17 @@ public static class VideoWorkflowSmokeTests
     /// </summary>
     private static async Task TestCase5_StartWithDurableJobEnqueuer_TransitionsToRunningAsync()
     {
-        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        var (dbOptions, tempDir, prjId) = CreateTestEnvironment();
         try
         {
             // Mô phỏng Scheduler/JobQueue enqueue bền vững cho đúng một video
             int mockEnqueuedCount = 1;
             var service = new ProjectWorkflowService(dbOptions, durableJobEnqueuer: (req, ct) => Task.FromResult(mockEnqueuedCount));
 
-            var readyAssetId = SeedAsset(dbOptions, wsId, "Image", "ready/item.jpg");
-            SeedScene(dbOptions, wsId, prjId, "Cảnh A", 1, readyAssetId, "Prompt A");
+            var readyAssetId = SeedAsset(dbOptions, "Image", "ready/item.jpg");
+            SeedScene(dbOptions, prjId, "Cảnh A", 1, readyAssetId, "Prompt A");
 
             await service.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 WorkflowMode: WorkflowModes.ReadyImage,
                 GoalPrompt: "Test enqueue bền vững",
@@ -517,13 +500,13 @@ public static class VideoWorkflowSmokeTests
             ));
 
             // Gọi StartWorkflowAsync khi có job bền vững được enqueue
-            var startRes = await service.StartWorkflowAsync(new StartProjectWorkflowRequest(wsId, prjId));
+            var startRes = await service.StartWorkflowAsync(new StartProjectWorkflowRequest(prjId));
             Assert(startRes.RunState == WorkflowRunState.Running, "RunState phải là Running khi có job bền vững được tạo.");
             Assert(startRes.CreatedSceneCount == 1, "Project phải giữ đúng một output scene cho video duy nhất.");
             Assert(startRes.Message.Contains("1 tác vụ bền vững đã được đưa vào hàng đợi"), "Message thông báo rõ số tác vụ bền vững được enqueue.");
 
             // Kiểm tra DB
-            var config = await service.GetWorkflowConfigAsync(wsId, prjId);
+            var config = await service.GetWorkflowConfigAsync(prjId);
             Assert(config.RunState == WorkflowRunState.Running, "RunState trong DB phải được cập nhật sang Running.");
 
             using (var db = new TiToAIDbContext(dbOptions))
@@ -539,32 +522,31 @@ public static class VideoWorkflowSmokeTests
     }
 
     /// <summary>
-    /// Kịch bản 6: Quyết định Audio không bắt buộc & Cách ly Workspace
+    /// Kịch bản 6: Audio không bắt buộc và asset được cách ly theo Project.
     /// </summary>
-    private static async Task TestCase6_AudioOptionalAndWorkspaceIsolationAsync()
+    private static async Task TestCase6_AudioOptionalAndProjectIsolationAsync()
     {
-        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        var (dbOptions, tempDir, prjId) = CreateTestEnvironment();
         try
         {
             var service = new ProjectWorkflowService(dbOptions);
-            var productAssetId = SeedAsset(dbOptions, wsId, "Image", "products/dress.jpg");
+            var productAssetId = SeedAsset(dbOptions, "Image", "products/dress.jpg", prjId);
 
-            // Tạo một asset audio ở Workspace KHÁC để thử hack cross-workspace
-            var otherWsId = Guid.NewGuid().ToString("D").ToLowerInvariant();
+            // Gắn asset audio với Project khác để thẩm định Project ownership.
+            var otherProjectId = Guid.NewGuid().ToString("D").ToLowerInvariant();
             using (var db = new TiToAIDbContext(dbOptions))
             {
                 var now = DateTimeOffset.UtcNow.ToString("o");
-                db.Workspaces.Add(new Workspace { Id = otherWsId, Name = "Kênh Khác", Status = "Active", CreatedAtUtc = now, UpdatedAtUtc = now });
+                db.Projects.Add(new Project { Id = otherProjectId, Name = "Project khác", CreatedAtUtc = now, UpdatedAtUtc = now });
                 db.SaveChanges();
             }
-            var crossWsAudioId = SeedAsset(dbOptions, otherWsId, "Audio", "audio/stolen.mp3");
+            var crossProjectAudioId = SeedAsset(dbOptions, "Audio", "audio/stolen.mp3", otherProjectId);
 
-            // 1. Thử gán audio thuộc Workspace khác -> Bị chặn ngay lập tức
-            bool blockedCrossWs = false;
+            // 1. Thử gán audio thuộc Project khác -> Bị chặn ngay lập tức
+            bool blockedCrossProject = false;
             try
             {
                 await service.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
-                    WorkspaceId: wsId,
                     ProjectId: prjId,
                     WorkflowMode: WorkflowModes.ProductOnly,
                     GoalPrompt: "Test audio",
@@ -572,20 +554,19 @@ public static class VideoWorkflowSmokeTests
                     ProductAssetId: productAssetId,
                     ReadyImageAssetId: null,
                     AudioOption: AudioOptions.CustomAudio,
-                    AudioAssetId: crossWsAudioId,
+                    AudioAssetId: crossProjectAudioId,
                     TargetSceneCount: 1,
                     TargetDurationPerSceneSeconds: 5
                 ));
             }
             catch (UnauthorizedAccessException)
             {
-                blockedCrossWs = true;
+                blockedCrossProject = true;
             }
-            Assert(blockedCrossWs, "Asset audio thuộc Workspace khác phải bị chặn bởi UnauthorizedAccessException.");
+            Assert(blockedCrossProject, "Asset audio thuộc Project khác phải bị chặn bởi UnauthorizedAccessException.");
 
             // 2. Không gửi audio (AudioOption = None): Hợp lệ 100%
             var validConfig = await service.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 WorkflowMode: WorkflowModes.ProductOnly,
                 GoalPrompt: "Test không gửi audio",
@@ -611,19 +592,18 @@ public static class VideoWorkflowSmokeTests
     /// </summary>
     private static async Task TestCase7_DependencyReRunMatrixAsync()
     {
-        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        var (dbOptions, tempDir, prjId) = CreateTestEnvironment();
         try
         {
             var service = new ProjectWorkflowService(dbOptions);
-            var readyAssetId = SeedAsset(dbOptions, wsId, "Image", "ready/outfit.jpg");
-            var newVariantAssetId = SeedAsset(dbOptions, wsId, "Image", "variants/outfit_side.jpg");
+            var readyAssetId = SeedAsset(dbOptions, "Image", "ready/outfit.jpg");
+            var newVariantAssetId = SeedAsset(dbOptions, "Image", "variants/outfit_side.jpg");
 
             // Tạo 2 cảnh
-            var s1Id = SeedScene(dbOptions, wsId, prjId, "Cảnh 1", 1, readyAssetId, "Prompt 1");
-            var s2Id = SeedScene(dbOptions, wsId, prjId, "Cảnh 2", 2, readyAssetId, "Prompt 2");
+            var s1Id = SeedScene(dbOptions, prjId, "Cảnh 1", 1, readyAssetId, "Prompt 1");
+            var s2Id = SeedScene(dbOptions, prjId, "Cảnh 2", 2, readyAssetId, "Prompt 2");
 
             await service.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 WorkflowMode: WorkflowModes.ReadyImage,
                 GoalPrompt: "Mô tả chung",
@@ -636,12 +616,12 @@ public static class VideoWorkflowSmokeTests
                 TargetDurationPerSceneSeconds: 15
             ));
 
-            var scenes = await service.ListSceneWorkflowDetailsAsync(wsId, prjId);
+            var scenes = await service.ListSceneWorkflowDetailsAsync(prjId);
             var scene1 = scenes.First(s => s.SceneId == s1Id);
             var scene2 = scenes.First(s => s.SceneId == s2Id);
 
             // Giả lập Scene 1 đã hoàn tất tạo video
-            var videoAssetId = SeedAsset(dbOptions, wsId, "Video", "videos/scene1_clip.mp4");
+            var videoAssetId = SeedAsset(dbOptions, "Video", "videos/scene1_clip.mp4");
             using (var db = new TiToAIDbContext(dbOptions))
             {
                 var s1 = db.Scenes.First(s => s.Id == scene1.SceneId);
@@ -653,7 +633,6 @@ public static class VideoWorkflowSmokeTests
             // Test 7.1: Sửa prompt chuyển động của Scene 1
             // Theo §3.4: Chỉ làm lại video cảnh đó, giữ ảnh, đánh dấu Cần xem lại (isStale = true)
             var updatedPrompt = await service.UpdateSceneWorkflowInputAsync(new UpdateSceneWorkflowInputRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 SceneId: scene1.SceneId,
                 MotionPromptText: "Góc máy quay chậm từ dưới lên thể hiện sự tự tin",
@@ -665,14 +644,13 @@ public static class VideoWorkflowSmokeTests
             Assert(updatedPrompt.SelectedImageAssetId == readyAssetId, "Ảnh của cảnh 1 phải được giữ nguyên 100%.");
 
             // Kiểm tra Scene 2 không bị ảnh hưởng
-            var reloadedScenes = await service.ListSceneWorkflowDetailsAsync(wsId, prjId);
+            var reloadedScenes = await service.ListSceneWorkflowDetailsAsync(prjId);
             var reloadedScene2 = reloadedScenes.First(s => s.SceneId == scene2.SceneId);
             Assert(!reloadedScene2.IsStale, "Sửa cảnh 1 không được làm stale cảnh 2.");
 
             // Test 7.2: Thay ảnh của Scene 1 sang ảnh biến thể mới
             // Theo §3.4: Làm lại video và prompt cảnh đó; không sinh lại ảnh vừa chọn
             var updatedImage = await service.UpdateSceneWorkflowInputAsync(new UpdateSceneWorkflowInputRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 SceneId: scene1.SceneId,
                 SelectedImageAssetId: newVariantAssetId,
@@ -693,15 +671,14 @@ public static class VideoWorkflowSmokeTests
     /// </summary>
     private static async Task TestCase8_PauseAndResumeWorkflowAsync()
     {
-        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        var (dbOptions, tempDir, prjId) = CreateTestEnvironment();
         try
         {
             var service = new ProjectWorkflowService(dbOptions);
-            var readyAssetId = SeedAsset(dbOptions, wsId, "Image", "ready/item.jpg");
-            SeedScene(dbOptions, wsId, prjId, "Cảnh 1", 1, readyAssetId, "Prompt 1");
+            var readyAssetId = SeedAsset(dbOptions, "Image", "ready/item.jpg");
+            SeedScene(dbOptions, prjId, "Cảnh 1", 1, readyAssetId, "Prompt 1");
 
             await service.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 WorkflowMode: WorkflowModes.ReadyImage,
                 GoalPrompt: "Test pause",
@@ -715,11 +692,11 @@ public static class VideoWorkflowSmokeTests
             ));
 
             // Tạm dừng
-            var paused = await service.PauseWorkflowAsync(wsId, prjId);
+            var paused = await service.PauseWorkflowAsync(prjId);
             Assert(paused.RunState == WorkflowRunState.Paused, "PauseWorkflowAsync phải đổi RunState sang Paused.");
 
             // Tiếp tục
-            var resumed = await service.ResumeWorkflowAsync(wsId, prjId);
+            var resumed = await service.ResumeWorkflowAsync(prjId);
             Assert(resumed.RunState == WorkflowRunState.Running, "ResumeWorkflowAsync phải đổi RunState sang Running.");
         }
         finally
@@ -733,11 +710,11 @@ public static class VideoWorkflowSmokeTests
     /// </summary>
     private static async Task TestCase9_BridgeHandlersRpcIntegrationAsync()
     {
-        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        var (dbOptions, tempDir, prjId) = CreateTestEnvironment();
         try
         {
-            var readyAssetId = SeedAsset(dbOptions, wsId, "Image", "ready/rpc_test.jpg");
-            SeedScene(dbOptions, wsId, prjId, "Cảnh RPC", 1, readyAssetId, "Prompt RPC");
+            var readyAssetId = SeedAsset(dbOptions, "Image", "ready/rpc_test.jpg");
+            SeedScene(dbOptions, prjId, "Cảnh RPC", 1, readyAssetId, "Prompt RPC");
 
             // Service có mock durable enqueuer để test lệnh start qua RPC
             var service = new ProjectWorkflowService(dbOptions, (req, ct) => Task.FromResult(1));
@@ -769,7 +746,7 @@ public static class VideoWorkflowSmokeTests
                 Id: Guid.NewGuid(),
                 Type: "request",
                 Command: "workflow.get_config",
-                Payload: JsonDocument.Parse(JsonSerializer.Serialize(new { workspaceId = wsId, projectId = prjId })).RootElement,
+                Payload: JsonSerializer.SerializeToElement(new { projectId = prjId }),
                 ClientTimestampUtc: DateTimeOffset.UtcNow,
                 ContractVersion: "1.0.4"
             );
@@ -784,7 +761,6 @@ public static class VideoWorkflowSmokeTests
                 Command: "workflow.save_config",
                 Payload: JsonDocument.Parse(JsonSerializer.Serialize(new
                 {
-                    workspaceId = wsId,
                     projectId = prjId,
                     workflowMode = WorkflowModes.ReadyImage,
                     goalPrompt = "RPC test prompt",
@@ -805,7 +781,7 @@ public static class VideoWorkflowSmokeTests
                 Id: Guid.NewGuid(),
                 Type: "request",
                 Command: "workflow.preview_ai_prompt",
-                Payload: JsonDocument.Parse(JsonSerializer.Serialize(new { workspaceId = wsId, projectId = prjId })).RootElement,
+                Payload: JsonSerializer.SerializeToElement(new { projectId = prjId }),
                 ClientTimestampUtc: DateTimeOffset.UtcNow,
                 ContractVersion: "1.0.4"
             );
@@ -817,7 +793,7 @@ public static class VideoWorkflowSmokeTests
                 Id: Guid.NewGuid(),
                 Type: "request",
                 Command: "workflow.start",
-                Payload: JsonDocument.Parse(JsonSerializer.Serialize(new { workspaceId = wsId, projectId = prjId })).RootElement,
+                Payload: JsonSerializer.SerializeToElement(new { projectId = prjId }),
                 ClientTimestampUtc: DateTimeOffset.UtcNow,
                 ContractVersion: "1.0.4"
             );
@@ -830,7 +806,7 @@ public static class VideoWorkflowSmokeTests
                 Id: Guid.NewGuid(),
                 Type: "request",
                 Command: "workflow.list_scenes",
-                Payload: JsonDocument.Parse(JsonSerializer.Serialize(new { workspaceId = wsId, projectId = prjId })).RootElement,
+                Payload: JsonSerializer.SerializeToElement(new { projectId = prjId }),
                 ClientTimestampUtc: DateTimeOffset.UtcNow,
                 ContractVersion: "1.0.4"
             );
@@ -849,7 +825,7 @@ public static class VideoWorkflowSmokeTests
     /// </summary>
     private static async Task TestCase10_EndToEndSingleVideoAsync()
     {
-        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        var (dbOptions, tempDir, prjId) = CreateTestEnvironment();
         try
         {
             var registry = new StorageRootRegistry(dbOptions, tempDir);
@@ -886,15 +862,14 @@ public static class VideoWorkflowSmokeTests
                 }
             };
 
-            var modelAssetId = SeedAsset(dbOptions, wsId, "Image", "models/m1.jpg");
-            var productAssetId = SeedAsset(dbOptions, wsId, "Image", "products/p1.jpg");
-            var readyAssetId = SeedAsset(dbOptions, wsId, "Image", "ready/r1.jpg");
+            var modelAssetId = SeedAsset(dbOptions, "Image", "models/m1.jpg");
+            var productAssetId = SeedAsset(dbOptions, "Image", "products/p1.jpg");
+            var readyAssetId = SeedAsset(dbOptions, "Image", "ready/r1.jpg");
 
             // Cảnh 1: Đã có sẵn ảnh và prompt chuyển động -> đủ điều kiện render video ngay
-            var scene1Id = SeedScene(dbOptions, wsId, prjId, "Cảnh 1 - Sẵn sàng", 1, readyAssetId, "Camera panning 4K");
+            var scene1Id = SeedScene(dbOptions, prjId, "Cảnh 1 - Sẵn sàng", 1, readyAssetId, null);
 
             await workflowService.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 WorkflowMode: WorkflowModes.ModelAndProduct,
                 GoalPrompt: "Quảng cáo áo khoác dạ mùa đông",
@@ -908,7 +883,7 @@ public static class VideoWorkflowSmokeTests
             ));
 
             // Bấm Bắt đầu tạo video
-            var startRes = await workflowService.StartWorkflowAsync(new StartProjectWorkflowRequest(wsId, prjId));
+            var startRes = await workflowService.StartWorkflowAsync(new StartProjectWorkflowRequest(prjId));
             Assert(startRes.RunState == WorkflowRunState.Running, "Bắt đầu phải chuyển sang Running.");
 
             // Một Project chỉ fan-out tới đúng một video output.
@@ -919,7 +894,7 @@ public static class VideoWorkflowSmokeTests
 
                 var jobScene1 = jobs.FirstOrDefault(j => j.SceneId == scene1Id);
                 Assert(jobScene1 != null, "Phải có job cho Cảnh 1.");
-                Assert(jobScene1!.TaskType == JobTaskType.VideoRender, "Ảnh và prompt sẵn sàng -> enqueue VideoRender cho video duy nhất.");
+                Assert(jobScene1!.TaskType == JobTaskType.VideoPrompt, "Ảnh sẵn sàng phải tạo prompt trước.");
             }
 
             // Xử lý job video duy nhất.
@@ -930,12 +905,13 @@ public static class VideoWorkflowSmokeTests
             }
 
             // Tạo Asset thật trong DB để thỏa mãn ràng buộc khóa ngoại (Foreign Key)
-            var videoClipAssetId = SeedAsset(dbOptions, wsId, "Video", "videos/clip_scene1.mp4");
+            var videoClipAssetId = SeedAsset(dbOptions, "Video", "videos/clip_scene1.mp4");
 
             // Đặt job sang Succeeded và gọi ApplyJobOutputAsync
             using (var db = new TiToAIDbContext(dbOptions))
             {
                 var j1 = await db.Jobs.FirstAsync(j => j.Id == job1Id);
+                j1.TaskType = JobTaskType.VideoRender;
                 j1.State = JobState.Succeeded;
                 j1.ResultReference = videoClipAssetId;
                 await db.SaveChangesAsync();
@@ -950,6 +926,8 @@ public static class VideoWorkflowSmokeTests
                 var s1 = await db.Scenes.FirstAsync(s => s.Id == scene1Id);
                 Assert(s1.VideoAssetId == videoClipAssetId, "Cảnh 1 phải nhận được video clip.");
                 Assert(s1.Status == "Completed", "Cảnh 1 phải ở trạng thái Completed.");
+                var config = await workflowService.GetWorkflowConfigAsync(prjId);
+                Assert(config.RunState == WorkflowRunState.Completed, "Video cuối phải hoàn tất run.");
 
             }
         }
@@ -964,7 +942,7 @@ public static class VideoWorkflowSmokeTests
     /// </summary>
     private static async Task TestCase11_AiScenePlanningFromBrief_ZeroScenesAsync()
     {
-        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        var (dbOptions, tempDir, prjId) = CreateTestEnvironment();
         try
         {
             var registry = new StorageRootRegistry(dbOptions, tempDir);
@@ -987,18 +965,24 @@ public static class VideoWorkflowSmokeTests
             var jobService = new JobService(dbOptions, snapshotFactory, scheduler);
             var workflowService = new ProjectWorkflowService(dbOptions, jobService);
 
-            var modelAssetId = SeedAsset(dbOptions, wsId, "Image", "models/model_brief.jpg");
-            var productAssetId = SeedAsset(dbOptions, wsId, "Image", "products/dress.jpg");
+            var modelAssetId = SeedAsset(dbOptions, "Image", "models/model_brief.jpg");
+            var productAssetId = SeedAsset(dbOptions, "Image", "products/dress.jpg");
 
             // Dự án ban đầu có 0 cảnh
             using (var db = new TiToAIDbContext(dbOptions))
             {
                 var count = await db.Scenes.CountAsync(s => s.ProjectId == prjId);
                 Assert(count == 0, "Dự án ban đầu phải có đúng 0 cảnh.");
+                var now = DateTimeOffset.UtcNow.ToString("o");
+                db.PromptTemplates.AddRange(
+                    new PromptTemplate { Id = "script-active", Purpose = "Script", Name = "Script", IsActive = true, TemplateText = "SCRIPT_DANG_DUNG", CreatedAtUtc = now, UpdatedAtUtc = now },
+                    new PromptTemplate { Id = "script-inactive", Purpose = "Script", Name = "Cũ", IsActive = false, TemplateText = "SCRIPT_KHONG_DUNG", CreatedAtUtc = now, UpdatedAtUtc = now },
+                    new PromptTemplate { Id = "image-active", Purpose = "Image", Name = "Image", IsActive = true, TemplateText = "IMAGE_DANG_DUNG", CreatedAtUtc = now, UpdatedAtUtc = now },
+                    new PromptTemplate { Id = "video-active", Purpose = "VideoPrompt", Name = "Video", IsActive = true, TemplateText = "VIDEO_DANG_DUNG", CreatedAtUtc = now, UpdatedAtUtc = now });
+                await db.SaveChangesAsync();
             }
 
             await workflowService.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 WorkflowMode: WorkflowModes.ModelAndProduct,
                 GoalPrompt: "BST Váy dạ hội thanh lịch sang trọng",
@@ -1012,7 +996,7 @@ public static class VideoWorkflowSmokeTests
             ));
 
             // Bấm Bắt đầu tạo video với service có kết nối JobService
-            var startRes = await workflowService.StartWorkflowAsync(new StartProjectWorkflowRequest(wsId, prjId));
+            var startRes = await workflowService.StartWorkflowAsync(new StartProjectWorkflowRequest(prjId));
             Assert(startRes.RunState == WorkflowRunState.Running, "RunState phải chuyển sang Running.");
 
             // Kiểm tra DB: Phải có 1 Job Script với SceneId = null theo DB constraint
@@ -1023,13 +1007,13 @@ public static class VideoWorkflowSmokeTests
                 Assert(scriptJob != null, "Phải có Job Script lập cảnh được đưa vào hàng đợi.");
                 Assert(scriptJob!.SceneId == null, "Job Script SceneId bắt buộc phải là null theo DB constraint.");
                 Assert(scriptJob.State == JobState.Queued, "Job Script phải ở trạng thái Queued.");
+                Assert(scriptJob.PromptSnapshotText!.Contains("SCRIPT_DANG_DUNG") && !scriptJob.PromptSnapshotText.Contains("SCRIPT_KHONG_DUNG"), "Job Script phải dùng mẫu đang chọn.");
                 scriptJobId = scriptJob.Id;
             }
 
-            // Giả lập AI trả về kịch bản 2 cảnh dưới dạng JSON
+            // Giả lập AI trả về kịch bản một video dưới dạng JSON
             string fakeAiScriptJson = "{\"scenes\": [" +
-                "{\"purpose\": \"Toàn cảnh váy dạ hội\", \"name\": \"Cảnh 1: Giới thiệu váy dạ hội\", \"motionPrompt\": \"Camera tracking từ xa lại gần\", \"targetDurationSeconds\": 15}," +
-                "{\"purpose\": \"Cận cảnh chất liệu ren\", \"name\": \"Cảnh 2: Chi tiết ren cao cấp\", \"motionPrompt\": \"Macro lens lấy nét vào đường may hoa sen\", \"targetDurationSeconds\": 15}" +
+                "{\"purpose\": \"Toàn cảnh váy dạ hội\", \"name\": \"Cảnh 1: Giới thiệu váy dạ hội\", \"motionPrompt\": \"Camera tracking từ xa lại gần\", \"targetDurationSeconds\": 15}" +
                 "]}";
 
             using (var db = new TiToAIDbContext(dbOptions))
@@ -1056,6 +1040,12 @@ public static class VideoWorkflowSmokeTests
                 // Chỉ có một output video nên chỉ một nhánh ảnh được xếp hàng.
                 var imageJobs = await db.Jobs.Where(j => j.ProjectId == prjId && j.TaskType == JobTaskType.Image).ToListAsync();
                 Assert(imageJobs.Count == 1, "Chỉ enqueue Job Image cho video duy nhất của Project.");
+                using var imageSnapshot = JsonDocument.Parse(imageJobs[0].PromptSnapshotText!);
+                Assert(imageSnapshot.RootElement.GetProperty("renderedText").GetString()!.Contains("Toàn cảnh váy dạ hội"), "Prompt ảnh phải giữ mô tả cảnh do AI tạo.");
+                Assert(imageSnapshot.RootElement.GetProperty("renderedText").GetString()!.Contains("IMAGE_DANG_DUNG"), "Job Image phải dùng mẫu đang chọn.");
+                var preview = await workflowService.PreviewAiPromptAsync(new PreviewAiPromptRequest(prjId, scenes[0].Id));
+                Assert(preview.ComposedPrompt.Contains("Toàn cảnh váy dạ hội"), "Prompt chuyển động phải giữ mô tả cảnh do AI tạo.");
+                Assert(preview.ComposedPrompt.Contains("VIDEO_DANG_DUNG"), "Prompt video phải dùng mẫu đang chọn.");
             }
         }
         finally
@@ -1069,7 +1059,7 @@ public static class VideoWorkflowSmokeTests
     /// </summary>
     private static async Task TestCase12_CancelWorkflow_CancelsActiveJobsAndResetsStateAsync()
     {
-        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        var (dbOptions, tempDir, prjId) = CreateTestEnvironment();
         try
         {
             var registry = new StorageRootRegistry(dbOptions, tempDir);
@@ -1092,11 +1082,10 @@ public static class VideoWorkflowSmokeTests
             var jobService = new JobService(dbOptions, snapshotFactory, scheduler);
             var workflowService = new ProjectWorkflowService(dbOptions, jobService);
 
-            var readyAssetId = SeedAsset(dbOptions, wsId, "Image", "ready/r_cancel.jpg");
-            SeedScene(dbOptions, wsId, prjId, "Cảnh test cancel", 1, readyAssetId, "Prompt test");
+            var readyAssetId = SeedAsset(dbOptions, "Image", "ready/r_cancel.jpg");
+            SeedScene(dbOptions, prjId, "Cảnh test cancel", 1, readyAssetId, null);
 
             await workflowService.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 WorkflowMode: WorkflowModes.ReadyImage,
                 GoalPrompt: "Test cancel workflow",
@@ -1110,13 +1099,13 @@ public static class VideoWorkflowSmokeTests
             ));
 
             // Bắt đầu quy trình -> Tạo job và chuyển sang Running
-            await workflowService.StartWorkflowAsync(new StartProjectWorkflowRequest(wsId, prjId));
+            await workflowService.StartWorkflowAsync(new StartProjectWorkflowRequest(prjId));
 
-            var runningConfig = await workflowService.GetWorkflowConfigAsync(wsId, prjId);
+            var runningConfig = await workflowService.GetWorkflowConfigAsync(prjId);
             Assert(runningConfig.RunState == WorkflowRunState.Running, "RunState phải là Running.");
 
             // Gọi Hủy bỏ quy trình (CancelWorkflowAsync)
-            var cancelConfig = await workflowService.CancelWorkflowAsync(wsId, prjId);
+            var cancelConfig = await workflowService.CancelWorkflowAsync(prjId);
             Assert(cancelConfig.RunState == WorkflowRunState.Idle, "RunState sau khi Cancel phải chuyển về Idle.");
 
             // Kiểm tra DB: Các job đang chờ phải được chuyển sang Canceled
@@ -1141,17 +1130,16 @@ public static class VideoWorkflowSmokeTests
     /// </summary>
     private static async Task TestCase13_ClipDurationValidationAndLegacyDataSupportAsync()
     {
-        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        var (dbOptions, tempDir, prjId) = CreateTestEnvironment();
         try
         {
             var service = new ProjectWorkflowService(dbOptions, durableJobEnqueuer: (req, ct) => Task.FromResult(1));
-            var readyAssetId = SeedAsset(dbOptions, wsId, "Image", "ready/legacy.jpg");
+            var readyAssetId = SeedAsset(dbOptions, "Image", "ready/legacy.jpg");
 
             // 1. Giả lập dữ liệu cũ 3 clip x 5s đã lưu trong hệ thống trước đây
-            var oldSceneId = SeedScene(dbOptions, wsId, prjId, "Cảnh cũ 5s", 1, readyAssetId, "Prompt cảnh cũ", targetDurationSeconds: 5);
+            var oldSceneId = SeedScene(dbOptions, prjId, "Cảnh cũ 5s", 1, readyAssetId, "Prompt cảnh cũ", targetDurationSeconds: 5);
 
             await service.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 WorkflowMode: WorkflowModes.ReadyImage,
                 GoalPrompt: "Dự án cũ 5 giây",
@@ -1165,16 +1153,16 @@ public static class VideoWorkflowSmokeTests
             ));
 
             // CD07, CD08: Mở lại dữ liệu cũ: Cấu hình và cảnh vẫn nạp được nguyên vẹn 5s, không bị xóa/đổi ngầm!
-            var loadedConfig = await service.GetWorkflowConfigAsync(wsId, prjId);
+            var loadedConfig = await service.GetWorkflowConfigAsync(prjId);
             Assert(loadedConfig.TargetDurationPerSceneSeconds == 5, "Cấu hình cũ 5s phải nạp được nguyên vẹn, không đổi ngầm.");
-            var loadedScenes = await service.ListSceneWorkflowDetailsAsync(wsId, prjId);
+            var loadedScenes = await service.ListSceneWorkflowDetailsAsync(prjId);
             Assert(loadedScenes.Count == 1 && loadedScenes[0].TargetDurationSeconds == 5, "Cảnh cũ 5s phải giữ nguyên thời lượng 5s khi đọc.");
 
             // CD08: Nhưng khi gọi StartWorkflowAsync: Bị chặn với thông báo yêu cầu chọn lại thời lượng hợp lệ
             bool blockedLegacy5s = false;
             try
             {
-                await service.StartWorkflowAsync(new StartProjectWorkflowRequest(wsId, prjId));
+                await service.StartWorkflowAsync(new StartProjectWorkflowRequest(prjId));
             }
             catch (ProjectWorkflowValidationException ex) when (ex.Message.Contains("không được nhà cung cấp video hỗ trợ") || ex.Message.Contains("Vui lòng chọn lại thời lượng"))
             {
@@ -1187,7 +1175,6 @@ public static class VideoWorkflowSmokeTests
             try
             {
                 await service.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
-                    WorkspaceId: wsId,
                     ProjectId: prjId,
                     WorkflowMode: loadedConfig.WorkflowMode,
                     GoalPrompt: loadedConfig.GoalPrompt,
@@ -1199,7 +1186,7 @@ public static class VideoWorkflowSmokeTests
                     TargetSceneCount: loadedConfig.TargetSceneCount,
                     TargetDurationPerSceneSeconds: 30
                 ));
-                await service.StartWorkflowAsync(new StartProjectWorkflowRequest(wsId, prjId));
+                await service.StartWorkflowAsync(new StartProjectWorkflowRequest(prjId));
             }
             catch (ProjectWorkflowValidationException ex) when (ex.Message.Contains("30 giây không được nhà cung cấp video hỗ trợ"))
             {
@@ -1209,7 +1196,6 @@ public static class VideoWorkflowSmokeTests
 
             // Cập nhật cảnh cũ và cấu hình sang 15s (hoặc 10s) theo capability MuseAI
             await service.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 WorkflowMode: loadedConfig.WorkflowMode,
                 GoalPrompt: loadedConfig.GoalPrompt,
@@ -1222,14 +1208,13 @@ public static class VideoWorkflowSmokeTests
                 TargetDurationPerSceneSeconds: 15
             ));
             await service.UpdateSceneWorkflowInputAsync(new UpdateSceneWorkflowInputRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 SceneId: oldSceneId,
                 TargetDurationSeconds: 15
             ));
 
             // CD03, CD05: Bắt đầu thành công với 15s!
-            var started = await service.StartWorkflowAsync(new StartProjectWorkflowRequest(wsId, prjId));
+            var started = await service.StartWorkflowAsync(new StartProjectWorkflowRequest(prjId));
             Assert(started.RunState == WorkflowRunState.Running, "Bắt đầu với 15s phải thành công và chuyển sang Running.");
         }
         finally
@@ -1247,7 +1232,7 @@ public static class VideoWorkflowSmokeTests
     /// </summary>
     private static async Task TestCase14_GoalPromptBriefAndTemplateCompositionAsync()
     {
-        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        var (dbOptions, tempDir, prjId) = CreateTestEnvironment();
         try
         {
             var registry = new StorageRootRegistry(dbOptions, tempDir);
@@ -1271,12 +1256,11 @@ public static class VideoWorkflowSmokeTests
             var jobService = new JobService(dbOptions, snapshotFactory, scheduler);
             var workflowService = new ProjectWorkflowService(dbOptions, jobService);
 
-            var readyAssetId = SeedAsset(dbOptions, wsId, "Image", "ready/brief_test.jpg");
-            var sceneId = SeedScene(dbOptions, wsId, prjId, "Clip 1", 1, readyAssetId, prompt: null, targetDurationSeconds: 15);
+            var readyAssetId = SeedAsset(dbOptions, "Image", "ready/brief_test.jpg");
+            var sceneId = SeedScene(dbOptions, prjId, "Clip 1", 1, readyAssetId, prompt: null, targetDurationSeconds: 15);
 
             // 1. Không còn bắt buộc ô brief riêng; preview dùng template khi GoalPrompt trống.
             await workflowService.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 WorkflowMode: WorkflowModes.ReadyImage,
                 GoalPrompt: "   ", // Trống
@@ -1289,17 +1273,16 @@ public static class VideoWorkflowSmokeTests
                 TargetDurationPerSceneSeconds: 15
             ));
 
-            var emptyBriefPreview = await workflowService.PreviewAiPromptAsync(new PreviewAiPromptRequest(wsId, prjId, sceneId));
-            Assert(string.IsNullOrEmpty(emptyBriefPreview.UserBrief), "Brief cũ có thể rỗng khi template/biến đã cung cấp yêu cầu.");
+            var emptyBriefPreview = await workflowService.PreviewAiPromptAsync(new PreviewAiPromptRequest(prjId, sceneId));
             Assert(emptyBriefPreview.ComposedPrompt.Contains("[OUTPUT_CONTRACT]"), "Template vẫn được compose khi GoalPrompt rỗng.");
 
             // 2. CD11, CD14: Đặt brief có chuỗi nhận diện riêng UNIQUE_BRIEF_TOKEN_CD11
             string uniqueToken = "UNIQUE_BRIEF_TOKEN_CD11_ÁO_SƠ_MI_LỤA_XANH";
             await workflowService.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 WorkflowMode: WorkflowModes.ReadyImage,
-                GoalPrompt: uniqueToken,
+                GoalPrompt: "",
+                VideoPromptText: uniqueToken,
                 ModelAssetId: null,
                 ProductAssetId: null,
                 ReadyImageAssetId: readyAssetId,
@@ -1310,8 +1293,7 @@ public static class VideoWorkflowSmokeTests
             ));
 
             // CD14: Kiểm tra Preview AI Prompt
-            var preview = await workflowService.PreviewAiPromptAsync(new PreviewAiPromptRequest(wsId, prjId, sceneId));
-            Assert(preview.UserBrief == uniqueToken, "Preview phải phản ánh đúng UserBrief.");
+            var preview = await workflowService.PreviewAiPromptAsync(new PreviewAiPromptRequest(prjId, sceneId));
             Assert(preview.ComposedPrompt.Contains(uniqueToken), "ComposedPrompt trong Preview phải chứa chuỗi nhận diện độc nhất.");
             Assert(preview.ComposedPrompt.Contains("[HƯỚNG DẪN TỪ TEMPLATE"), "ComposedPrompt phải có block HƯỚNG DẪN.");
             Assert(preview.ComposedPrompt.Contains("[NHIỆM VỤ]"), "ComposedPrompt phải có block NHIỆM VỤ.");
@@ -1319,7 +1301,7 @@ public static class VideoWorkflowSmokeTests
             Assert(preview.ComposedPrompt.Contains("[OUTPUT_CONTRACT]"), "ComposedPrompt phải có block OUTPUT_CONTRACT.");
 
             // CD11, CD12: Khởi chạy workflow -> Kiểm tra Job VideoPrompt được enqueue chứa đúng ComposedPrompt
-            var startRes = await workflowService.StartWorkflowAsync(new StartProjectWorkflowRequest(wsId, prjId));
+            var startRes = await workflowService.StartWorkflowAsync(new StartProjectWorkflowRequest(prjId));
             Assert(startRes.RunState == WorkflowRunState.Running, "StartWorkflowAsync phải chuyển sang Running.");
 
             using (var db = new TiToAIDbContext(dbOptions))
@@ -1347,16 +1329,13 @@ public static class VideoWorkflowSmokeTests
             }
             await workflowService.ApplyJobOutputAsync(promptJobId);
 
-            // Kiểm tra Job VideoRender gửi MuseAI:
-            // Chỉ gửi kết quả prompt chuyển động camera ("Camera slow-motion..."), KHÔNG gửi toàn bộ template AI Writer!
+            // Adapter video chưa được xác minh: giữ prompt, không tự tạo job render.
             using (var db = new TiToAIDbContext(dbOptions))
             {
                 var renderJob = await db.Jobs.FirstOrDefaultAsync(j => j.SceneId == sceneId && j.TaskType == JobTaskType.VideoRender);
-                Assert(renderJob != null, "Phải tự động enqueue Job VideoRender sau khi VideoPrompt hoàn tất.");
-                using var renderDoc = JsonDocument.Parse(renderJob!.PromptSnapshotText!);
-                var renderText = renderDoc.RootElement.GetProperty("renderedText").GetString() ?? string.Empty;
-                Assert(renderText == "Camera slow-motion 60fps trượt nhẹ ngang qua chi tiết cổ áo lụa xanh.",
-                    "Prompt gửi tới MuseAI chỉ là prompt chuyển động camera, không gửi schema/template AI Writer.");
+                Assert(renderJob == null, "Không enqueue render khi adapter video chưa được xác minh.");
+                var scene = await db.Scenes.FirstAsync(s => s.Id == sceneId);
+                Assert(scene.PromptText == "Camera slow-motion 60fps trượt nhẹ ngang qua chi tiết cổ áo lụa xanh.", "Phải lưu prompt đã tạo.");
             }
         }
         finally
@@ -1367,16 +1346,15 @@ public static class VideoWorkflowSmokeTests
 
     private static async Task TestCase15_LegacyMultiSceneProjectIsPreservedAsync()
     {
-        var (dbOptions, tempDir, wsId, prjId) = CreateTestEnvironment();
+        var (dbOptions, tempDir, prjId) = CreateTestEnvironment();
         try
         {
             var service = new ProjectWorkflowService(dbOptions);
-            var readyAssetId = SeedAsset(dbOptions, wsId, "Image", "ready/legacy.jpg");
-            SeedScene(dbOptions, wsId, prjId, "Legacy scene one", 1, readyAssetId, "Pan left");
-            SeedScene(dbOptions, wsId, prjId, "Legacy scene two", 2, readyAssetId, "Pan right");
+            var readyAssetId = SeedAsset(dbOptions, "Image", "ready/legacy.jpg");
+            var sceneId = SeedScene(dbOptions, prjId, "Legacy scene one", 1, readyAssetId, "Pan left");
+            SeedScene(dbOptions, prjId, "Legacy scene two", 2, readyAssetId, "Pan right");
 
             await service.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
-                WorkspaceId: wsId,
                 ProjectId: prjId,
                 WorkflowMode: WorkflowModes.ReadyImage,
                 GoalPrompt: "Preserve old project data",
@@ -1391,7 +1369,7 @@ public static class VideoWorkflowSmokeTests
             var blocked = false;
             try
             {
-                await service.StartWorkflowAsync(new StartProjectWorkflowRequest(wsId, prjId));
+                await service.StartWorkflowAsync(new StartProjectWorkflowRequest(prjId));
             }
             catch (ProjectWorkflowValidationException ex) when (ex.Message.Contains("nhiều cảnh từ workflow cũ"))
             {
@@ -1399,7 +1377,7 @@ public static class VideoWorkflowSmokeTests
             }
 
             Assert(blocked, "Legacy multi-scene project must not produce multiple video outputs under the new model.");
-            Assert((await service.GetWorkflowConfigAsync(wsId, prjId)).RunState == WorkflowRunState.Idle,
+            Assert((await service.GetWorkflowConfigAsync(prjId)).RunState == WorkflowRunState.Idle,
                 "Blocked legacy project must not transition into Running.");
 
             using var db = new TiToAIDbContext(dbOptions);
@@ -1407,11 +1385,62 @@ public static class VideoWorkflowSmokeTests
                 "Both legacy scenes must remain in the database after the new workflow refuses to run.");
             Assert(!await db.Jobs.AnyAsync(j => j.ProjectId == prjId),
                 "A blocked legacy multi-scene project must not enqueue video jobs.");
+
+            var clipId = SeedAsset(dbOptions, "Video", "videos/legacy-clip.mp4");
+            var jobId = Guid.NewGuid().ToString("D");
+            var now = DateTimeOffset.UtcNow.ToString("o");
+            db.Jobs.Add(new Job { Id = jobId, ProjectId = prjId, SceneId = sceneId,
+                TaskType = JobTaskType.VideoRender, State = JobState.Succeeded, ProviderKey = "museai",
+                ResultReference = clipId, CreatedAtUtc = now, UpdatedAtUtc = now });
+            await db.SaveChangesAsync();
+            Assert(await service.ApplyJobOutputAsync(jobId), "Phải giữ được clip của cảnh cũ.");
+            await using var check = new TiToAIDbContext(dbOptions);
+            Assert((await check.Projects.FindAsync(prjId))!.CurrentVideoRevisionId == null,
+                "Clip của một cảnh không được chọn làm video cuối của project nhiều cảnh.");
+            Assert(!await check.VideoRevisions.AnyAsync(v => v.ProjectId == prjId),
+                "Clip trung gian không được tạo revision sẵn sàng đăng.");
         }
         finally
         {
             CleanupTestEnvironment(tempDir);
         }
+    }
+
+    private static async Task TestCase16_StartRunAndJobRollbackTogetherAsync()
+    {
+        var (dbOptions, tempDir, projectId) = CreateTestEnvironment();
+        try
+        {
+            var registry = new StorageRootRegistry(dbOptions, tempDir);
+            await registry.EnsureDefaultRootsAsync();
+            var settings = new SettingsService(dbOptions, registry);
+            var current = await settings.GetSettingsAsync();
+            await settings.SaveSettingsAsync(new SettingsSaveRequest(
+                DocumentsPath: current.DocumentsPath, ImagesPath: current.ImagesPath, VideosPath: current.VideosPath,
+                ImageProvider: ProviderKeys.ChatGPTWeb, ScriptProvider: ProviderKeys.ChatGPTWeb,
+                VideoPromptProvider: ProviderKeys.ChatGPTWeb, ExpectedRevision: current.Revision));
+            var reservation = new JobReservation(dbOptions);
+            await using var scheduler = new JobScheduler(dbOptions, reservation, new DeterministicFakeJobExecutor());
+            var jobs = new JobService(dbOptions, new JobSnapshotFactory(settings, dbOptions: dbOptions), scheduler);
+            var workflow = new ProjectWorkflowService(dbOptions, jobs);
+            var imageId = SeedAsset(dbOptions, "Image", "ready/start.jpg");
+            await workflow.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
+                projectId, WorkflowModes.ReadyImage, "", null, null, imageId,
+                AudioOptions.None, null, 1, 15));
+            await using (var db = new TiToAIDbContext(dbOptions))
+            {
+                await db.Database.ExecuteSqlRawAsync("CREATE TRIGGER fail_run_insert BEFORE INSERT ON AppSettings WHEN NEW.key LIKE 'workflow.active_run.%' BEGIN SELECT RAISE(ABORT, 'injected failure'); END;");
+            }
+            var failed = false;
+            try { await workflow.StartWorkflowAsync(new StartProjectWorkflowRequest(projectId)); }
+            catch (DbUpdateException) { failed = true; }
+            Assert(failed, "Lỗi lưu run phải được báo cho caller.");
+            await using var verify = new TiToAIDbContext(dbOptions);
+            Assert(!await verify.Jobs.AnyAsync(j => j.ProjectId == projectId), "Không được để lại job mồ côi.");
+            Assert((await workflow.GetWorkflowConfigAsync(projectId)).RunState == WorkflowRunState.Idle,
+                "Run không được chuyển sang Running khi transaction thất bại.");
+        }
+        finally { CleanupTestEnvironment(tempDir); }
     }
 
     /// <summary>

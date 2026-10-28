@@ -1,6 +1,5 @@
 /**
- * TiToAI — Prompt Engine API Adapter & Types (Gate G2 / T10)
- * Tuân thủ contracts.md v1.0.4, PromptDtos.cs và PromptHandlers.cs
+ * TiToAI — API adapter cho prompt template toàn ứng dụng.
  */
 
 import { bridgeClient } from "../../services/bridgeClient.ts";
@@ -28,26 +27,17 @@ export interface PromptVariableDefinition {
 export interface PromptTemplateDto {
   templateId: string;
   purpose: PromptPurpose | string;
-  workspaceId: string | null;
-  isOverride: boolean;
-  currentVersionId: string | null;
-  currentVersionNumber: number | null;
+  name: string;
+  isActive: boolean;
   createdAtUtc: string;
   updatedAtUtc: string;
 }
 
-export interface PromptVersionDto {
-  versionId: string;
+export interface PromptContentDto {
   templateId: string;
-  versionNumber: number;
   templateText: string;
   variableDefinitionsJson: string;
-  changeDescription: string | null;
-  createdAtUtc: string;
-}
-
-export interface PromptListTemplatesRequest {
-  workspaceId?: string | null;
+  updatedAtUtc: string;
 }
 
 export interface PromptListTemplatesResponseData {
@@ -57,39 +47,28 @@ export interface PromptListTemplatesResponseData {
 export interface PromptGetTemplateRequest {
   templateId?: string | null;
   purpose?: string | null;
-  workspaceId?: string | null;
 }
 
 export interface PromptGetTemplateResponseData {
   template: PromptTemplateDto;
-  currentVersion: PromptVersionDto | null;
+  content: PromptContentDto;
 }
 
-export interface PromptListVersionsRequest {
-  templateId: string;
-}
-
-export interface PromptListVersionsResponseData {
-  versions: PromptVersionDto[];
-}
-
-export interface PromptCreateVersionRequest {
+export interface PromptSaveTemplateRequest {
   purpose: string;
-  workspaceId?: string | null;
   templateText: string;
-  variableDefinitionsJson?: string | null;
-  changeDescription?: string | null;
+  name: string;
+  templateId: string | null;
 }
 
-export interface PromptCreateVersionResponseData {
+export interface PromptSaveTemplateResponseData {
   template: PromptTemplateDto;
-  prompt: PromptVersionDto;
+  content: PromptContentDto;
 }
 
 export interface PromptPreviewRequest {
   templateId?: string | null;
   purpose?: string | null;
-  workspaceId?: string | null;
   templateText?: string | null;
   variables?: Record<string, string> | null;
 }
@@ -97,33 +76,11 @@ export interface PromptPreviewRequest {
 export interface PromptPreviewResponseData {
   renderedText: string;
   templateId: string | null;
-  versionId: string | null;
   variableCount: number;
-  isOverride: boolean;
-}
-
-export interface PromptRollbackVersionRequest {
-  templateId: string;
-  targetVersionId: string;
-}
-
-export interface PromptRollbackVersionResponseData {
-  template: PromptTemplateDto;
-  currentVersion: PromptVersionDto;
-}
-
-export interface PromptDeleteOverrideRequest {
-  templateId: string;
-}
-
-export interface PromptDeleteOverrideResponseData {
-  templateId: string;
-  deleted: boolean;
 }
 
 export interface PromptRenderSnapshotDto {
   templateId: string;
-  versionId: string;
   renderedText: string;
   variables: Record<string, string>;
   capturedAtUtc: string;
@@ -138,7 +95,7 @@ export interface IPromptTransport {
   invoke<TData = unknown, TPayload = unknown>(
     command: string,
     payload: TPayload,
-    options?: { workspaceId?: string | null; signal?: AbortSignal; timeoutMs?: number }
+    options?: { signal?: AbortSignal; timeoutMs?: number }
   ): Promise<TData>;
 }
 
@@ -149,7 +106,7 @@ export const defaultPromptTransport: IPromptTransport = {
   invoke: async <TData = unknown, TPayload = unknown>(
     command: string,
     payload: TPayload,
-    options?: { workspaceId?: string | null; signal?: AbortSignal; timeoutMs?: number }
+    options?: { signal?: AbortSignal; timeoutMs?: number }
   ): Promise<TData> => {
     return await bridgeClient.invoke<TData, TPayload>(
       command as G1Command,
@@ -449,34 +406,31 @@ export function parseVariableDefinitions(
 }
 
 /**
- * Adapter API tương tác với 7 lệnh Prompt Engine của T10
+ * Adapter API cho bốn lệnh prompt hiện hành.
  */
 export const promptApi = {
   /**
-   * Lấy danh sách Prompt Templates theo Workspace hoặc Toàn cục
+   * Lấy danh sách template toàn ứng dụng
    */
   async listTemplates(
-    workspaceId?: string | null,
     transport: IPromptTransport = defaultPromptTransport,
     signal?: AbortSignal
   ): Promise<PromptTemplateDto[]> {
-    const data = await transport.invoke<PromptListTemplatesResponseData, PromptListTemplatesRequest>(
+    const data = await transport.invoke<PromptListTemplatesResponseData, Record<string, never>>(
       "prompt.list_templates",
-      { workspaceId: workspaceId ?? null },
-      { workspaceId: workspaceId ?? null, signal }
+      {},
+      { signal }
     );
     return data?.templates ?? [];
   },
 
   /**
-   * Lấy chi tiết Prompt Template và currentVersion của nó.
-   * Hỗ trợ gọi theo object params { templateId, purpose, workspaceId } hoặc positional (templateId, purpose, workspaceId).
+   * Lấy template hiện hành và nội dung của nó.
    */
   async getTemplate(
     paramsOrTemplateId?: PromptGetTemplateRequest | string | null,
     purposeOrTransport?: string | IPromptTransport | null,
-    workspaceIdOrSignal?: string | AbortSignal | null,
-    maybeTransport?: IPromptTransport,
+    transportOrSignal?: IPromptTransport | AbortSignal,
     maybeSignal?: AbortSignal
   ): Promise<PromptGetTemplateResponseData> {
     let params: PromptGetTemplateRequest;
@@ -488,17 +442,18 @@ export const promptApi = {
       if (purposeOrTransport && typeof purposeOrTransport === "object" && "invoke" in purposeOrTransport) {
         transport = purposeOrTransport as IPromptTransport;
       }
-      if (workspaceIdOrSignal && workspaceIdOrSignal instanceof AbortSignal) {
-        signal = workspaceIdOrSignal;
+      if (transportOrSignal && "invoke" in transportOrSignal) {
+        transport = transportOrSignal;
+      } else if (transportOrSignal instanceof AbortSignal) {
+        signal = transportOrSignal;
       }
     } else {
       params = {
         templateId: typeof paramsOrTemplateId === "string" ? paramsOrTemplateId : null,
         purpose: typeof purposeOrTransport === "string" ? purposeOrTransport : null,
-        workspaceId: typeof workspaceIdOrSignal === "string" ? workspaceIdOrSignal : null,
       };
-      if (maybeTransport && typeof maybeTransport === "object" && "invoke" in maybeTransport) {
-        transport = maybeTransport;
+      if (transportOrSignal && typeof transportOrSignal === "object" && "invoke" in transportOrSignal) {
+        transport = transportOrSignal;
       }
       if (maybeSignal && maybeSignal instanceof AbortSignal) {
         signal = maybeSignal;
@@ -508,39 +463,32 @@ export const promptApi = {
     return await transport.invoke<PromptGetTemplateResponseData, PromptGetTemplateRequest>(
       "prompt.get_template",
       params,
-      { workspaceId: params.workspaceId ?? null, signal }
+      { signal }
     );
-  },
-
-  /**
-   * Lấy lịch sử tất cả các phiên bản của một template
-   */
-  async listVersions(
-    templateId: string,
-    workspaceId?: string | null,
-    transport: IPromptTransport = defaultPromptTransport,
-    signal?: AbortSignal
-  ): Promise<PromptVersionDto[]> {
-    const data = await transport.invoke<PromptListVersionsResponseData, PromptListVersionsRequest>(
-      "prompt.list_versions",
-      { templateId },
-      { workspaceId: workspaceId ?? null, signal }
-    );
-    return data?.versions ?? [];
   },
 
   /**
    * Lưu nội dung hiện hành của template.
    */
-  async createVersion(
-    request: PromptCreateVersionRequest,
+  async saveTemplate(
+    request: PromptSaveTemplateRequest,
     transport: IPromptTransport = defaultPromptTransport,
     signal?: AbortSignal
-  ): Promise<PromptCreateVersionResponseData> {
-    return await transport.invoke<PromptCreateVersionResponseData, PromptCreateVersionRequest>(
+  ): Promise<PromptSaveTemplateResponseData> {
+    return await transport.invoke<PromptSaveTemplateResponseData, PromptSaveTemplateRequest>(
       "prompt.save_template",
       request,
-      { workspaceId: request.workspaceId ?? null, signal }
+      { signal }
+    );
+  },
+
+  async activateTemplate(
+    templateId: string,
+    transport: IPromptTransport = defaultPromptTransport
+  ): Promise<PromptTemplateDto> {
+    return await transport.invoke<PromptTemplateDto, { templateId: string }>(
+      "prompt.activate_template",
+      { templateId }
     );
   },
 
@@ -556,39 +504,8 @@ export const promptApi = {
     return await transport.invoke<PromptPreviewResponseData, PromptPreviewRequest>(
       "prompt.preview",
       request,
-      { workspaceId: request.workspaceId ?? null, signal }
+      { signal }
     );
   },
 
-  /**
-   * Khôi phục con trỏ current_version_id về phiên bản trước (Rollback)
-   */
-  async rollbackVersion(
-    request: PromptRollbackVersionRequest,
-    workspaceId?: string | null,
-    transport: IPromptTransport = defaultPromptTransport,
-    signal?: AbortSignal
-  ): Promise<PromptRollbackVersionResponseData> {
-    return await transport.invoke<PromptRollbackVersionResponseData, PromptRollbackVersionRequest>(
-      "prompt.rollback_version",
-      request,
-      { workspaceId: workspaceId ?? null, signal }
-    );
-  },
-
-  /**
-   * Xóa bản ghi đè Workspace, quay về sử dụng Global template mặc định
-   */
-  async deleteOverride(
-    templateId: string,
-    workspaceId?: string | null,
-    transport: IPromptTransport = defaultPromptTransport,
-    signal?: AbortSignal
-  ): Promise<PromptDeleteOverrideResponseData> {
-    return await transport.invoke<PromptDeleteOverrideResponseData, PromptDeleteOverrideRequest>(
-      "prompt.delete_override",
-      { templateId },
-      { workspaceId: workspaceId ?? null, signal }
-    );
-  },
 };

@@ -22,10 +22,6 @@ public class BrowserProfileConfiguration : IEntityTypeConfiguration<BrowserProfi
             .HasColumnType("TEXT")
             .IsRequired();
 
-        builder.Property(p => p.WorkspaceId)
-            .HasColumnName("workspace_id")
-            .HasColumnType("TEXT");
-
         builder.Property(p => p.AccountIdentity)
             .HasColumnName("account_identity")
             .HasColumnType("TEXT");
@@ -78,12 +74,5 @@ public class BrowserProfileConfiguration : IEntityTypeConfiguration<BrowserProfi
             .HasColumnType("TEXT")
             .IsRequired();
 
-        builder.HasOne(p => p.Workspace)
-            .WithMany()
-            .HasForeignKey(p => p.WorkspaceId)
-            .OnDelete(DeleteBehavior.Cascade);
-
-        builder.HasIndex(p => p.WorkspaceId)
-            .HasDatabaseName("ix_browser_profile_workspace");
     }
 }

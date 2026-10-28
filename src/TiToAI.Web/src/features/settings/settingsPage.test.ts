@@ -20,20 +20,6 @@ globalThis.requestAnimationFrame = (cb) => setTimeout(cb, 0);
 globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
 (globalThis as unknown as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
-// Mock 10 Workspaces production fixtures
-const mockWorkspaces = Array.from({ length: 10 }, (_, i) => {
-  const num = (i + 1).toString().padStart(2, "0");
-  return {
-    workspaceId: `ws_${num}`,
-    name: `Workspace ${num}`,
-    channelHandle: `@channel_${num}`,
-    topic: `Chủ đề TikTok ${num}`,
-    status: "Active",
-    createdAtUtc: new Date().toISOString(),
-    updatedAtUtc: new Date().toISOString(),
-  };
-});
-
 // Mock tài khoản đa provider toàn cục (ChatGPT, Gemini, MuseAI)
 const mockAccounts = [
   {
@@ -42,6 +28,7 @@ const mockAccounts = [
     profileId: "prof_gpt_1",
     displayName: "ChatGPT Team Account",
     verifiedIdentity: "team@company.ai",
+    sessionStatus: "Connected",
     enabled: true,
     lifecycle: "Active",
     maxConcurrentJobs: 3,
@@ -56,6 +43,7 @@ const mockAccounts = [
     profileId: "prof_gemini_1",
     displayName: "Gemini Advanced Creator",
     verifiedIdentity: "creator@gmail.com",
+    sessionStatus: "SessionExpired",
     enabled: true,
     lifecycle: "Active",
     maxConcurrentJobs: 2,
@@ -70,6 +58,7 @@ const mockAccounts = [
     profileId: "prof_museai_1",
     displayName: "MuseAI Studio Pro",
     verifiedIdentity: "editor@studio.ai",
+    sessionStatus: "Unverified",
     enabled: true,
     lifecycle: "Active",
     maxConcurrentJobs: 1,
@@ -85,26 +74,7 @@ const mockTemplates = [
   {
     templateId: "tmpl_tiktok_script",
     purpose: "Script",
-    name: "Kịch bản TikTok Chuẩn SEO",
-    description: "Mẫu kịch bản ngắn phân cảnh hấp dẫn",
-    latestVersion: 1,
-    currentVersion: 1,
-    isOverridden: false,
-    contentTemplate: "Tiêu đề: {{topic}}\nCảnh 1: Mở đầu ấn tượng thu hút người xem trong 3 giây.",
-    variableDefinitionsJson: JSON.stringify([
-      { name: "topic", description: "Chủ đề video", defaultValue: "Review công nghệ", required: true }
-    ]),
-    versions: [
-      {
-        versionNumber: 1,
-        contentTemplate: "Tiêu đề: {{topic}}\nCảnh 1: Mở đầu ấn tượng thu hút người xem trong 3 giây.",
-        variableDefinitionsJson: JSON.stringify([
-          { name: "topic", description: "Chủ đề video", defaultValue: "Review công nghệ", required: true }
-        ]),
-        createdAtUtc: new Date().toISOString(),
-        changeNote: "Bản khởi tạo ban đầu",
-      }
-    ],
+    createdAtUtc: new Date().toISOString(),
     updatedAtUtc: new Date().toISOString(),
   }
 ];
@@ -141,10 +111,10 @@ const messageListeners: ((event: MessageEvent) => void)[] = [];
         payloadData = { preference: "system", effectiveTheme: "dark" };
       } else if (req.command === "theme.save_preference") {
         payloadData = { preference: req.payload?.preference ?? "system", effectiveTheme: "dark" };
-      } else if (req.command === "workspace.list") {
-        payloadData = { workspaces: mockWorkspaces };
       } else if (req.command === "provider_account.list") {
         payloadData = { accounts: mockAccounts };
+      } else if (req.command === "provider_account.probe_session") {
+        payloadData = { isVerified: false, sessionStatus: "Unverified", errorMessage: "Không đọc được danh tính Gemini." };
       } else if (req.command === "settings.get") {
         payloadData = { ...currentSavedStorageSettings };
       } else if (req.command === "settings.save") {
@@ -164,10 +134,12 @@ const messageListeners: ((event: MessageEvent) => void)[] = [];
           };
           payloadData = { ...currentSavedStorageSettings };
         }
-      } else if (req.command === "prompt.list") {
+      } else if (req.command === "prompt.list_templates") {
         payloadData = { templates: mockTemplates };
-      } else if (req.command === "prompt.get") {
-        payloadData = { template: mockTemplates[0] };
+      } else if (req.command === "prompt.get_template") {
+        payloadData = { template: mockTemplates[0], content: { templateId: mockTemplates[0].templateId, templateText: "Tiêu đề: {topic}\nCảnh 1: Mở đầu thu hút.", variableDefinitionsJson: "[{\"name\":\"topic\",\"defaultValue\":\"Review công nghệ\",\"isRequired\":true}]", updatedAtUtc: new Date().toISOString() } };
+      } else if (req.command === "prompt.save_template") {
+        payloadData = { template: mockTemplates[0], content: { templateId: mockTemplates[0].templateId, templateText: req.payload?.templateText ?? "", variableDefinitionsJson: req.payload?.variableDefinitionsJson ?? "[]", updatedAtUtc: new Date().toISOString() } };
       } else if (req.command === "asset.list") {
         payloadData = { assets: [], totalCount: 0, page: 1, pageSize: 20 };
       }
@@ -178,7 +150,7 @@ const messageListeners: ((event: MessageEvent) => void)[] = [];
             id: req.id,
             type: "response",
             success: isSuccess,
-            contractVersion: "1.0.4",
+            contractVersion: "1.1.0",
             data: isSuccess ? payloadData : undefined,
             error: isSuccess ? undefined : errorObj,
           },
@@ -236,9 +208,38 @@ async function runTests() {
     );
   });
 
+  for (let attempt = 0; attempt < 20 && !container.textContent?.includes("MuseAI Studio Pro"); attempt++) {
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+  }
+
+  const accountCard = (name: string) => Array.from(container.querySelectorAll("span"))
+    .find((node) => node.textContent === name)?.closest("div.rounded-xl");
+  const loginVisible = (name: string) => !!Array.from(accountCard(name)?.querySelectorAll("button") ?? [])
+    .find((button) => button.textContent?.includes("Đăng nhập trình duyệt"));
+  if (loginVisible("ChatGPT Team Account") || !loginVisible("Gemini Advanced Creator") || !loginVisible("MuseAI Studio Pro")) {
+    throw new Error(`Nút đăng nhập sai: ${["ChatGPT Team Account", "Gemini Advanced Creator", "MuseAI Studio Pro"].map((name) => `${name}: card=${!!accountCard(name)}, login=${loginVisible(name)}`).join(", ")}`);
+  }
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    for (const listener of [...messageListeners]) listener({ data: {
+      type: "event", eventName: "browser.profile_state_changed", contractVersion: "1.1.0", seq: 1,
+      payload: { profileId: "prof_gpt_1", sessionStatus: "SessionExpired", visibilityState: "Hidden", operationalState: "Stopped" },
+    } } as MessageEvent);
   });
+  if (!loginVisible("ChatGPT Team Account") || !accountCard("ChatGPT Team Account")?.textContent?.includes("Chưa xác minh")) {
+    throw new Error("Phiên hết hạn phải hiện lại nút đăng nhập và trạng thái chưa xác minh");
+  }
+
+  const probeButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+    (b) => b.textContent?.includes("Kiểm tra phiên")
+  );
+  if (!probeButton) throw new Error("Không tìm thấy nút kiểm tra phiên");
+  await act(async () => {
+    probeButton.click();
+    await new Promise((r) => setTimeout(r, 100));
+  });
+  if (!container.textContent?.includes("Không đọc được danh tính Gemini.")) {
+    throw new Error("Lỗi kiểm tra phiên phải còn hiển thị sau khi tải lại danh sách tài khoản");
+  }
 
   // 1. Kiểm tra tiêu đề và 4 Tab con ngang theo WAI-ARIA
   const tablist = container.querySelector('[role="tablist"]');
@@ -313,10 +314,11 @@ async function runTests() {
   if (!pageText.includes("ChatGPT Team Account") || !pageText.includes("Gemini Advanced Creator") || !pageText.includes("MuseAI Studio Pro")) {
     throw new Error("FAIL: Không hiển thị đầy đủ tài khoản 3 provider trong tab Tài khoản");
   }
-  if (pageText.includes("Gán cho Workspace") || pageText.includes("AI dùng chung") || pageText.includes("AI riêng")) {
-    throw new Error("FAIL: Có thuộc tính gán Workspace vi phạm kiến trúc 1.2");
+  if (Array.from(container.querySelectorAll("h2, h3, h4")).some((heading) =>
+    heading.textContent === "AI dùng chung" || heading.textContent === "AI riêng")) {
+    throw new Error("FAIL: Tài khoản AI không được chia nhóm theo phạm vi dùng chung/riêng.");
   }
-  console.log("  -> [PASS A02] Tab Tài khoản: Danh sách hợp nhất, không chia nhóm dùng chung/riêng, không gán Workspace.");
+  console.log("  -> [PASS A02] Tab Tài khoản hiển thị danh sách tài khoản AI toàn ứng dụng.");
 
   // =========================================================================
   // PHẦN 2: F1 - BẢO TOÀN DRAFT ĐƯỜNG DẪN LƯU TRỮ QUA 4 TAB & DIRTY GUARD
@@ -400,18 +402,6 @@ async function runTests() {
     appRoot.render(React.createElement(App));
   });
 
-  // Chờ App nạp xong workspace.list khởi tạo
-  for (let attempt = 0; attempt < 25; attempt++) {
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 30));
-    });
-    if (bridgeClient.getActiveWorkspaceId()) break;
-  }
-
-  if (bridgeClient.getActiveWorkspaceId() !== "ws_01") {
-    throw new Error(`FAIL: Workspace khởi tạo mặc định phải là ws_01, thực tế: ${bridgeClient.getActiveWorkspaceId()}`);
-  }
-
   // Bước 3.1: Chuyển đến màn hình Mẫu Prompt (nơi render PromptTemplateManager production)
   const navItems = Array.from(appContainer.querySelectorAll<HTMLButtonElement>("button.nav-item, nav button"));
   const promptNavBtn = navItems.find((b) => b.textContent?.trim() === "Prompt" || b.textContent?.includes("Prompt"));
@@ -427,10 +417,10 @@ async function runTests() {
     await act(async () => {
       await new Promise((r) => setTimeout(r, 30));
     });
-    if (appContainer.querySelector("textarea#template-content-input") || appContainer.querySelector("textarea")) break;
+    if (appContainer.querySelector("textarea#prompt-template-text")) break;
   }
 
-  const promptTextarea = appContainer.querySelector<HTMLTextAreaElement>("textarea");
+  const promptTextarea = appContainer.querySelector<HTMLTextAreaElement>("textarea#prompt-template-text");
   if (!promptTextarea) {
     throw new Error("FAIL: Không tìm thấy textarea trong PromptTemplateManager production");
   }
@@ -472,8 +462,8 @@ async function runTests() {
     await new Promise((r) => setTimeout(r, 50));
   });
 
-  // Bước 3.5: Kiểm chứng màn hình Thư viện hiển thị lại, draft kịch bản & workspace context bảo toàn 100%!
-  const restoredPromptTextarea = appContainer.querySelector<HTMLTextAreaElement>("textarea");
+  // Bước 3.5: Kiểm chứng màn hình Prompt hiển thị lại và draft được giữ.
+  const restoredPromptTextarea = appContainer.querySelector<HTMLTextAreaElement>("textarea#prompt-template-text");
   if (!restoredPromptTextarea) {
     throw new Error("FAIL: Không tìm thấy textarea sau khi quay lại màn hình Thư viện");
   }
@@ -481,87 +471,18 @@ async function runTests() {
   if (restoredPromptTextarea.value !== PROMPT_DRAFT_TEXT) {
     throw new Error(`FAIL [F2]: Draft kịch bản bị reset trong App production! Giá trị: '${restoredPromptTextarea.value}'`);
   }
-  if (bridgeClient.getActiveWorkspaceId() !== "ws_01") {
-    throw new Error(`FAIL [F2]: Workspace context bị thay đổi! Hiện tại: '${bridgeClient.getActiveWorkspaceId()}'`);
-  }
-
-  console.log("  -> [PASS F2 / Q2-APP-DRAFT] App production + Editor production + Navigation: Draft kịch bản và context Workspace bảo toàn 100%!");
-
-  // =========================================================================
-  // PHẦN 4: F3 (Q3-GLOBAL-10WS) - CHUYỂN 10 WORKSPACE THẬT QUA SELECTOR PRODUCTION
-  // =========================================================================
-  console.log("\n--- [TEST SUITE 4] F3 (Q3-GLOBAL-10WS): Chuyển 10 Workspace thật qua Selector Production ---");
-
-  // Mở màn hình Cài đặt
-  await act(async () => {
-    settingsNavBtn.click();
-    await new Promise((r) => setTimeout(r, 40));
-  });
-
-  // Chọn tab Tài khoản
-  const appAccountsTab = appContainer.querySelector<HTMLButtonElement>("#tab-accounts")!;
-  await act(async () => {
-    appAccountsTab.click();
-    await new Promise((r) => setTimeout(r, 40));
-  });
-
-  for (let i = 0; i < 10; i++) {
-    const targetWs = mockWorkspaces[i];
-
-    // 1. Mở dropdown selector Workspace production
-    const wsSelectorBtn = appContainer.querySelector<HTMLButtonElement>(".workspace-selector-btn");
-    if (!wsSelectorBtn) throw new Error("FAIL: Không tìm thấy nút .workspace-selector-btn trong topbar");
-
-    await act(async () => {
-      wsSelectorBtn.click();
-      await new Promise((r) => setTimeout(r, 20));
-    });
-
-    // 2. Tìm và click vào Workspace thứ i trong dropdown menu
-    const dropdownMenu = appContainer.querySelector(".workspace-dropdown-panel");
-    if (!dropdownMenu) throw new Error("FAIL: Dropdown menu chọn workspace không mở");
-
-    const wsOptionBtns = Array.from(dropdownMenu.querySelectorAll<HTMLButtonElement>(".dropdown-item"));
-    const targetOption = wsOptionBtns.find((btn) => btn.textContent?.includes(targetWs.name));
-    if (!targetOption) {
-      throw new Error(`FAIL: Không tìm thấy tùy chọn '${targetWs.name}' trong dropdown menu`);
-    }
-
-    await act(async () => {
-      targetOption.click();
-      await new Promise((r) => setTimeout(r, 40));
-    });
-
-    // 3. Assert active Workspace ID thực sự thay đổi trong bridgeClient
-    const activeWs = bridgeClient.getActiveWorkspaceId();
-    if (activeWs !== targetWs.workspaceId) {
-      throw new Error(`FAIL [F3] tại vòng ${i + 1}: activeWorkspaceId không đổi thành '${targetWs.workspaceId}', hiện tại: '${activeWs}'`);
-    }
-
-    // 4. Assert danh sách tài khoản hiển thị đồng nhất cả 3 provider (ChatGPT, Gemini, MuseAI)
-    const currentText = appContainer.textContent || "";
-    if (!currentText.includes("ChatGPT Team Account") || !currentText.includes("team@company.ai")) {
-      throw new Error(`FAIL [F3] tại ${targetWs.workspaceId}: Không hiển thị ChatGPT account (team@company.ai)`);
-    }
-    if (!currentText.includes("Gemini Advanced Creator") || !currentText.includes("creator@gmail.com")) {
-      throw new Error(`FAIL [F3] tại ${targetWs.workspaceId}: Không hiển thị Gemini account (creator@gmail.com)`);
-    }
-    if (!currentText.includes("MuseAI Studio Pro") || !currentText.includes("editor@studio.ai")) {
-      throw new Error(`FAIL [F3] tại ${targetWs.workspaceId}: Không hiển thị MuseAI account (editor@studio.ai)`);
-    }
-    if (currentText.includes("AI dùng chung") || currentText.includes("AI riêng") || currentText.includes("Gán cho Workspace")) {
-      throw new Error(`FAIL [F3] tại ${targetWs.workspaceId}: Xuất hiện thuộc tính phân nhóm hoặc gán Workspace`);
-    }
-  }
-
-  console.log("  -> [PASS F3 / Q3-GLOBAL-10WS] Chuyển qua toàn bộ 10 Workspace thật: Active ID đổi chuẩn xác, danh sách tài khoản 3 provider đồng nhất toàn cục!");
+  console.log("  -> [PASS F2 / Q2-APP-DRAFT] App giữ draft Prompt qua điều hướng.");
 
   // =========================================================================
   // PHẦN 5: F1 - SIDEBAR NAVIGATION GUARD KHI SETTINGS DIRTY
   // =========================================================================
   console.log("\n--- [TEST SUITE 5] F1: Dirty Guard khi điều hướng sidebar trong App ---");
 
-  // Chuyển sang tab Lưu trữ và nhập nháp
+  // Mở Cài đặt, chuyển sang tab Lưu trữ và nhập nháp.
+  await act(async () => {
+    settingsNavBtn.click();
+    await new Promise((r) => setTimeout(r, 40));
+  });
   const appStorageTab = appContainer.querySelector<HTMLButtonElement>("#tab-storage")!;
   await act(async () => {
     appStorageTab.click();
@@ -573,10 +494,10 @@ async function runTests() {
     setNativeInputValue(appDocsInput, "D:/storage/sidebar_dirty_test");
   });
 
-  // Người dùng bấm vào 'Workspaces' trên sidebar trong khi Cài đặt đang dirty
-  const workspacesNavBtn = navItems.find((b) => b.textContent?.includes("Workspaces"))!;
+  // Người dùng bấm vào Dự án trên sidebar trong khi Cài đặt đang dirty
+  const projectsNavBtn = navItems.find((b) => b.textContent?.includes("Dự án"))!;
   await act(async () => {
-    workspacesNavBtn.click();
+    projectsNavBtn.click();
     await new Promise((r) => setTimeout(r, 30));
   });
 

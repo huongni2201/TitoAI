@@ -467,7 +467,7 @@ public sealed class BridgeMessageRouter : IDisposable
         }
     }
 
-    public async Task PostEventAsync(string eventName, string? workspaceId, object payload)
+    public async Task PostEventAsync(string eventName, object payload)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(eventName);
         ArgumentNullException.ThrowIfNull(payload);
@@ -478,7 +478,7 @@ public sealed class BridgeMessageRouter : IDisposable
         }
 
         long seq = Interlocked.Increment(ref _eventSequence);
-        var evt = ResponseEnvelopeHelper.CreateEvent(eventName, workspaceId, seq, payload);
+        var evt = ResponseEnvelopeHelper.CreateEvent(eventName, seq, payload);
         string json = JsonSerializer.Serialize(evt, JsonOptions);
 
         if (_uiDispatcher != null && !_uiDispatcher.CheckAccess())

@@ -7,26 +7,12 @@ export const maxBridgeEnvelopeBytes = 4 * 1024 * 1024;
  */
 export const bridgeCommandAllowlist = [
   // Gate G1 — Foundation
-  // Legacy commands retained in the wire type for old data/helpers; desktop no longer registers Workspace handlers.
-  "workspace.list",
   "settings.get",
   "settings.save",
   "settings.browse_folder",
   "settings.validate_roots",
   "theme.get_preference",
   "theme.set_preference",
-
-  // Gate G2 — Accounts
-  "workspace.get",
-  "workspace.create",
-  "workspace.update",
-  "workspace.pause",
-  "workspace.resume",
-  "workspace.set_status",
-  "workspace.delete",
-  "account.list_by_workspace",
-  "account.link",
-  "account.unlink",
 
   // Gate G2 / Q1 — Provider Accounts (Settings -> Tài khoản)
   "provider_account.list",
@@ -40,15 +26,11 @@ export const bridgeCommandAllowlist = [
   "prompt.list_templates",
   "prompt.get_template",
   "prompt.save_template",
-  "prompt.list_versions",
-  "prompt.create_version",
+  "prompt.activate_template",
   "prompt.preview",
-  "prompt.rollback_version",
-  "prompt.delete_override",
 
   // Gate G2 — Projects & Scenes
   "project.list",
-  "project.list_by_workspace",
   "project.get",
   "project.create",
   "project.update",
@@ -106,6 +88,7 @@ export const bridgeCommandAllowlist = [
 
   // Video Production from Images Workflow
   "workflow.get_config",
+  "workflow.get_storyboard",
   "workflow.save_config",
   "workflow.start",
   "workflow.list_scenes",
@@ -127,6 +110,10 @@ export const bridgeCommandAllowlist = [
   "analytics.check_tiktok_session",
   "analytics.open_tiktok_login",
   "analytics.sync_tiktok_channel",
+
+  "publishing.list",
+  "publishing.publish",
+  "publishing.reconcile",
 ] as const;
 
 export const g1CommandAllowlist = bridgeCommandAllowlist;
@@ -156,7 +143,6 @@ export type EventEnvelope<TPayload = unknown> = {
   id: string;
   type: "event";
   eventName: string;
-  workspaceId: string | null;
   seq: number;
   payload: TPayload;
   serverTimestampUtc: string;
@@ -174,7 +160,6 @@ export type ErrorDto = {
 export const ErrorCodes = {
   UNKNOWN_COMMAND: "UNKNOWN_COMMAND",
   INVALID_ARGUMENT: "INVALID_ARGUMENT",
-  UNAUTHORIZED_WORKSPACE: "UNAUTHORIZED_WORKSPACE",
   ENTITY_NOT_FOUND: "ENTITY_NOT_FOUND",
   VALIDATION_FAILED: "VALIDATION_FAILED",
   STORAGE_ROOT_UNAVAILABLE: "STORAGE_ROOT_UNAVAILABLE",
