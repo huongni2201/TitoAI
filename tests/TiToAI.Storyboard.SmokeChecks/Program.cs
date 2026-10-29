@@ -1,6 +1,7 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using TiToAI.Application.Content;
+using TiToAI.Application.Providers;
 using TiToAI.Infrastructure.Persistence;
 using TiToAI.Infrastructure.Persistence.Entities;
 
@@ -41,5 +42,12 @@ await using (var db = new TiToAIDbContext(options))
 {
     var saved = await db.AppSettings.SingleAsync(x => x.Key == "project.storyboard.26fd4c1a-e393-4e52-bc3c-7339a2ef9abd");
     if (StoryboardContentService.Parse(saved.Value, 15).Shots.Count != 2) throw new Exception("Không đọc lại được storyboard");
+}
+// MuseAI recovery may reopen only a muse.ai side chat saved by the render job.
+const string sideChat = "https://muse.ai/thread/b23f917c-44ad-4421-a80d-3824902a034a";
+if (!MuseAiPlaywrightAutomation.IsSideChatUrl(sideChat)) throw new Exception("Từ chối side chat MuseAI hợp lệ");
+foreach (var invalid in new string?[] { null, "", "https://muse.ai/thread/new", "http://muse.ai/thread/b23f917c-44ad-4421-a80d-3824902a034a", "https://evil.example/thread/b23f917c-44ad-4421-a80d-3824902a034a" })
+{
+    if (MuseAiPlaywrightAutomation.IsSideChatUrl(invalid)) throw new Exception($"Chấp nhận URL không hợp lệ: {invalid}");
 }
 Console.WriteLine("Storyboard content checks passed");

@@ -22,14 +22,17 @@ public sealed class JobHandlers
 
     private readonly JobService _jobService;
     private readonly Func<EventEnvelope, Task>? _eventSink;
+    private readonly MuseAiOutputRecoveryService? _outputRecovery;
     private long _eventSequenceCounter;
 
     public JobHandlers(
         JobService jobService,
-        Func<EventEnvelope, Task>? eventSink = null)
+        Func<EventEnvelope, Task>? eventSink = null,
+        MuseAiOutputRecoveryService? outputRecovery = null)
     {
         _jobService = jobService ?? throw new ArgumentNullException(nameof(jobService));
         _eventSink = eventSink;
+        _outputRecovery = outputRecovery;
     }
 
     private static T? ParsePayload<T>(RequestEnvelope request) where T : class
@@ -58,6 +61,7 @@ public sealed class JobHandlers
         dispatcher.AllowCommand("job.reconcile");
         dispatcher.AllowCommand("job.resume");
         dispatcher.AllowCommand("job.retry");
+        dispatcher.AllowCommand("job.recover_output");
 
         dispatcher.RegisterHandler("job.enqueue", HandleEnqueueAsync);
         dispatcher.RegisterHandler("job.get_status", HandleGetStatusAsync);
@@ -67,6 +71,7 @@ public sealed class JobHandlers
         dispatcher.RegisterHandler("job.reconcile", HandleReconcileAsync);
         dispatcher.RegisterHandler("job.resume", HandleResumeAsync);
         dispatcher.RegisterHandler("job.retry", HandleRetryAsync);
+        dispatcher.RegisterHandler("job.recover_output", HandleRecoverOutputAsync);
     }
 
     /// <summary>
@@ -84,6 +89,7 @@ public sealed class JobHandlers
         dispatcher.UnregisterHandler("job.reconcile");
         dispatcher.UnregisterHandler("job.resume");
         dispatcher.UnregisterHandler("job.retry");
+        dispatcher.UnregisterHandler("job.recover_output");
     }
 
     public async Task<ResponseEnvelope> HandleEnqueueAsync(RequestEnvelope request, CancellationToken cancellationToken)
@@ -238,6 +244,56 @@ public sealed class JobHandlers
             }
 
             var result = await _jobService.ReconcileAsync(payload, cancellationToken).ConfigureAwait(false);
+
+            await EmitEventAsync("job.state_changed", new JobStateChangedPayload(
+                JobId: result.JobId,
+                ProjectId: null,
+                PreviousState: result.PreviousState,
+                NewState: result.CurrentState,
+                ReasonCode: null,
+                ResultReference: result.ResultReference,
+                TimestampUtc: DateTimeOffset.UtcNow.ToString("o"),
+                JobRevision: result.Revision
+            )).ConfigureAwait(false);
+
+            return ResponseEnvelopeHelper.CreateSuccess(request.Id, result);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return MapExceptionToError(request.Id, ex);
+        }
+    }
+
+    public async Task<ResponseEnvelope> HandleRecoverOutputAsync(RequestEnvelope request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        try
+        {
+            var payload = ParsePayload<JobRecoverOutputRequest>(request);
+            if (payload is null || string.IsNullOrWhiteSpace(payload.JobId))
+            {
+                return ResponseEnvelopeHelper.CreateError(
+                    request.Id,
+                    "INVALID_ARGUMENT",
+                    "Payload yêu cầu khôi phục video thiếu 'jobId'.",
+                    retryable: false);
+            }
+
+            if (_outputRecovery is null)
+            {
+                return ResponseEnvelopeHelper.CreateError(
+                    request.Id,
+                    "INTERNAL_ERROR",
+                    "Chưa cấu hình khôi phục video MuseAI.",
+                    retryable: false);
+            }
+
+            var result = await _outputRecovery.RecoverAsync(payload.JobId, cancellationToken).ConfigureAwait(false);
 
             await EmitEventAsync("job.state_changed", new JobStateChangedPayload(
                 JobId: result.JobId,

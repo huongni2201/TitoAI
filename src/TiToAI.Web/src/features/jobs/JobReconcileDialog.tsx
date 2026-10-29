@@ -6,6 +6,7 @@ import {
   Ban,
   Loader2,
   ShieldAlert,
+  Download,
 } from "lucide-react";
 import {
   Dialog,
@@ -38,7 +39,7 @@ export interface JobReconcileDialogProps {
   onReconciled?: (result: JobReconcileResponseData) => void;
 }
 
-type ReconcileActionChoice = "mark_succeeded" | "mark_failed" | "cancel";
+type ReconcileActionChoice = "mark_succeeded" | "mark_failed" | "cancel" | "recover_output";
 
 export function JobReconcileDialog({
   job,
@@ -71,6 +72,8 @@ export function JobReconcileDialog({
 
   const taskTypeInfo = getTaskTypeInfo(job.taskType);
   const TaskIcon = taskTypeInfo.icon;
+  // Video render chỉ chạy trên MuseAI; khôi phục cần tác vụ đang chờ đối soát.
+  const canRecoverOutput = job.taskType === "VideoRender" && job.state === "AwaitingUser";
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -86,7 +89,7 @@ export function JobReconcileDialog({
         );
         return;
       }
-    } else {
+    } else if (actionChoice !== "recover_output") {
       if (!confirmedNotReceived) {
         setErrorMessage(
           "Vui lòng tích chọn xác nhận để đảm bảo an toàn trạng thái hàng đợi và tài nguyên."
@@ -97,6 +100,12 @@ export function JobReconcileDialog({
 
     setIsSubmitting(true);
     try {
+      if (actionChoice === "recover_output") {
+        onReconciled?.(await jobApi.recoverOutput(job.id));
+        onOpenChange(false);
+        return;
+      }
+
       const res = await jobApi.reconcile({
         jobId: job.id,
         action: actionChoice,
@@ -248,6 +257,33 @@ export function JobReconcileDialog({
                     </div>
                   )}
                 </div>
+
+                {/* Lựa chọn khôi phục: video đã có trên MuseAI, chỉ cần tải lại */}
+                {canRecoverOutput && (
+                  <div
+                    className={cn(
+                      "flex flex-col gap-2 rounded-lg border p-3.5 transition-colors cursor-pointer",
+                      actionChoice === "recover_output"
+                        ? "border-primary bg-primary/5 dark:bg-primary/10"
+                        : "border-border hover:bg-muted/40"
+                    )}
+                    onClick={() => setActionChoice("recover_output")}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <RadioGroupItem value="recover_output" id="opt-recover" />
+                      <Label
+                        htmlFor="opt-recover"
+                        className="font-medium text-xs text-foreground cursor-pointer flex items-center gap-1.5"
+                      >
+                        <Download className="h-3.5 w-3.5 text-primary" />
+                        <span>Tải lại video từ phiên MuseAI đã lưu</span>
+                      </Label>
+                    </div>
+                    <p className="pl-6 text-[11px] text-muted-foreground leading-normal">
+                      Mở lại side chat MuseAI đã ghi nhận và tải video về. Không gửi lại prompt; tác vụ chỉ thành công khi video đã được lưu thành Asset.
+                    </p>
+                  </div>
+                )}
 
                 {/* Lựa chọn 2: AI chưa nhận - Đánh dấu thất bại để thử lại */}
                 <div

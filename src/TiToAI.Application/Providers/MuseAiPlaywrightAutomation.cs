@@ -6,8 +6,10 @@ using Microsoft.Playwright;
 using TiToAI.Application.Assets;
 using TiToAI.Application.Jobs;
 using TiToAI.Browser.Abstractions;
+using TiToAI.Contracts.Jobs;
 using TiToAI.Browser.Models;
 using TiToAI.Infrastructure.Persistence;
+using TiToAI.Infrastructure.Persistence.Entities;
 using TiToAI.Infrastructure.Storage;
 
 namespace TiToAI.Application.Providers;
@@ -23,18 +25,23 @@ public sealed class MuseAiPlaywrightAutomation
     private const string AttachSnapshotScript = "() => JSON.stringify({ blobImages: document.querySelectorAll('img[src^=\"blob:\"]').length, fileInputs: [...document.querySelectorAll(\"input[type='file']\")].map(i => ({ multiple: i.multiple, files: i.files.length })) })";
     private static readonly Regex ThreadUrl = new(@"/thread/[0-9a-f-]{36}$", RegexOptions.IgnoreCase);
     private static readonly float RenderTimeoutMs = (float)TimeSpan.FromMinutes(30).TotalMilliseconds;
+    private static readonly Regex OpenVideoName = new("^Open animated video", RegexOptions.IgnoreCase);
+    private const string VideoReadyScript = "() => !document.querySelector('[aria-label=\"Assistant is typing\"]') && !!document.querySelector(\"[data-message-role='assistant'] video\")";
+    private const string ThreadUrlKeyPrefix = "job.museai.thread.";
 
     private readonly IBrowserProcessController _browser;
+    private readonly IBrowserGatekeeper _gatekeeper;
     private readonly IProfileRegistry _profiles;
     private readonly DbContextOptions<TiToAIDbContext> _dbOptions;
     private readonly StorageRootRegistry _roots;
     private readonly AssetService _assets;
     private readonly JobActivityLog _activity;
 
-    public MuseAiPlaywrightAutomation(IBrowserProcessController browser, IProfileRegistry profiles,
+    public MuseAiPlaywrightAutomation(IBrowserProcessController browser, IBrowserGatekeeper gatekeeper, IProfileRegistry profiles,
         DbContextOptions<TiToAIDbContext> dbOptions, StorageRootRegistry roots, AssetService assets)
     {
         _browser = browser ?? throw new ArgumentNullException(nameof(browser));
+        _gatekeeper = gatekeeper ?? throw new ArgumentNullException(nameof(gatekeeper));
         _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
         _dbOptions = dbOptions ?? throw new ArgumentNullException(nameof(dbOptions));
         _roots = roots ?? throw new ArgumentNullException(nameof(roots));
@@ -100,32 +107,15 @@ public sealed class MuseAiPlaywrightAutomation
             submitted = true; // Once the checkpoint is durable, a failed click must be reconciled, never blindly resent.
             await page.Locator("button[aria-label='Send']").ClickAsync().WaitAsync(ct).ConfigureAwait(false);
             await page.WaitForURLAsync(ThreadUrl, new() { Timeout = 30000 }).WaitAsync(ct).ConfigureAwait(false);
+            await SaveThreadUrlAsync(job.JobId, page.Url, ct).ConfigureAwait(false);
             await _activity.WriteAsync(job.JobId, "submit", $"Đã gửi trong side chat {page.Url}.", ct).ConfigureAwait(false);
             if (progress is not null) await progress(50, "Đang chờ MuseAI tạo video").ConfigureAwait(false);
 
-            await page.WaitForFunctionAsync(
-                "() => !document.querySelector('[aria-label=\"Assistant is typing\"]') && !!document.querySelector(\"[data-message-role='assistant'] video\")",
-                null, new() { Timeout = RenderTimeoutMs }).WaitAsync(ct).ConfigureAwait(false);
+            await WaitForVideoAsync(page, ct).ConfigureAwait(false);
             await _activity.WriteAsync(job.JobId, "result", "MuseAI đã trả về video.", ct).ConfigureAwait(false);
 
-            await page.Locator("button[aria-label^='Open animated video']").Last.ClickAsync().WaitAsync(ct).ConfigureAwait(false);
-            var download = await page.RunAndWaitForDownloadAsync(
-                () => page.Locator("[role=dialog]").GetByRole(AriaRole.Button, new() { Name = "Download" }).ClickAsync(),
-                new() { Timeout = 120000 }).WaitAsync(ct).ConfigureAwait(false);
-
-            // Playwright's temp path has no extension; save with .mp4 so the asset service accepts it.
-            var downloaded = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.mp4");
-            try
-            {
-                await download.SaveAsAsync(downloaded).WaitAsync(ct).ConfigureAwait(false);
-                var asset = await _assets.SaveVideoAssetAsync(job.ProjectId, downloaded, job.StorageRootId, ct).ConfigureAwait(false);
-                await _activity.WriteAsync(job.JobId, "result", "Đã lưu video MuseAI thành Asset.", ct).ConfigureAwait(false);
-                return new(true, ResultReference: asset.AssetId, SideEffectSubmitted: true);
-            }
-            finally
-            {
-                File.Delete(downloaded);
-            }
+            var assetId = await DownloadVideoAssetAsync(page, job.JobId, job.ProjectId, job.StorageRootId, ct).ConfigureAwait(false);
+            return new(true, ResultReference: assetId, SideEffectSubmitted: true);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -156,10 +146,129 @@ public sealed class MuseAiPlaywrightAutomation
         }
     }
 
+    /// <summary>
+    /// Reopens the job's saved side chat and downloads its video without sending anything. Does not change the job
+    /// state; the caller reconciles it once the Asset exists.
+    /// </summary>
+    public async Task<JobExecutionResult> RecoverRenderAsync(string jobId, string profileId, string projectId, string storageRootId, CancellationToken ct)
+    {
+        var threadUrl = await ReadThreadUrlAsync(jobId, ct).ConfigureAwait(false);
+        if (threadUrl is null)
+            return new(false, ReasonCode: "invalid_input", ErrorMessage: "Không có URL side chat MuseAI hợp lệ đã lưu cho tác vụ này.");
+
+        try
+        {
+            ct.ThrowIfCancellationRequested();
+            // Sau khi mở lại app profile có thể chưa chạy: gatekeeper mở đúng profile và cấp tab lease (cùng đường với scheduler) trước khi tải.
+            using var lease = await _gatekeeper.TryAcquireTabLeaseAsync(profileId, JobTaskType.VideoRender, jobId, ct).ConfigureAwait(false);
+            if (lease is null)
+                return new(false, ReasonCode: "automation_blocked", ErrorMessage: "Profile MuseAI đang bận tác vụ khác. Hãy thử khôi phục lại sau.");
+
+            var handle = _browser.TryGetContext(profileId)
+                ?? throw new InvalidOperationException("Profile MuseAI không có browser đang hoạt động sau khi cấp lease.");
+
+            IPage? page = null;
+            try
+            {
+                page = await handle.Context.NewPageAsync().ConfigureAwait(false);
+                await page.GotoAsync(threadUrl, new() { WaitUntil = WaitUntilState.DOMContentLoaded, Timeout = 30000 }).WaitAsync(ct).ConfigureAwait(false);
+                await WaitForVideoAsync(page, ct).ConfigureAwait(false);
+                var assetId = await DownloadVideoAssetAsync(page, jobId, projectId, storageRootId, ct).ConfigureAwait(false);
+                return new(true, ResultReference: assetId, SideEffectSubmitted: true);
+            }
+            finally
+            {
+                if (page is not null && !page.IsClosed)
+                    try { await page.CloseAsync().ConfigureAwait(false); } catch { }
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            await RecordFailureAsync(jobId, "Khôi phục video MuseAI thất bại.").ConfigureAwait(false);
+            return new(false, ReasonCode: "automation_blocked", ErrorMessage: $"Không khôi phục được video MuseAI: {ex.Message}");
+        }
+    }
+
+    /// <summary>True when the URL is a MuseAI side chat (<c>https://muse.ai/thread/&lt;uuid&gt;</c>).</summary>
+    public static bool IsSideChatUrl(string? url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps &&
+        uri.Host.Equals("muse.ai", StringComparison.OrdinalIgnoreCase) && ThreadUrl.IsMatch(uri.AbsolutePath);
+
+    private async Task WaitForVideoAsync(IPage page, CancellationToken ct)
+    {
+        await page.WaitForFunctionAsync(VideoReadyScript, null, new() { Timeout = RenderTimeoutMs }).WaitAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Opens the video preview, downloads it and stores it as the Project's Video Asset.</summary>
+    private async Task<string> DownloadVideoAssetAsync(IPage page, string jobId, string projectId, string storageRootId, CancellationToken ct)
+    {
+        // Match the accessible name, not aria-label: the button's label may come from its text or title.
+        await page.GetByRole(AriaRole.Button, new() { NameRegex = OpenVideoName })
+            .Last.ClickAsync().WaitAsync(ct).ConfigureAwait(false);
+        var download = await page.RunAndWaitForDownloadAsync(
+            () => page.Locator("[role=dialog]").GetByRole(AriaRole.Button, new() { Name = "Download" }).ClickAsync(),
+            new() { Timeout = 120000 }).WaitAsync(ct).ConfigureAwait(false);
+
+        // Playwright's temp path has no extension; save with .mp4 so the asset service accepts it.
+        var downloaded = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.mp4");
+        try
+        {
+            await download.SaveAsAsync(downloaded).WaitAsync(ct).ConfigureAwait(false);
+            var asset = await _assets.SaveVideoAssetAsync(projectId, downloaded, storageRootId, ct).ConfigureAwait(false);
+            await _activity.WriteAsync(jobId, "result", "Đã lưu video MuseAI thành Asset.", ct).ConfigureAwait(false);
+            return asset.AssetId;
+        }
+        finally
+        {
+            await TryDeleteTempDownloadAsync(jobId, downloaded).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Stores the side chat URL right after send, so a later reconcile can reopen this chat without resending.</summary>
+    private async Task SaveThreadUrlAsync(string jobId, string threadUrl, CancellationToken ct)
+    {
+        await using var db = new TiToAIDbContext(_dbOptions);
+        db.AppSettings.Add(new AppSetting
+        {
+            Key = ThreadUrlKeyPrefix + jobId,
+            Value = threadUrl,
+            UpdatedAtUtc = DateTimeOffset.UtcNow.ToString("o")
+        });
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+    }
+
+    private async Task<string?> ReadThreadUrlAsync(string jobId, CancellationToken ct)
+    {
+        await using var db = new TiToAIDbContext(_dbOptions);
+        var url = await db.AppSettings.AsNoTracking()
+            .Where(s => s.Key == ThreadUrlKeyPrefix + jobId)
+            .Select(s => s.Value)
+            .FirstOrDefaultAsync(ct).ConfigureAwait(false);
+        return IsSideChatUrl(url) ? url : null;
+    }
+
     private async Task RecordFailureAsync(string jobId, string message)
     {
         try { await _activity.WriteAsync(jobId, "error", message, CancellationToken.None).ConfigureAwait(false); }
         catch { /* Preserve the original provider error. */ }
+    }
+
+    /// <summary>Dọn tệp tạm sau khi video đã thành Asset (best effort). Lỗi xóa chỉ ghi nhật ký, không đổi kết quả render.</summary>
+    private async Task TryDeleteTempDownloadAsync(string jobId, string path)
+    {
+        try
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+        catch (Exception ex)
+        {
+            try { await _activity.WriteAsync(jobId, "cleanup", $"Không xóa được tệp tạm '{path}': {ex.Message}", CancellationToken.None).ConfigureAwait(false); }
+            catch { /* Nhật ký chỉ phục vụ theo dõi. */ }
+        }
     }
 
     private static string ReadPrompt(string? snapshot)

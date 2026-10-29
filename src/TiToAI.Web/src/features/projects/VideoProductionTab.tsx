@@ -780,8 +780,7 @@ export function VideoProductionTab({
       <StoryboardPanel projectId={projectId} />
       {/* BẢNG KỊCH BẢN & PROMPT VIDEO AI (DẠNG BẢNG - REVIEW & ACTIONS) */}
       {/* ============================================================== */}
-      {contentItems.length > 0 && (
-        <Card className="border-primary/30 shadow-xs">
+      <Card className="border-primary/30 shadow-xs">
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
               <div>
@@ -896,12 +895,18 @@ export function VideoProductionTab({
                       </TableRow>
                     );
                   })}
+                  {contentItems.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={8} className="text-center text-sm text-muted-foreground py-8">
+                        Chưa có cảnh nào. Bảng sẽ hiện khi prompt video được lưu.
+                      </TableCell>
+                    </TableRow>
+                  )}
                 </TableBody>
               </Table>
             </div>
           </CardContent>
         </Card>
-      )}
 
       {/* ============================================================== */}
       {/* 1. MÀN HÌNH CHÍNH: CHUẨN BỊ (PREPARING)                         */}

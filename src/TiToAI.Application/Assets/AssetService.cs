@@ -28,6 +28,9 @@ public class AssetNotFoundException : Exception
 /// Dịch vụ quản lý tài nguyên media (Audio MP3/WAV, Ảnh tham chiếu, Video)
 /// theo docs/plans/implementation/T09b-media-assets.md và SETTINGS_PLAN.md §2–3.
 /// </summary>
+/// <summary>Kết quả đối soát tệp: số tệp staging đã dọn và tệp trong root không có metadata (đường dẫn tương đối).</summary>
+public sealed record AssetFileReconcileReport(int StagingFilesRemoved, IReadOnlyList<string> OrphanRelativePaths);
+
 public sealed class AssetService
 {
     private static readonly HashSet<string> AllowedAudioExtensions = new(StringComparer.OrdinalIgnoreCase)
@@ -128,7 +131,7 @@ public sealed class AssetService
         scene.AudioAssetId = assetId;
         scene.UpdatedAtUtc = now;
 
-        await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        await SaveAssetMetadataAsync(dbContext, audioRootPath, relativePath, cancellationToken).ConfigureAwait(false);
 
         return new ImportAudioResponse(ToDto(asset));
     }
@@ -204,7 +207,7 @@ public sealed class AssetService
         scene.ImageAssetId = assetId;
         scene.UpdatedAtUtc = now;
 
-        await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        await SaveAssetMetadataAsync(dbContext, imagesRootPath, relativePath, cancellationToken).ConfigureAwait(false);
 
         return new SelectReferenceImageResponse(ToDto(asset));
     }
@@ -248,7 +251,7 @@ public sealed class AssetService
             CreatedAtUtc = DateTimeOffset.UtcNow.ToString("O")
         };
         dbContext.Assets.Add(asset);
-        await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        await SaveAssetMetadataAsync(dbContext, videoRootPath, relativePath, cancellationToken).ConfigureAwait(false);
         return ToDto(asset);
     }
 
@@ -354,6 +357,98 @@ public sealed class AssetService
     private static AssetValidationException InvalidMp4() =>
         new("Tệp video tải về không phải MP4 hợp lệ hoặc không có track hình ảnh với thời lượng.");
 
+    /// <summary>
+    /// Đối soát sau crash: xóa tệp staging bị bỏ dở quá 1 ngày và liệt kê tệp trong root không có metadata Asset.
+    /// Không tự xóa tệp đã chốt: DB có thể bị reset trong khi tệp vẫn còn.
+    /// </summary>
+    public async Task<AssetFileReconcileReport> ReconcileFilesAsync(CancellationToken cancellationToken = default)
+    {
+        var knownByRoot = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        await using (var dbContext = new TiToAIDbContext(_dbOptions))
+        {
+            var rows = await dbContext.Assets.AsNoTracking()
+                .Select(a => new { a.StorageRootId, a.RelativePath })
+                .ToListAsync(cancellationToken).ConfigureAwait(false);
+            foreach (var row in rows)
+            {
+                if (!knownByRoot.TryGetValue(row.StorageRootId, out var known))
+                {
+                    knownByRoot[row.StorageRootId] = known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                }
+                known.Add(row.RelativePath.Replace('\\', '/'));
+            }
+        }
+
+        var stagingRemoved = 0;
+        var orphans = new List<string>();
+        var staleBefore = DateTime.UtcNow.AddDays(-1);
+        // Duyệt mọi root đã đăng ký, kể cả root chưa có Asset (crash lần import đầu hoặc DB bị reset).
+        var rootIds = (await _rootRegistry.GetRegisteredRootIdsAsync(cancellationToken).ConfigureAwait(false))
+            .Union(knownByRoot.Keys, StringComparer.Ordinal);
+        foreach (var rootId in rootIds)
+        {
+            string rootPath;
+            try
+            {
+                rootPath = await _rootRegistry.ResolveRootPathAsync(rootId, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                continue; // Root không còn đăng ký: bỏ qua, không đoán đường dẫn.
+            }
+            if (!Directory.Exists(rootPath)) continue;
+
+            var known = knownByRoot.TryGetValue(rootId, out var rootKnown)
+                ? rootKnown
+                : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            var stagingDir = Path.Combine(rootPath, ".staging");
+            // Junction/symlink .staging có thể trỏ ra ngoài root: không dọn qua liên kết.
+            if (Directory.Exists(stagingDir) && !IsReparsePoint(stagingDir))
+            {
+                foreach (var file in Directory.EnumerateFiles(stagingDir))
+                {
+                    if (File.GetLastWriteTimeUtc(file) > staleBefore) continue;
+                    try
+                    {
+                        File.Delete(file);
+                        stagingRemoved++;
+                    }
+                    catch (IOException)
+                    {
+                        // Tệp đang bị khóa: lần đối soát sau sẽ thử lại.
+                    }
+                }
+            }
+
+            foreach (var file in Directory.EnumerateFiles(rootPath, "*", SearchOption.AllDirectories))
+            {
+                var relative = Path.GetRelativePath(rootPath, file).Replace('\\', '/');
+                if (relative.StartsWith(".staging/", StringComparison.Ordinal)) continue;
+                if (!known.Contains(relative)) orphans.Add(relative);
+            }
+        }
+
+        return new AssetFileReconcileReport(stagingRemoved, orphans);
+    }
+
+    private static bool IsReparsePoint(string path) =>
+        (new DirectoryInfo(path).Attributes & FileAttributes.ReparsePoint) != 0;
+
+    /// <summary>Ghi metadata Asset; nếu commit lỗi thì xóa tệp vừa chuyển vào root để không thành tệp mồ côi.</summary>
+    private async Task SaveAssetMetadataAsync(TiToAIDbContext dbContext, string storageRootPath, string relativePath, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            _fileStore.DeleteStoredFile(storageRootPath, relativePath);
+            throw;
+        }
+    }
+
     public async Task<UploadAssetResponse> UploadAssetAsync(
         UploadAssetRequest request,
         CancellationToken cancellationToken = default)
@@ -363,14 +458,7 @@ public sealed class AssetService
         string? projectId = null;
         if (!string.IsNullOrWhiteSpace(request.ProjectId))
         {
-            try
-            {
-                projectId = NormalizeGuid(request.ProjectId, nameof(request.ProjectId));
-            }
-            catch
-            {
-                projectId = null;
-            }
+            projectId = NormalizeGuid(request.ProjectId, nameof(request.ProjectId));
         }
 
         var assetType = string.IsNullOrWhiteSpace(request.AssetType) ? "Image" : request.AssetType.Trim();
@@ -393,7 +481,8 @@ public sealed class AssetService
 
             if (!projectExists)
             {
-                projectId = null;
+                // Không lưu thành asset toàn app: người dùng sẽ không thấy tệp trong Project đã chọn.
+                throw new AssetValidationException($"Không tìm thấy Project '{projectId}'. Tệp chưa được tải lên.");
             }
         }
 
@@ -498,7 +587,7 @@ public sealed class AssetService
             };
 
             dbContext.Assets.Add(asset);
-            await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            await SaveAssetMetadataAsync(dbContext, storageRootPath, relativePath, cancellationToken).ConfigureAwait(false);
 
             return new UploadAssetResponse(ToDto(asset));
         }
@@ -553,7 +642,7 @@ public sealed class AssetService
             };
 
             dbContext.Assets.Add(asset);
-            await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            await SaveAssetMetadataAsync(dbContext, storageRootPath, relativePath, cancellationToken).ConfigureAwait(false);
 
             return new UploadAssetResponse(ToDto(asset));
         }

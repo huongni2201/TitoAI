@@ -65,6 +65,7 @@ export const bridgeCommandAllowlist = [
   "job.list_history",
   "job.cancel",
   "job.reconcile",
+  "job.recover_output",
   "job.resume",
   "job.retry",
   "job.get_handoff",

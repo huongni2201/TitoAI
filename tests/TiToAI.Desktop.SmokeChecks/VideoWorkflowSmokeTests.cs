@@ -1318,7 +1318,8 @@ public static class VideoWorkflowSmokeTests
 
                 // Mô phỏng AI Writer hoàn tất viết prompt chuyển động
                 promptJob.State = JobState.Succeeded;
-                promptJob.ResultText = "Camera slow-motion 60fps trượt nhẹ ngang qua chi tiết cổ áo lụa xanh.";
+                // Phản hồi phải là JSON có video_prompt; văn bản thường không còn được dùng làm prompt render.
+                promptJob.ResultText = "{\"video_prompt\": \"Camera slow-motion 60fps trượt nhẹ ngang qua chi tiết cổ áo lụa xanh.\"}";
                 await db.SaveChangesAsync();
             }
 

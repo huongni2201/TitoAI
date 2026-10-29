@@ -203,6 +203,8 @@ public sealed record JobReconcileResponseData(
     long Revision = 0
 );
 
+public sealed record JobRecoverOutputRequest(string JobId);
+
 public sealed record JobProgressUpdatedPayload(
     string JobId,
     string ProjectId,

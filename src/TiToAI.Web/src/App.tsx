@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, useCallback } from "react";
 import { ThemeProvider, useTheme } from "./context/ThemeContext";
 import { bridgeClient } from "./services/bridgeClient";
 import {
@@ -16,7 +16,6 @@ import {
 import { BrandLogo } from "@/components/BrandLogo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { SettingsPage } from "./features/settings/SettingsPage";
 import { QueueDrawer } from "./components/QueueDrawer";
 import { jobApi } from "./features/jobs/jobApi";
 import type { JobSummaryDto, JobDetailDto } from "./features/jobs/jobTypes";
@@ -24,9 +23,7 @@ import { ProjectListPage } from "./features/projects/ProjectListPage";
 import { ProjectPage } from "./features/projects/ProjectPage";
 import { PromptTemplateManager } from "./features/prompts";
 import { LibraryPage } from "./features/library/LibraryPage";
-import { AnalyticsPage } from "./features/analytics/AnalyticsPage";
 import { JobProgressPage } from "./features/jobs/JobProgressPage";
-import { PublishingPage } from "./features/publishing/PublishingPage";
 import { PublishingNavItem } from "./features/publishing/PublishingNavItem";
 import { createPublishingApi } from "./features/publishing/publishingApi";
 import { projectApi } from "./features/projects/projectApi";
@@ -45,10 +42,21 @@ export type ActiveRoute =
 const publishingApi = createPublishingApi((command, payload, options) =>
   bridgeClient.invoke(command, payload, options));
 
+// Các màn hình ít dùng chỉ tải khi mở lần đầu, giảm JS khởi động của trang Dự án.
+const SettingsPage = lazy(() => import("./features/settings/SettingsPage").then(m => ({ default: m.SettingsPage })));
+const AnalyticsPage = lazy(() => import("./features/analytics/AnalyticsPage").then(m => ({ default: m.AnalyticsPage })));
+const PublishingPage = lazy(() => import("./features/publishing/PublishingPage").then(m => ({ default: m.PublishingPage })));
+
 function AppContent() {
   const { preference, effectiveTheme, toggleTheme } = useTheme();
 
   const [activeRoute, setActiveRoute] = useState<ActiveRoute>("projects");
+  // Đã mở một lần thì giữ mounted (ẩn bằng class) để bảo toàn bản nháp, như trước khi lazy-load.
+  const [loadedRoutes, setLoadedRoutes] = useState<ReadonlySet<ActiveRoute>>(() => new Set());
+  useEffect(() => {
+    setLoadedRoutes(prev => (prev.has(activeRoute) ? prev : new Set(prev).add(activeRoute)));
+  }, [activeRoute]);
+  const isLoaded = (route: ActiveRoute) => activeRoute === route || loadedRoutes.has(route);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [isQueueOpen, setIsQueueOpen] = useState(false);
   const [publishTarget, setPublishTarget] = useState<{ projectId: string; revision: number } | null>(null);
@@ -406,10 +414,14 @@ function AppContent() {
         <main className="flex-1 overflow-y-auto bg-background p-6">
           {/* MÀN HÌNH CÀI ĐẶT (TRANG TRONG APP SHELL 4 TAB CON) */}
           <div className={activeRoute === "settings" ? "block" : "hidden"}>
-            <SettingsPage
-              onDirtyChange={setIsSettingsDirty}
-              accountsNavigationSignal={accountsNavigationSignal}
-            />
+            {isLoaded("settings") && (
+              <Suspense fallback={null}>
+                <SettingsPage
+                  onDirtyChange={setIsSettingsDirty}
+                  accountsNavigationSignal={accountsNavigationSignal}
+                />
+              </Suspense>
+            )}
           </div>
 
           {/* MÀN HÌNH DỰ ÁN & PHÂN CẢNH (PROJECTS & PROJECT-DETAIL) */}
@@ -460,18 +472,26 @@ function AppContent() {
           </div>
 
           <div className={activeRoute === "analytics" ? "block" : "hidden"}>
-            <AnalyticsPage active={activeRoute === "analytics"} />
+            {isLoaded("analytics") && (
+              <Suspense fallback={null}>
+                <AnalyticsPage active={activeRoute === "analytics"} />
+              </Suspense>
+            )}
           </div>
 
           <div className={activeRoute === "publishing" ? "block" : "hidden"}>
-            <PublishingPage
-              active={activeRoute === "publishing"}
-              api={publishingApi}
-              initialProjectId={publishTarget?.projectId}
-              selectionRevision={publishTarget?.revision}
-              onOpenAccounts={handleNavigateToSettingsAccounts}
-              onReviewVideo={handleReviewPublishedVideo}
-            />
+            {isLoaded("publishing") && (
+              <Suspense fallback={null}>
+                <PublishingPage
+                  active={activeRoute === "publishing"}
+                  api={publishingApi}
+                  initialProjectId={publishTarget?.projectId}
+                  selectionRevision={publishTarget?.revision}
+                  onOpenAccounts={handleNavigateToSettingsAccounts}
+                  onReviewVideo={handleReviewPublishedVideo}
+                />
+              </Suspense>
+            )}
           </div>
 
           <div className={activeRoute === "job-progress" ? "block" : "hidden"}>

@@ -125,6 +125,10 @@ public sealed class AssetFileStore
         return await SaveFileAsync(storageRootPath, relativePath, fileStream, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Xóa tệp đã chốt trong root khi metadata không ghi được. Lỗi xóa chỉ bỏ qua để không che lỗi gốc.</summary>
+    public void DeleteStoredFile(string storageRootPath, string relativePath) =>
+        SafeDeleteFile(StoragePathGuard.CombineAndVerify(storageRootPath, relativePath));
+
     private static void SafeDeleteFile(string path)
     {
         try

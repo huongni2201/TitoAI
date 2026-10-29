@@ -241,6 +241,10 @@ public static class ContentCandidateParser
         {
             using var doc = JsonDocument.Parse(jsonPayload);
             var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                throw new JsonException("Phản hồi không phải đối tượng JSON.");
+            }
 
             string GetString(params string[] propertyNames)
             {
@@ -270,6 +274,10 @@ public static class ContentCandidateParser
             {
                 videoScript = rawText.Length > 200 ? rawText[..200] : rawText;
             }
+            if (string.IsNullOrWhiteSpace(videoPrompt))
+            {
+                errors.Add("Phản hồi thiếu video_prompt: không có prompt để render.");
+            }
 
             var item = new VideoContentItemDto(
                 Id: Guid.NewGuid().ToString("D").ToLowerInvariant(),
@@ -289,11 +297,11 @@ public static class ContentCandidateParser
                 UpdatedAtUtc: nowIso
             );
 
-            return new ContentCandidateResult<VideoContentItemDto>(rawText, item, errors, true);
+            return new ContentCandidateResult<VideoContentItemDto>(rawText, item, errors, errors.Count == 0);
         }
         catch (JsonException ex)
         {
-            // Trích xuất fallback từ văn bản thường nếu AI không trả JSON hoàn hảo
+            // Văn bản thường không phải prompt: giữ nguyên để người dùng xem/sửa, không dùng làm prompt render.
             var item = new VideoContentItemDto(
                 Id: Guid.NewGuid().ToString("D").ToLowerInvariant(),
                 ProjectId: projectId,
@@ -302,7 +310,7 @@ public static class ContentCandidateParser
                 Idea: string.Empty,
                 Hook: string.Empty,
                 VideoScript: rawText.Trim(),
-                VideoPrompt: rawText.Trim(),
+                VideoPrompt: string.Empty,
                 TikTokContent: string.Empty,
                 ImageAssetId: imageAssetId,
                 VideoAssetId: null,
@@ -311,8 +319,8 @@ public static class ContentCandidateParser
                 CreatedAtUtc: nowIso,
                 UpdatedAtUtc: nowIso
             );
-            errors.Add($"Cảnh báo phân giải JSON (fallback văn bản): {ex.Message}");
-            return new ContentCandidateResult<VideoContentItemDto>(rawText, item, errors, true);
+            errors.Add($"Phản hồi không phải JSON hợp lệ, cần người dùng kiểm tra: {ex.Message}");
+            return new ContentCandidateResult<VideoContentItemDto>(rawText, item, errors, false);
         }
     }
 }

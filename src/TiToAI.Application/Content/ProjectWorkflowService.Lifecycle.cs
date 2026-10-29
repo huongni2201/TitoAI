@@ -306,7 +306,14 @@ public sealed partial class ProjectWorkflowService
         CancellationToken cancellationToken = default)
     {
         var normalizedProjectId = NormalizeAndValidateGuid(projectId, nameof(projectId));
+        return await RunUnderProjectGateAsync(normalizedProjectId,
+            () => ResumeWorkflowLockedAsync(normalizedProjectId, cancellationToken), cancellationToken).ConfigureAwait(false);
+    }
 
+    private async Task<ProjectWorkflowConfigDto> ResumeWorkflowLockedAsync(
+        string normalizedProjectId,
+        CancellationToken cancellationToken)
+    {
         var config = await GetWorkflowConfigAsync(normalizedProjectId, cancellationToken).ConfigureAwait(false);
         var nowIso = DateTimeOffset.UtcNow.ToString("o");
         var updated = config with
@@ -348,7 +355,7 @@ public sealed partial class ProjectWorkflowService
                 await EnqueueJobsForExistingScenesAsync(dbContext, normalizedProjectId, updated, eligibleScenes, cancellationToken).ConfigureAwait(false);
             }
 
-            await RunWorkflowContinuationSweepAsync(cancellationToken).ConfigureAwait(false);
+            await RunContinuationIntentsLockedAsync(normalizedProjectId, cancellationToken).ConfigureAwait(false);
         }
 
         _jobService?.NotifyWorkflowRunReady();
@@ -365,11 +372,23 @@ public sealed partial class ProjectWorkflowService
     {
         var normalizedProjectId = NormalizeAndValidateGuid(projectId, nameof(projectId));
 
+        // Giữ khóa Project suốt lượt hủy: apply/continuation đang chờ sẽ thấy run đã hủy và không đưa job mới vào hàng đợi.
+        return await RunUnderProjectGateAsync(normalizedProjectId,
+            () => CancelWorkflowLockedAsync(normalizedProjectId, cancellationToken), cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<ProjectWorkflowConfigDto> CancelWorkflowLockedAsync(
+        string normalizedProjectId,
+        CancellationToken cancellationToken)
+    {
         var config = await GetWorkflowConfigAsync(normalizedProjectId, cancellationToken).ConfigureAwait(false);
         var nowIso = DateTimeOffset.UtcNow.ToString("o");
+
+        // Hủy job trước khi báo Idle: job không hủy được thì run dừng ở Paused để đối soát, không báo hủy giả.
+        var unresolvedJobIds = await CancelActiveWorkflowJobsAsync(normalizedProjectId, cancellationToken).ConfigureAwait(false);
         var updated = config with
         {
-            RunState = WorkflowRunState.Idle,
+            RunState = unresolvedJobIds.Count == 0 ? WorkflowRunState.Idle : WorkflowRunState.Paused,
             CurrentRunId = null,
             UpdatedAtUtc = nowIso
         };
@@ -415,25 +434,56 @@ public sealed partial class ProjectWorkflowService
 
         await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
-        // Hủy các job đang queued/reserved/running/awaitingUser của project này để giải phóng slot an toàn (PV-R4)
-        if (_jobService != null)
+        if (unresolvedJobIds.Count > 0)
         {
-            var activeJobIds = await dbContext.Jobs
-                .Where(j => j.ProjectId == normalizedProjectId && (j.State == JobState.Queued || j.State == JobState.Reserved || j.State == JobState.Running || j.State == JobState.AwaitingUser))
-                .Select(j => j.Id)
-                .ToListAsync(cancellationToken).ConfigureAwait(false);
-
-            foreach (var jId in activeJobIds)
-            {
-                try
-                {
-                    await _jobService.CancelAsync(jId, cancellationToken).ConfigureAwait(false);
-                }
-                catch { }
-            }
+            throw new ProjectWorkflowCancelIncompleteException(unresolvedJobIds);
         }
 
         return updated;
+    }
+
+    /// <summary>
+    /// Hủy các job queued/reserved/running/awaitingUser của Project (PV-R4). Trả về job chưa hủy được để báo lỗi và đối soát.
+    /// </summary>
+    private async Task<List<string>> CancelActiveWorkflowJobsAsync(string projectId, CancellationToken cancellationToken)
+    {
+        var unresolved = new List<string>();
+        if (_jobService == null) return unresolved;
+
+        List<string> activeJobIds;
+        await using (var jobDb = new TiToAIDbContext(_dbOptions))
+        {
+            activeJobIds = await jobDb.Jobs.AsNoTracking()
+                .Where(j => j.ProjectId == projectId && (j.State == JobState.Queued || j.State == JobState.Reserved || j.State == JobState.Running || j.State == JobState.AwaitingUser))
+                .Select(j => j.Id)
+                .ToListAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        foreach (var jobId in activeJobIds)
+        {
+            try
+            {
+                var response = await _jobService.CancelAsync(jobId, cancellationToken).ConfigureAwait(false);
+                if (response.State != JobState.Canceled)
+                {
+                    unresolved.Add(jobId); // Job đã gửi side effect vẫn chạy: chờ đối soát.
+                }
+            }
+            catch (JobConcurrencyConflictException)
+            {
+                // Job đã kết thúc trước khi hủy: không còn gì để dừng.
+            }
+            catch (JobNotFoundException)
+            {
+                // Job đã bị xóa: không còn gì để dừng.
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                unresolved.Add(jobId);
+            }
+        }
+
+        return unresolved;
     }
 
     /// <summary>

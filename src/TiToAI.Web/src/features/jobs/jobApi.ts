@@ -13,6 +13,7 @@ import type {
   JobResumeResponseData,
   JobReconcileRequest,
   JobReconcileResponseData,
+  JobRecoverOutputRequest,
   JobStateChangedPayload,
   JobProgressUpdatedPayload,
   JobRetryRequest,
@@ -20,6 +21,9 @@ import type {
   JobListHistoryRequest,
   JobListHistoryResponseData,
 } from "./jobTypes";
+
+// Backend chờ video MuseAI tối đa 30 phút rồi mới tải về; timeout phía UI phải dài hơn để không báo lỗi giả khi backend vẫn chạy.
+const RECOVER_OUTPUT_TIMEOUT_MS = 35 * 60 * 1000;
 
 export const jobApi = {
   /**
@@ -76,6 +80,18 @@ export const jobApi = {
     return await bridgeClient.invoke<JobReconcileResponseData>(
       "job.reconcile",
       payload,
+    );
+  },
+
+  /**
+   * Khôi phục video render MuseAI từ side chat đã lưu (không gửi lại prompt), rồi đánh dấu tác vụ thành công
+   */
+  async recoverOutput(jobId: string): Promise<JobReconcileResponseData> {
+    const payload: JobRecoverOutputRequest = { jobId };
+    return await bridgeClient.invoke<JobReconcileResponseData>(
+      "job.recover_output",
+      payload,
+      { timeoutMs: RECOVER_OUTPUT_TIMEOUT_MS },
     );
   },
 

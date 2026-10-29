@@ -172,6 +172,26 @@ public sealed class StorageRootRegistry
     }
 
     /// <summary>
+    /// Liệt kê mọi Root đã đăng ký (kể cả root chưa có Asset nào) để đối soát sau crash hoặc reset DB.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> GetRegisteredRootIdsAsync(CancellationToken cancellationToken = default)
+    {
+        await using var dbContext = new TiToAIDbContext(_dbOptions);
+        var keys = await dbContext.AppSettings
+            .AsNoTracking()
+            .Where(s => s.Key.StartsWith(KeyRootsPrefix))
+            .Select(s => s.Key)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return keys
+            .Select(k => k[KeyRootsPrefix.Length..])
+            .Concat(new[] { RootDefaultDocsId, RootDefaultImagesId, RootDefaultVideosId, RootInternalAudioId })
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+    }
+
+    /// <summary>
     /// Lấy ảnh chụp trạng thái các Root hiện hành của hệ thống (Documents, Images, Videos, Audio).
     /// </summary>
     public async Task<StorageRootsSnapshot> GetCurrentRootsAsync(CancellationToken cancellationToken = default)

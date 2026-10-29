@@ -84,6 +84,12 @@ public static class StorageAndAssetSmokeTests
             // Regression 6: Upgrade DB cũ có Job thật & foreign_key_check
             await TestUpgradeLegacyDbWithRealJobsAsync(testWorkDir);
 
+            // Regression 7: Upload vào Project không tồn tại bị từ chối; đối soát dọn staging và báo tệp mồ côi
+            await TestUploadRejectsMissingProjectAndReconcileFilesAsync(assetService, rootRegistry);
+
+            // Regression 8: Đối soát duyệt root chưa có Asset và không dọn staging qua junction
+            await TestReconcileRegisteredRootsAndSkipStagingJunctionAsync(assetService, rootRegistry, testWorkDir);
+
             Console.WriteLine("=================================================================");
             Console.WriteLine("   TẤT CẢ KIỂM THỬ KHÓI VÀ REGRESSION T09 ĐÃ HOÀN TẤT THÀNH CÔNG! ");
             Console.WriteLine("=================================================================");
@@ -684,6 +690,96 @@ public static class StorageAndAssetSmokeTests
         Assert(!hasFkViolation, "PRAGMA foreign_key_check phải trả về 0 vi phạm trên DB mới!");
 
         Console.WriteLine("    -> DB mới có PRAGMA foreign_key_check = 0 vi phạm: PASS");
+    }
+
+    private static async Task TestUploadRejectsMissingProjectAndReconcileFilesAsync(
+        AssetService assetService,
+        StorageRootRegistry rootRegistry)
+    {
+        Console.WriteLine("\n[T09-7] Kiểm thử upload vào Project không tồn tại bị từ chối và đối soát tệp...");
+        var payload = Convert.ToBase64String(new byte[] { 1, 2, 3, 4 });
+
+        var rejected = false;
+        try
+        {
+            await assetService.UploadAssetAsync(new UploadAssetRequest(
+                ProjectId: Guid.NewGuid().ToString("D"), AssetType: "Image", FileName: "a.png", Base64Data: payload));
+        }
+        catch (AssetValidationException)
+        {
+            rejected = true;
+        }
+        Assert(rejected, "Upload vào Project không tồn tại phải bị từ chối, không lưu thành asset toàn app.");
+
+        // Một upload hợp lệ để root có metadata; sau đó tạo tệp mồ côi và tệp staging bị bỏ dở quá 1 ngày.
+        await assetService.UploadAssetAsync(new UploadAssetRequest(AssetType: "Image", FileName: "b.png", Base64Data: payload));
+        var imagesRoot = (await rootRegistry.GetCurrentRootsAsync()).ImagesPath;
+        var orphanRelative = "orphan-check/images/stray.png";
+        var orphanPath = Path.Combine(imagesRoot, orphanRelative.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(orphanPath)!);
+        File.WriteAllBytes(orphanPath, new byte[] { 9 });
+
+        var stagingDir = Path.Combine(imagesRoot, ".staging");
+        Directory.CreateDirectory(stagingDir);
+        var staleTmp = Path.Combine(stagingDir, "stale.tmp");
+        File.WriteAllBytes(staleTmp, new byte[] { 7 });
+        File.SetLastWriteTimeUtc(staleTmp, DateTime.UtcNow.AddDays(-2));
+
+        var report = await assetService.ReconcileFilesAsync();
+        Assert(!File.Exists(staleTmp), "Đối soát phải dọn tệp staging bị bỏ dở quá 1 ngày.");
+        Assert(report.StagingFilesRemoved >= 1, "Báo cáo đối soát phải đếm tệp staging đã dọn.");
+        Assert(report.OrphanRelativePaths.Contains(orphanRelative), "Đối soát phải báo tệp không có metadata Asset.");
+        Assert(File.Exists(orphanPath), "Đối soát không được tự xóa tệp đã chốt.");
+
+        Console.WriteLine("    -> Từ chối Project không tồn tại và đối soát tệp: PASS");
+    }
+
+    private static async Task TestReconcileRegisteredRootsAndSkipStagingJunctionAsync(
+        AssetService assetService,
+        StorageRootRegistry rootRegistry,
+        string testWorkDir)
+    {
+        Console.WriteLine("\n[T09-8] Kiểm thử đối soát duyệt mọi root đã đăng ký và không dọn staging qua junction...");
+        var current = await rootRegistry.GetCurrentRootsAsync();
+
+        // Root Documents mới đăng ký nhưng chưa có Asset nào: staging bỏ dở vẫn phải được dọn.
+        var docsRoot = Path.Combine(testWorkDir, "reconcile-docs-root");
+        var staleInDocs = Path.Combine(docsRoot, ".staging", "crash.tmp");
+        Directory.CreateDirectory(Path.GetDirectoryName(staleInDocs)!);
+        File.WriteAllBytes(staleInDocs, new byte[] { 5 });
+        File.SetLastWriteTimeUtc(staleInDocs, DateTime.UtcNow.AddDays(-2));
+
+        // Root Videos có .staging là junction trỏ ra ngoài root: tệp đích không được xóa.
+        var videosRoot = Path.Combine(testWorkDir, "reconcile-videos-root");
+        var outsideTarget = Path.Combine(testWorkDir, "reconcile-outside-target");
+        Directory.CreateDirectory(videosRoot);
+        Directory.CreateDirectory(outsideTarget);
+        var victim = Path.Combine(outsideTarget, "victim.tmp");
+        File.WriteAllBytes(victim, new byte[] { 6 });
+        File.SetLastWriteTimeUtc(victim, DateTime.UtcNow.AddDays(-2));
+        var junction = Path.Combine(videosRoot, ".staging");
+        using (var mklink = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+                   "cmd", $"/c mklink /J \"{junction}\" \"{outsideTarget}\"") { UseShellExecute = false, CreateNoWindow = true })!)
+        {
+            mklink.WaitForExit();
+            Assert(mklink.ExitCode == 0, "Không tạo được junction .staging cho fixture.");
+        }
+
+        try
+        {
+            await rootRegistry.UpdateRootsAsync(docsRoot, current.ImagesPath, videosRoot);
+            await assetService.ReconcileFilesAsync();
+
+            Assert(!File.Exists(staleInDocs), "Đối soát phải dọn staging của root đã đăng ký dù chưa có Asset.");
+            Assert(File.Exists(victim), "Đối soát không được xóa tệp nằm ngoài root qua junction .staging.");
+        }
+        finally
+        {
+            await rootRegistry.UpdateRootsAsync(current.DocumentsPath, current.ImagesPath, current.VideosPath);
+            if (Directory.Exists(junction)) Directory.Delete(junction); // xóa junction, không xóa đích
+        }
+
+        Console.WriteLine("    -> Đối soát root chưa có Asset và junction .staging: PASS");
     }
 
     private static void Assert(bool condition, string message)

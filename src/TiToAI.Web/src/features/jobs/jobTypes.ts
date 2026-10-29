@@ -165,6 +165,10 @@ export interface JobReconcileResponseData {
   revision?: number;
 }
 
+export interface JobRecoverOutputRequest {
+  jobId: string;
+}
+
 export interface JobRetryRequest {
   jobId: string;
   expectedRevision: number;

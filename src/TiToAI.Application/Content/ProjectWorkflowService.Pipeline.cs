@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using TiToAI.Application.Jobs;
@@ -12,6 +13,28 @@ namespace TiToAI.Application.Content;
 
 public sealed partial class ProjectWorkflowService
 {
+    // Static: nhiều instance ProjectWorkflowService cùng tiến trình phải dùng chung khóa theo Project.
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> ProjectRunGates = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Khóa theo Project cho mọi bước đưa job workflow vào hàng đợi (apply, continuation, render tự động, hủy, tiếp tục).
+    /// Bước nào đọc trạng thái run rồi enqueue đều chạy dưới khóa này, nên lượt hủy thấy đủ mọi job đã đưa vào.
+    /// Không lồng khóa: hàm đã giữ khóa phải gọi bản "Locked" thay vì bản công khai.
+    /// </summary>
+    private static async Task<T> RunUnderProjectGateAsync<T>(string projectId, Func<Task<T>> action, CancellationToken cancellationToken)
+    {
+        var gate = ProjectRunGates.GetOrAdd(projectId, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await action().ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
     /// <summary>
     /// Áp dụng kết quả hợp lệ của một Job hoàn tất thành công (Succeeded) và kích hoạt bước tiếp theo (§3.3).
     /// </summary>
@@ -19,6 +42,21 @@ public sealed partial class ProjectWorkflowService
     {
         if (string.IsNullOrWhiteSpace(jobId)) return false;
 
+        string? projectId;
+        await using (var lookupDb = new TiToAIDbContext(_dbOptions))
+        {
+            projectId = await lookupDb.Jobs.AsNoTracking()
+                .Where(j => j.Id == jobId)
+                .Select(j => j.ProjectId)
+                .FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
+        }
+        if (projectId == null) return false;
+
+        return await RunUnderProjectGateAsync(projectId, () => ApplyJobOutputLockedAsync(jobId, cancellationToken), cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<bool> ApplyJobOutputLockedAsync(string jobId, CancellationToken cancellationToken)
+    {
         await using var dbContext = new TiToAIDbContext(_dbOptions);
         var job = await dbContext.Jobs.FirstOrDefaultAsync(j => j.Id == jobId, cancellationToken).ConfigureAwait(false);
         if (job == null || job.State != JobState.Succeeded)
@@ -59,6 +97,7 @@ public sealed partial class ProjectWorkflowService
         });
 
         bool isPaused = config.RunState == WorkflowRunState.Paused;
+        bool promptRejected = false;
         WorkflowContinuationIntent? continuationIntent = null;
         var composer = new VideoWorkflowPromptComposer(_dbOptions);
 
@@ -144,7 +183,7 @@ public sealed partial class ProjectWorkflowService
                     await EnqueueJobsForExistingScenesAsync(
                         dbContext, job.ProjectId, config, createdScenes, cancellationToken,
                         deferDispatch: true).ConfigureAwait(false);
-                    await RunWorkflowContinuationSweepAsync(cancellationToken).ConfigureAwait(false);
+                    await RunContinuationIntentsLockedAsync(job.ProjectId, cancellationToken).ConfigureAwait(false);
                 }
                 else
                 {
@@ -282,6 +321,8 @@ public sealed partial class ProjectWorkflowService
                 scene.ImageAssetId);
 
             var contentItem = contentParsed.Candidate;
+            // Chỉ phản hồi đạt thẩm định mới thành prompt render; phản hồi lỗi giữ trong bảng để người dùng sửa.
+            promptRejected = !contentParsed.IsCompliant || string.IsNullOrWhiteSpace(contentItem?.VideoPrompt);
 
             // Kiểm tra stale: nếu user đã tự tay sửa PromptText trong khi job VideoPrompt đang chạy
             // Kết quả này không được ghi đè prompt đã sửa của user (PV-R3)
@@ -290,16 +331,24 @@ public sealed partial class ProjectWorkflowService
             {
                 // Giữ nguyên prompt của người dùng
             }
-            else
+            else if (!promptRejected)
             {
-                scene.PromptText = contentItem?.VideoPrompt ?? job.ResultText;
-                if (contentItem != null && !string.IsNullOrWhiteSpace(contentItem.Idea) && scene.Name.StartsWith("Cảnh "))
+                scene.PromptText = contentItem!.VideoPrompt;
+                if (!string.IsNullOrWhiteSpace(contentItem.Idea) && scene.Name.StartsWith("Cảnh "))
                 {
                     scene.Name = contentItem.Idea;
                 }
                 scene.UpdatedAtUtc = nowIso;
             }
-            staleTaskTypes.Remove(JobTaskType.VideoPrompt);
+            // Phản hồi bị loại giữ cờ stale: prompt còn lại (nếu có) là của lượt trước và không được dùng để render.
+            if (promptRejected)
+            {
+                staleTaskTypes.Add(JobTaskType.VideoPrompt);
+            }
+            else
+            {
+                staleTaskTypes.Remove(JobTaskType.VideoPrompt);
+            }
 
             // Lưu bản ghi VideoContentItem vào AppSettings để hiển thị dạng bảng
             if (contentItem != null)
@@ -308,7 +357,7 @@ public sealed partial class ProjectWorkflowService
                 {
                     ImageAssetId = scene.ImageAssetId,
                     VideoPrompt = scene.PromptText ?? contentItem.VideoPrompt,
-                    Status = "ReadyForVideo",
+                    Status = promptRejected ? "NeedsReview" : "ReadyForVideo",
                     UpdatedAtUtc = nowIso
                 }, cancellationToken).ConfigureAwait(false);
             }
@@ -409,7 +458,7 @@ public sealed partial class ProjectWorkflowService
             AudioAssetId: scene.AudioAssetId,
             VideoAssetId: scene.VideoAssetId,
             IsStale: staleTaskTypes.Count > 0,
-            StaleReason: staleTaskTypes.Count > 0 ? sceneMeta?.StaleReason : null,
+            StaleReason: staleTaskTypes.Count > 0 ? (sceneMeta?.StaleReason ?? (promptRejected ? PromptRejectedStaleReason : null)) : null,
             ActiveJobId: null,
             ActiveJobType: null,
             ActiveJobState: null,
@@ -452,6 +501,10 @@ public sealed partial class ProjectWorkflowService
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // Nhật ký chỉ phục vụ theo dõi; lỗi ghi log không được chặn dispatch continuation đã commit.
+        }
+        if (promptRejected)
+        {
+            await WriteAutoRenderLogAsync(job.Id, "error", "Phản hồi chưa có prompt video hợp lệ nên chưa đưa vào render. Hãy kiểm tra và sửa nội dung trong bảng Project.", CancellationToken.None).ConfigureAwait(false);
         }
 
         // Dispatch continuation intent nếu có
@@ -496,6 +549,9 @@ public sealed partial class ProjectWorkflowService
     /// </summary>
     private const int AutoRenderMaxRetries = 3;
 
+    private const string PromptRejectedStaleReason =
+        "AI từ chối hoặc phản hồi thiếu prompt video hợp lệ. Prompt cũ (nếu có) không được render cho đến khi tạo lại.";
+
     private Task TryAutoEnqueueVideoRenderAsync(Job job, CancellationToken cancellationToken) =>
         TryAutoEnqueueVideoRenderForProjectAsync(job.ProjectId, GetWorkflowRunId(job.ConfigSnapshotJson) ?? "none", job.Id, cancellationToken);
 
@@ -519,13 +575,17 @@ public sealed partial class ProjectWorkflowService
             var projectId = key["project.workflow.config.".Length..];
             try
             {
-                var config = await GetWorkflowConfigAsync(projectId, cancellationToken).ConfigureAwait(false);
-                if (config.RunState != WorkflowRunState.Running || string.IsNullOrWhiteSpace(config.CurrentRunId) || config.FinalVideoAssetId != null)
+                // Đọc lại cấu hình dưới khóa: lượt hủy có thể vừa kết thúc run.
+                recovered += await RunUnderProjectGateAsync(projectId, async () =>
                 {
-                    continue;
-                }
-                await TryAutoEnqueueVideoRenderForProjectAsync(projectId, config.CurrentRunId, null, cancellationToken).ConfigureAwait(false);
-                recovered++;
+                    var config = await GetWorkflowConfigAsync(projectId, cancellationToken).ConfigureAwait(false);
+                    if (config.RunState != WorkflowRunState.Running || string.IsNullOrWhiteSpace(config.CurrentRunId) || config.FinalVideoAssetId != null)
+                    {
+                        return 0;
+                    }
+                    await TryAutoEnqueueVideoRenderForProjectAsync(projectId, config.CurrentRunId, null, cancellationToken).ConfigureAwait(false);
+                    return 1;
+                }, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -560,7 +620,17 @@ public sealed partial class ProjectWorkflowService
             j.TaskType == JobTaskType.VideoRender &&
             (j.State == JobState.Queued || j.State == JobState.Reserved || j.State == JobState.Running || j.State == JobState.AwaitingUser),
             cancellationToken).ConfigureAwait(false);
-        if (!allReady || anyPendingPrep || anyPendingRender) return;
+        // Phân cảnh có prompt video bị đánh dấu stale (AI từ chối, phản hồi lỗi) thì không render, kể cả prompt cũ còn trong bảng.
+        var sceneKeys = scenes.Select(s => GetSceneKey(s.Id)).ToList();
+        var sceneSettings = await dbContext.AppSettings.AsNoTracking()
+            .Where(s => sceneKeys.Contains(s.Key))
+            .ToListAsync(cancellationToken).ConfigureAwait(false);
+        var hasStalePrompt = sceneSettings.Any(setting => IsPromptStale(setting.Value));
+        if (hasStalePrompt && logJobId != null)
+        {
+            await WriteAutoRenderLogAsync(logJobId, "error", "Chưa tự render: có phân cảnh cần xem lại prompt video. Hãy sửa hoặc tạo lại prompt trong bảng Project.", cancellationToken).ConfigureAwait(false);
+        }
+        if (!allReady || anyPendingPrep || anyPendingRender || hasStalePrompt) return;
 
         dbContext.AppSettings.Add(new AppSetting { Key = claimKey, Value = runId, UpdatedAtUtc = DateTimeOffset.UtcNow.ToString("o") });
         try
@@ -588,6 +658,20 @@ public sealed partial class ProjectWorkflowService
     /// <summary>
     /// Thử lại render tự động sau lỗi enqueue, lùi dần 30s/60s/90s. Quá số lần thì để lượt apply, khởi động lại hoặc nút "Tạo video" xử lý.
     /// </summary>
+    private static bool IsPromptStale(string? sceneSettingJson)
+    {
+        if (string.IsNullOrWhiteSpace(sceneSettingJson)) return false;
+        try
+        {
+            var detail = JsonSerializer.Deserialize<SceneWorkflowDetailDto>(sceneSettingJson, JsonOptions);
+            return detail?.StaleTaskTypes?.Contains(JobTaskType.VideoPrompt) == true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     private void ScheduleAutoRenderRetry(string projectId, string runId, int attempt)
     {
         if (attempt >= AutoRenderMaxRetries) return;
@@ -597,7 +681,11 @@ public sealed partial class ProjectWorkflowService
             try
             {
                 await Task.Delay(delay).ConfigureAwait(false);
-                await TryAutoEnqueueVideoRenderForProjectAsync(projectId, runId, null, CancellationToken.None, attempt + 1).ConfigureAwait(false);
+                await RunUnderProjectGateAsync(projectId, async () =>
+                {
+                    await TryAutoEnqueueVideoRenderForProjectAsync(projectId, runId, null, CancellationToken.None, attempt + 1).ConfigureAwait(false);
+                    return 0;
+                }, CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception)
             {
@@ -642,6 +730,41 @@ public sealed partial class ProjectWorkflowService
     {
         if (_jobService == null) return 0;
 
+        var projectIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        await using (var listDb = new TiToAIDbContext(_dbOptions))
+        {
+            var intentValues = await listDb.AppSettings.AsNoTracking()
+                .Where(s => s.Key.StartsWith("workflow.continuation."))
+                .Select(s => s.Value)
+                .ToListAsync(cancellationToken).ConfigureAwait(false);
+            foreach (var value in intentValues)
+            {
+                try
+                {
+                    var intent = JsonSerializer.Deserialize<WorkflowContinuationIntent>(value, JsonOptions);
+                    if (intent != null) projectIds.Add(intent.ProjectId);
+                }
+                catch (JsonException)
+                {
+                    // Giữ lại intent lỗi để chẩn đoán.
+                }
+            }
+        }
+
+        int resumed = 0;
+        foreach (var projectId in projectIds)
+        {
+            resumed += await RunUnderProjectGateAsync(projectId,
+                () => RunContinuationIntentsLockedAsync(projectId, cancellationToken), cancellationToken).ConfigureAwait(false);
+        }
+        return resumed;
+    }
+
+    /// <summary>Đưa vào hàng đợi các intent chuyển tiếp của một Project. Chỉ gọi khi đang giữ khóa Project.</summary>
+    private async Task<int> RunContinuationIntentsLockedAsync(string projectId, CancellationToken cancellationToken)
+    {
+        if (_jobService == null) return 0;
+
         await using var dbContext = new TiToAIDbContext(_dbOptions);
         var pendingIntentSettings = await dbContext.AppSettings
             .Where(s => s.Key.StartsWith("workflow.continuation."))
@@ -655,7 +778,7 @@ public sealed partial class ProjectWorkflowService
             try
             {
                 var intent = JsonSerializer.Deserialize<WorkflowContinuationIntent>(setting.Value, JsonOptions);
-                if (intent != null)
+                if (intent != null && string.Equals(intent.ProjectId, projectId, StringComparison.OrdinalIgnoreCase))
                 {
                     var config = await GetWorkflowConfigAsync(intent.ProjectId, cancellationToken).ConfigureAwait(false);
                     if (!string.Equals(config.CurrentRunId, intent.RunId, StringComparison.Ordinal) ||
@@ -704,18 +827,26 @@ public sealed partial class ProjectWorkflowService
         if (_jobService == null) return 0;
 
         await using var dbContext = new TiToAIDbContext(_dbOptions);
+
+        // Một truy vấn lấy toàn bộ marker đã áp dụng; lịch sử job lớn không được kéo theo một truy vấn cho mỗi job khi mở app.
+        var appliedKeys = new HashSet<string>(
+            await dbContext.AppSettings.AsNoTracking()
+                .Where(setting => setting.Key.StartsWith("workflow.applied."))
+                .Select(setting => setting.Key)
+                .ToListAsync(cancellationToken).ConfigureAwait(false),
+            StringComparer.Ordinal);
+
         var succeededJobs = await dbContext.Jobs.AsNoTracking()
             .Where(job => job.State == JobState.Succeeded && job.ConfigSnapshotJson != null)
+            .Select(job => new { job.Id, job.ConfigSnapshotJson })
             .ToListAsync(cancellationToken).ConfigureAwait(false);
 
         int applied = 0;
         foreach (var job in succeededJobs)
         {
+            if (appliedKeys.Contains($"workflow.applied.{job.Id}")) continue;
             if (GetWorkflowRunId(job.ConfigSnapshotJson) == null) continue;
-            bool alreadyApplied = await dbContext.AppSettings.AsNoTracking()
-                .AnyAsync(setting => setting.Key == $"workflow.applied.{job.Id}", cancellationToken)
-                .ConfigureAwait(false);
-            if (!alreadyApplied && await ApplyJobOutputAsync(job.Id, cancellationToken).ConfigureAwait(false))
+            if (await ApplyJobOutputAsync(job.Id, cancellationToken).ConfigureAwait(false))
             {
                 applied++;
             }

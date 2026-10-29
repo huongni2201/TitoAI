@@ -286,6 +286,15 @@ public static class AiWebContentCreationSmokeTests
             throw new InvalidOperationException("Kỳ vọng phát hiện thiếu scenes và thiếu tiktokPost caption.");
         }
 
+        // 4. Văn bản thường (ví dụ lời từ chối) không được thành prompt render
+        const string refusal = "Tôi không thể tạo nội dung này";
+        var refusalRes = ContentCandidateParser.ParseVideoContent(refusal, "project-1", "scene-1", 1, null);
+        if (refusalRes.IsCompliant || refusalRes.Candidate == null || refusalRes.Candidate.VideoPrompt != string.Empty
+            || refusalRes.RawText != refusal || refusalRes.Errors.Count == 0)
+        {
+            throw new InvalidOperationException("Kỳ vọng văn bản thường không có video_prompt hợp lệ, giữ rawText để người dùng sửa.");
+        }
+
         Console.WriteLine("PASS");
     }
 

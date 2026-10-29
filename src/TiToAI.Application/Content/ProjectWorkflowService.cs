@@ -13,6 +13,18 @@ public sealed class ProjectWorkflowValidationException : Exception
     public ProjectWorkflowValidationException(string message) : base(message) { }
 }
 
+/// <summary>Hủy run chưa xong: còn job chưa dừng được. Run ở trạng thái Paused để người dùng hủy lại sau khi đối soát.</summary>
+public sealed class ProjectWorkflowCancelIncompleteException : Exception
+{
+    public IReadOnlyList<string> UnresolvedJobIds { get; }
+
+    public ProjectWorkflowCancelIncompleteException(IReadOnlyList<string> unresolvedJobIds)
+        : base($"Còn {unresolvedJobIds.Count} tác vụ chưa dừng được. Quy trình đã tạm dừng; hãy hủy lại sau khi tác vụ kết thúc hoặc đối soát.")
+    {
+        UnresolvedJobIds = unresolvedJobIds;
+    }
+}
+
 public sealed class SceneConcurrencyConflictException : Exception
 {
     public string SceneId { get; }

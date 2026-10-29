@@ -322,7 +322,8 @@ public partial class MainWindow : Window
             var providerRegistry = new ProviderRegistry();
             providerRegistry.RegisterAdapter(new ChatGptWebAdapter(new ChatGptPlaywrightAutomation(processController, profileRegistry, dbOptions, rootRegistry, assetService)));
             providerRegistry.RegisterAdapter(new GeminiWebAdapter(new GeminiPlaywrightAutomation(processController, profileRegistry, dbOptions, rootRegistry, assetService)));
-            providerRegistry.RegisterAdapter(new MuseAiVideoAdapter(new MuseAiPlaywrightAutomation(processController, profileRegistry, dbOptions, rootRegistry, assetService)));
+            var museAiAutomation = new MuseAiPlaywrightAutomation(processController, browserGatekeeper, profileRegistry, dbOptions, rootRegistry, assetService);
+            providerRegistry.RegisterAdapter(new MuseAiVideoAdapter(museAiAutomation));
             var providerHandlers = new ProviderHandlers(providerRegistry, providerAccountService);
             _providerHandlers = providerHandlers;
             _providerHandlers.Register(DispatcherInstance);
@@ -355,6 +356,7 @@ public partial class MainWindow : Window
             var jobService = new JobService(dbOptions, snapshotFactory, scheduler);
 
             var workflowService = new ProjectWorkflowService(dbOptions, jobService);
+            var museAiOutputRecovery = new MuseAiOutputRecoveryService(dbOptions, museAiAutomation, jobService, workflowService);
 
             _videoWorkflowHandlers = new VideoWorkflowHandlers(workflowService);
             _videoWorkflowHandlers.Register(DispatcherInstance);
@@ -363,6 +365,20 @@ public partial class MainWindow : Window
             await workflowService.RunWorkflowApplySweepAsync(ct).ConfigureAwait(false);
             await workflowService.RunWorkflowContinuationSweepAsync(ct).ConfigureAwait(false);
             await workflowService.RunAutoRenderRecoverySweepAsync(ct).ConfigureAwait(false);
+
+            // Đối soát tệp chạy nền: thư viện lớn không được làm chậm việc mở app.
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var report = await assetService.ReconcileFilesAsync().ConfigureAwait(false);
+                    System.Diagnostics.Trace.TraceInformation($"Đối soát tài nguyên: dọn {report.StagingFilesRemoved} tệp staging, {report.OrphanRelativePaths.Count} tệp không có metadata.");
+                }
+                catch (Exception)
+                {
+                    // Đối soát chỉ phục vụ theo dõi; lần khởi động sau sẽ thử lại.
+                }
+            });
 
             _jobScheduler = scheduler;
             _jobStateChangedHandler = payload =>
@@ -397,7 +413,7 @@ public partial class MainWindow : Window
                 {
                     await BridgeRouter.PostEventAsync(envelope.EventName, envelope.Payload).ConfigureAwait(false);
                 }
-            });
+            }, museAiOutputRecovery);
             _jobHandlers.Register(DispatcherInstance);
 
             // 4. Khởi tạo WebView2 Host Manager và điều hướng UI

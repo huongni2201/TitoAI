@@ -1065,6 +1065,88 @@ public static class PvRemediationRegressionTests
             CleanupTestEnvironment(tempDir);
         }
     }
+    /// <summary>
+    /// Ca 12: AI từ chối VideoPrompt khi scene đã có prompt cũ: prompt cũ không được tự render.
+    /// </summary>
+    public static async Task Test_Repro12_RejectedVideoPrompt_MustNotAutoRenderOldPromptAsync()
+    {
+        var (dbOptions, tempDir, prjId) = CreateTestEnvironment();
+        try
+        {
+            var (_, _, workflowService) = await SetupServicesAsync(dbOptions, tempDir);
+            var readyAssetId = SeedAsset(dbOptions, "Image", "ready/r_reject.jpg");
+
+            string sceneId = Guid.NewGuid().ToString("D").ToLowerInvariant();
+            var now = DateTimeOffset.UtcNow.ToString("o");
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                db.Scenes.Add(new Scene
+                {
+                    Id = sceneId,
+                    ProjectId = prjId,
+                    SequenceOrder = 1,
+                    Name = "Cảnh 1",
+                    TargetDurationSeconds = 15,
+                    ImageAssetId = readyAssetId,
+                    PromptText = "OLD PROMPT",
+                    Status = "Draft",
+                    CreatedAtUtc = now,
+                    UpdatedAtUtc = now
+                });
+                await db.SaveChangesAsync();
+            }
+
+            await workflowService.SaveWorkflowConfigAsync(new SaveProjectWorkflowConfigRequest(
+                ProjectId: prjId,
+                WorkflowMode: WorkflowModes.ReadyImage,
+                GoalPrompt: "Prompt test từ chối",
+                ModelAssetId: null,
+                ProductAssetId: null,
+                ReadyImageAssetId: readyAssetId,
+                AudioOption: AudioOptions.None,
+                AudioAssetId: null,
+                TargetSceneCount: 1,
+                TargetDurationPerSceneSeconds: 15
+            ));
+
+            // Phản hồi văn bản thường (không phải JSON có video_prompt) bị coi là từ chối.
+            string promptJobId = Guid.NewGuid().ToString("D").ToLowerInvariant();
+            using (var db = new TiToAIDbContext(dbOptions))
+            {
+                db.Jobs.Add(new Job
+                {
+                    Id = promptJobId,
+                    ProjectId = prjId,
+                    SceneId = sceneId,
+                    TaskType = JobTaskType.VideoPrompt,
+                    State = JobState.Succeeded,
+                    ProviderKey = ProviderKeys.ChatGPTWeb,
+                    StorageRootId = "root-1",
+                    PromptSnapshotText = "snapshot",
+                    ConfigSnapshotJson = "{}",
+                    ResultText = "Xin lỗi, tôi không thể tạo nội dung này.",
+                    MaxAttempts = 3,
+                    CreatedAtUtc = now,
+                    UpdatedAtUtc = now
+                });
+                await db.SaveChangesAsync();
+            }
+
+            await workflowService.ApplyJobOutputAsync(promptJobId);
+
+            using var verify = new TiToAIDbContext(dbOptions);
+            var renderJobs = await verify.Jobs.CountAsync(j => j.ProjectId == prjId && j.TaskType == JobTaskType.VideoRender);
+            Assert(renderJobs == 0, $"[PV-R12] AI từ chối nhưng vẫn sinh {renderJobs} job VideoRender bằng prompt cũ.");
+
+            var scene = await verify.Scenes.AsNoTracking().FirstAsync(s => s.Id == sceneId);
+            Assert(scene.PromptText == "OLD PROMPT", "[PV-R12] Prompt cũ của cảnh không được bị ghi đè khi AI từ chối.");
+        }
+        finally
+        {
+            CleanupTestEnvironment(tempDir);
+        }
+    }
+
     public static async Task<int> RunAllAsync()
     {
         Console.WriteLine("\n=================================================================");
@@ -1084,6 +1166,7 @@ public static class PvRemediationRegressionTests
             ("PV-R7/10 Ca 9: Crash Recovery continuation sweep phải phục hồi intent bị treo", Test_Repro9_CrashRecovery_ContinuationSweep_MustResumePendingIntentsAsync),
             ("PV-R1 Ca 10: StartWorkflowAsync Idempotency với ClientRequestId", Test_Repro10_StartWorkflow_IdempotencyWithClientRequestIdAsync),
             ("PV-RenderedPromptText Ca 11: Dùng text đã render cho Template Script/VideoPrompt", Test_Repro11_RenderedPromptTextAsync),
+            ("PV-R12 Ca 12: AI từ chối VideoPrompt không được render lại bằng prompt cũ", Test_Repro12_RejectedVideoPrompt_MustNotAutoRenderOldPromptAsync),
         };
 
         int pass = 0;
